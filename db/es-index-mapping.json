@@ -1,0 +1,42 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "analysis": {
+      "analyzer": {
+        "ik_smart_analyzer": {
+          "type": "custom",
+          "tokenizer": "ik_smart"
+        },
+        "ik_max_analyzer": {
+          "type": "custom",
+          "tokenizer": "ik_max_word"
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "chunk_id":      { "type": "long" },
+      "document_id":   { "type": "long" },
+      "doc_name": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 300 } }
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart"
+      },
+      "file_type":     { "type": "keyword" },
+      "category":      { "type": "keyword" },
+      "folder_id":     { "type": "long" },
+      "owner_id":      { "type": "long" },
+      "visibility":    { "type": "keyword" },
+      "chunk_index":   { "type": "integer" },
+      "updated_at":    { "type": "date" }
+    }
+  }
+}

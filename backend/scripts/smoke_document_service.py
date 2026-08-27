@@ -1,0 +1,119 @@
+"""
+文档服务集成冒烟测试
+
+前置条件：本地 docker 的 postgres（kh_document 表已由 init.sql 建好）与 mongodb 运行中。
+
+用法：
+    cd backend && .venv/bin/python scripts/smoke_document_service.py
+
+测试会真实写入数据，结束时物理清理，不留脏数据。
+"""
+import asyncio
+
+from bson import ObjectId
+from fastapi import HTTPException
+from sqlalchemy import delete
+
+from app.db.mongo import close_mongo_client, get_document_content_collection
+from app.db.session import async_session_factory
+from app.models.document import DocumentEntity, DocumentStatus
+from app.schemas.document import DocumentCreate, DocumentQuery, DocumentUpdate
+from app.services.document import DocumentService
+
+
+async def main() -> None:
+    svc = DocumentService()
+    created_id: str | None = None
+    content_oid: ObjectId | None = None
+    try:
+        async with async_session_factory() as session:
+            # 1) 创建（草稿，不传 summary → 从正文生成 contentSummary）
+            created = await svc.create(
+                session,
+                DocumentCreate(
+                    title="集成测试文档",
+                    content="你好 Hello world 这是一段用于测试的正文",
+                    category_id="100",
+                    author_id="200",
+                    is_public=True,
+                    create_by="300",
+                    status=DocumentStatus.DRAFT,
+                ),
+            )
+            created_id = created["id"]
+            content_oid = ObjectId(created["contentId"])
+            mdoc = await get_document_content_collection().find_one({"_id": content_oid})
+            print(
+                "1) create:",
+                "id=", created_id,
+                "| wordCount=", created["wordCount"],
+                "| Mongo contentSummary=", mdoc["contentSummary"],
+                "| publishTime=", created["publishTime"],
+            )
+            assert created["wordCount"] == 15, created["wordCount"]  # 13 汉字 + 2 英文词
+            assert created["publishTime"] is None  # 草稿无发布时间
+            assert created["categoryId"] == "100"
+            assert mdoc["contentSummary"].startswith("你好 Hello world")  # 未传 summary，从正文生成
+
+            # 2) 详情（含 Mongo 正文）
+            detail = await svc.find_one(session, created_id)
+            print("2) find_one:", detail["title"], "| content:", repr(detail["content"][:16]))
+            assert detail["content"] == "你好 Hello world 这是一段用于测试的正文"
+
+            # 3) 列表：标题模糊 + 状态过滤
+            page = await svc.find_all(
+                session,
+                DocumentQuery(title="集成测试", status=DocumentStatus.DRAFT, page=1, page_size=10),
+            )
+            print("3) find_all: total =", page["total"], "| items =", len(page["items"]), "| pageSize =", page["pageSize"])
+            assert page["total"] >= 1 and page["items"]
+
+            # 4) 更新：改正文 + 草稿→发布
+            updated = await svc.update(
+                session,
+                created_id,
+                DocumentUpdate(content="新的正文内容 New content here", status=DocumentStatus.PUBLISHED),
+            )
+            mdoc = await get_document_content_collection().find_one({"_id": content_oid})
+            print(
+                "4) update(content+发布):",
+                "| Mongo version =", mdoc["version"],
+                "| contentLength =", mdoc["contentLength"],
+                "| publishTime =", updated["publishTime"],
+            )
+            assert mdoc["version"] == 2  # 正文变更 version +1
+            assert updated["publishTime"] is not None  # 首次发布写入 publishTime
+
+            # 5) 更新：只改摘要（contentSummary 同步，version 不变）
+            await svc.update(session, created_id, DocumentUpdate(summary="新的摘要"))
+            mdoc = await get_document_content_collection().find_one({"_id": content_oid})
+            print("5) update(summary): contentSummary =", mdoc["contentSummary"], "| version =", mdoc["version"])
+            assert mdoc["contentSummary"] == "新的摘要"
+            assert mdoc["version"] == 2
+
+            # 6) 软删除 → 详情 404
+            removed = await svc.remove(session, created_id)
+            print("6) remove:", removed)
+            try:
+                await svc.find_one(session, created_id)
+                raise AssertionError("软删后仍能查到")
+            except HTTPException as e:
+                print("   软删后 find_one → 404 OK")
+                assert e.status_code == 404
+
+        print("\n集成冒烟测试全部通过 ✅")
+    finally:
+        # 物理清理测试数据（软删记录 + Mongo 正文）
+        if created_id is not None:
+            async with async_session_factory() as session:
+                await session.execute(
+                    delete(DocumentEntity).where(DocumentEntity.id == int(created_id))
+                )
+                await session.commit()
+        if content_oid is not None:
+            await get_document_content_collection().delete_one({"_id": content_oid})
+        await close_mongo_client()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
