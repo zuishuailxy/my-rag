@@ -5,6 +5,7 @@
 - 正文：MongoDB（document_content，motor）
 - 关联：content_id ↔ Mongo _id，documentId ↔ 文档 id
 """
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -17,7 +18,22 @@ from app.common.snowflake import next_snowflake_id
 from app.db.mongo import get_document_content_collection
 from app.models.document import DocumentEntity, DocumentStatus
 from app.models.document_content import DocumentContent
-from app.schemas.document import DocumentCreate, DocumentQuery, DocumentUpdate
+from app.schemas.document import (
+    DocumentCreate,
+    DocumentQuery,
+    DocumentUpdate,
+    UploadParseDto,
+)
+from app.services.file_parser import file_parser_service
+from app.services.pipeline_publisher import pipeline_publisher
+from app.services.rustfs import rustfs_service
+from app.utils.markdown import (
+    decode_upload_filename,
+    get_extension,
+    title_from_filename,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -291,6 +307,171 @@ class DocumentService:
             {"$set": {"deleted": True, "updatedAt": _utcnow()}},
         )
         return {"id": doc_id, "deleted": True}
+
+    # ------------------------------------------------------ upload & create
+
+    async def upload_and_create_document(
+        self,
+        session: AsyncSession,
+        file_data: bytes,
+        filename: str,
+        content_type: str | None,
+        meta: UploadParseDto,
+    ) -> dict:
+        """上传并解析文件 → 创建草稿文档
+
+        流程：校验格式 → 解析为 Markdown（PDF 图片走 RustFS）→ 原文件存 RustFS →
+        创建草稿（DocumentStatus.DRAFT）→ 返回摘要。
+        """
+        if not file_data:
+            raise HTTPException(status_code=400, detail="文件不能为空")
+
+        original_filename = decode_upload_filename(filename)
+        extension = get_extension(original_filename)
+
+        if not file_parser_service.is_supported(extension):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"不支持的文件格式: {extension}，支持的格式: "
+                    f"{file_parser_service.supported_list()}"
+                ),
+            )
+
+        logger.info(
+            "上传并解析文件：name=%s, size=%d, ext=%s",
+            original_filename,
+            len(file_data),
+            extension,
+        )
+
+        # PDF 图片上传器（RustFS；未启用时解析器自动降级为纯文本）
+        uploader = None
+        if rustfs_service.is_enabled():
+            async def _upload_pdf_image(
+                data: bytes, name: str, ctype: str
+            ) -> str:
+                return await rustfs_service.upload_bytes(
+                    data, file_name=name, content_type=ctype, prefix="pdf-images"
+                )
+
+            uploader = _upload_pdf_image
+
+        # 解析
+        try:
+            parsed_content = await file_parser_service.parse(
+                original_filename, file_data, uploader=uploader
+            )
+        except HTTPException:
+            raise
+        except Exception as err:
+            logger.error("文件解析失败：name=%s, error=%s", original_filename, err)
+            raise HTTPException(status_code=400, detail=f"文件解析失败: {err}")
+
+        # 原文件上传 RustFS
+        file_url: str | None = None
+        if rustfs_service.is_enabled():
+            try:
+                file_url = await rustfs_service.upload_bytes(
+                    file_data,
+                    file_name=original_filename,
+                    content_type=content_type or "application/octet-stream",
+                    prefix="documents",
+                )
+            except Exception as err:
+                logger.error("原文件上传 RustFS 失败：%s", err)
+                raise HTTPException(status_code=400, detail=f"原文件上传失败: {err}")
+        else:
+            logger.warning("RustFS 未启用，跳过原文件上传")
+
+        title = title_from_filename(original_filename)
+
+        created = await self.create(
+            session,
+            DocumentCreate(
+                title=title,
+                content=parsed_content,
+                category_id=meta.category_id,
+                team_id=meta.team_id,
+                author_id=meta.author_id,
+                tags=meta.tags,
+                remark=meta.remark,
+                create_by=meta.create_by,
+                is_public=meta.is_public,
+                status=DocumentStatus.DRAFT,
+            ),
+        )
+
+        preview_len = min(200, len(parsed_content))
+        result = {
+            "documentId": created["id"],
+            "title": title,
+            "fileUrl": file_url,
+            "fileSize": len(file_data),
+            "fileExtension": extension,
+            "contentLength": len(parsed_content),
+            "contentPreview": parsed_content[:preview_len],
+            "status": DocumentStatus.DRAFT,
+        }
+
+        logger.info(
+            "文件解析并创建文档成功：documentId=%s, title=%s, ext=%s, chars=%d, fileUrl=%s",
+            created["id"],
+            title,
+            extension,
+            len(parsed_content),
+            file_url,
+        )
+        return result
+
+    # --------------------------------------------------------------- indexing
+
+    async def index_document(self, session: AsyncSession, doc_id: str) -> dict:
+        """发布后索引（RAG 消费者）：分块 → 嵌入 → 写入 PGVector doc_chunk"""
+        pk = _parse_bigint(doc_id)
+        if pk is None:
+            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+        from app.services.indexing import index_document_vectors
+
+        try:
+            chunk_count = await index_document_vectors(session, pk)
+        except ValueError as err:
+            raise HTTPException(status_code=404, detail=str(err))
+        return {"documentId": doc_id, "chunkCount": chunk_count}
+
+    # --------------------------------------------------------------- publish
+
+    async def publish(self, session: AsyncSession, doc_id: str) -> dict:
+        """直接发布文档（不做审核）
+
+        流程：校验存在且状态为草稿/已发布 → 写库 status=Published、刷新 publishTime
+        → 读 Mongo 正文 → 投递 RabbitMQ（失败只记日志，不回滚发布）。
+        """
+        entity = await self._get_active(session, doc_id)
+
+        # 仅草稿 / 已发布可发布（已发布再次发布会重建索引）
+        if entity.status not in (DocumentStatus.DRAFT, DocumentStatus.PUBLISHED):
+            raise HTTPException(status_code=400, detail="当前文档状态不允许发布")
+
+        entity.status = DocumentStatus.PUBLISHED
+        entity.publish_time = _utcnow()
+        await session.commit()
+        await session.refresh(entity)
+
+        content = await self._get_content(entity.content_id)
+
+        # MQ 投递失败不影响发布成功
+        try:
+            await pipeline_publisher.after_publish(entity)
+        except Exception as err:
+            logger.warning(
+                "发布后管线投递失败（不影响发布）：documentId=%s, error=%s",
+                doc_id,
+                err,
+            )
+
+        logger.info("文档发布成功：documentId=%s", doc_id)
+        return {**self._to_dict(entity), "content": content}
 
     # ---------------------------------------------------------------- helpers
 

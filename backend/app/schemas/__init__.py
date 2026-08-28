@@ -11,6 +11,9 @@ from app.schemas.document import (
     DocumentResponse,
     DocumentStatus,
     DocumentUpdate,
+    IndexResult,
+    UploadParseDto,
+    UploadParseResult,
 )
 
 __all__ = [
@@ -22,4 +25,7 @@ __all__ = [
     "DocumentResponse",
     "DocumentListResponse",
     "DocumentRemoveResponse",
+    "IndexResult",
+    "UploadParseDto",
+    "UploadParseResult",
 ]

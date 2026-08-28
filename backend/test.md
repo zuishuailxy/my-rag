@@ -70,3 +70,15 @@ curl -s -X DELETE "http://localhost:8000/api/v1/documents/${DOC_ID}" | jq
 ---
 
 未安装 `jq` 时去掉 `| jq` 即可。
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/documents/upload/parse \
+  -F 'file=@./申论总结课.pptx' \
+  -F 'authorId=10001' \
+  -F 'createBy=10001' | jq
+```
+
+```bash
+DOC_ID='337052971286138880'
+curl -s "http://localhost:3000/documents/${DOC_ID}" | jq
+```

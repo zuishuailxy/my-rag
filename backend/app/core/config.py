@@ -59,8 +59,26 @@ class Settings(BaseSettings):
             f"?authSource={self.MONGO_AUTH_SOURCE}"
         )
 
+    # ---- RustFS（S3 兼容对象存储，替代 MinIO）----
+    RUSTFS_ENABLED: bool = True
+    # 本地开发走宿主机映射端口 9000；容器内由 compose 覆盖为 http://rustfs:9000
+    RUSTFS_ENDPOINT: str = "http://127.0.0.1:9000"
+    RUSTFS_ACCESS_KEY: str = "rustfsadmin"
+    RUSTFS_SECRET_KEY: str = "rustfsadmin"
+    RUSTFS_REGION: str = "us-east-1"
+    RUSTFS_BUCKET: str = "knowledge-hub"
+    # 对外可访问的基址（如经 nginx/CDN），缺省用 RUSTFS_ENDPOINT
+    RUSTFS_PUBLIC_URL: str | None = None
+
     # ---- CORS ----
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
+
+    # ---- Embedding（发布索引：文本向量，对齐架构 1024 维）----
+    EMBEDDING_PROVIDER: str = "local"  # local=确定性伪向量(开发/测试) | openai=OpenAI 兼容 API
+    EMBEDDING_BASE_URL: str | None = None
+    EMBEDDING_API_KEY: str | None = None
+    EMBEDDING_MODEL: str = "text-embedding-v3"
+    EMBEDDING_DIM: int = 1024
 
 
 @lru_cache

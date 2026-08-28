@@ -15,6 +15,14 @@ dependencies = [
     "pymongo>=4.17.0",
     "motor>=3.7.1",
     "greenlet>=3.5.5",
+    "boto3>=1.43.81",
+    "mammoth>=1.12.1",
+    "markdownify>=1.2.3",
+    "pymupdf>=1.28.2",
+    "python-pptx>=1.0.2",
+    "openpyxl>=3.1.5",
+    "python-multipart>=0.0.32",
+    "httpx>=0.28.1",
 ]
 
 [tool.uv]
@@ -34,4 +42,5 @@ ignore_missing_imports = true
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy>=2.3.1",
 ]

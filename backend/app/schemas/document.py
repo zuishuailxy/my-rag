@@ -198,3 +198,58 @@ class DocumentRemoveResponse(BaseModel):
     id: str
     # 是否已删除
     deleted: bool
+
+
+class UploadParseDto(BaseModel):
+    """上传解析元数据（multipart form-data 字段，对应 TS UploadParseDto）"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+    # 分类 ID
+    category_id: str | None = None
+    # 团队 ID
+    team_id: str | None = None
+    # 作者 ID
+    author_id: str | None = None
+    # 标签（逗号分隔）
+    tags: str | None = None
+    # 备注
+    remark: str | None = None
+    # 创建人 ID
+    create_by: str | None = None
+    # 是否公开
+    is_public: bool | None = None
+
+
+class UploadParseResult(BaseModel):
+    """上传并解析响应"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+    # 创建的草稿文档 ID
+    document_id: str
+    # 文档标题（去掉扩展名）
+    title: str
+    # 原文件在 RustFS 的 URL（未启用时 null）
+    file_url: str | None = None
+    # 原文件大小（字节）
+    file_size: int
+    # 文件扩展名（小写，不含点）
+    file_extension: str
+    # 解析后 Markdown 长度
+    content_length: int
+    # 解析内容预览（前 200 字符）
+    content_preview: str
+    # 文档状态（草稿）
+    status: DocumentStatus
+
+
+class IndexResult(BaseModel):
+    """文档索引响应（RAG 消费者）"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+    # 文档 ID
+    document_id: str
+    # 生成的分片数
+    chunk_count: int

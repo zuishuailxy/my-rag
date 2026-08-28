@@ -75,6 +75,55 @@ services:
       mongodb:
         condition: service_healthy
 
+  # RabbitMQ — 文档发布后异步管线（RAG / KG / ES）
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: knowledge_hub_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Elasticsearch 8.17.0 + IK 中文分词（内置到镜像）
+  es:
+    build: ./elasticsearch # 从本地 Dockerfile 构建镜像（自带IK）
+    container_name: knowledge_hub_elasticsearch
+    ports:
+      - "9200:9200" # ES 访问端口
+    environment:
+      - discovery.type=single-node # 单节点运行（开发环境）
+      - xpack.security.enabled=false # 关闭安全认证，免密码访问
+      - xpack.security.http.ssl.enabled=false # 关闭 HTTPS 加密
+      - xpack.security.transport.ssl.enabled=false # 关闭节点传输加密
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m # JVM 内存配置，避免占用过高
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/es/data:/usr/share/elasticsearch/data
+    restart: always
+
+  # Kibana 最新稳定版：8.17.0（必须与 ES 版本完全一致）
+  kibana:
+    image: kibana:8.17.0
+    container_name: knowledge_hub_kibana
+    ports:
+      - "5601:5601" # Kibana 网页控制台端口
+    environment:
+      - ELASTICSEARCH_HOSTS=http://es:9200 # 连接 ES 容器内部地址
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/kibana:/usr/share/kibana/data
+    restart: always
+    depends_on:
+      - es # 等待 ES 启动完成后再启动 Kibana
+
   # RustFS（S3 兼容对象存储）— PDF 抽图 / 原文件上传
   # 文档：https://docs.rustfs.com/installation/docker/
   rustfs:
@@ -105,3 +154,4 @@ services:
 networks:
   default:
     name: common-network
+    external: false
