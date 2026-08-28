@@ -73,12 +73,29 @@ class Settings(BaseSettings):
     # ---- CORS ----
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
 
-    # ---- Embedding（发布索引：文本向量，对齐架构 1024 维）----
+    # ---- Embedding（发布索引：文本向量，对齐架构 1024 维；对应 TS EmbeddingService）----
     EMBEDDING_PROVIDER: str = "local"  # local=确定性伪向量(开发/测试) | openai=OpenAI 兼容 API
-    EMBEDDING_BASE_URL: str | None = None
+    # API Key 按 TS 的 fallback 链：EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     EMBEDDING_API_KEY: str | None = None
-    EMBEDDING_MODEL: str = "text-embedding-v3"
-    EMBEDDING_DIM: int = 1024
+    DASHSCOPE_API_KEY: str | None = None
+    OPENAI_API_KEY: str | None = None
+    # DashScope 百炼 OpenAI 兼容端点
+    EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # 模型 ID 以百炼控制台为准（text-embedding-v3/v4 或 qwen3-embedding-*；写错会 400）
+    EMBEDDING_MODEL: str = "text-embedding-v4"
+    EMBEDDING_DIMENSION: int = 1024
+    # DashScope text-embedding-v3 单次最多 10 条；超出会 400 InvalidParameter（代码内钳制）
+    EMBEDDING_BATCH_SIZE: int = 10
+
+    # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
+    RABBITMQ_ENABLED: bool = True
+    # 本地开发走宿主机映射端口 5672；容器内由 compose 覆盖为 amqp://rabbitmq:5672
+    RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672"
+    RABBITMQ_CONNECT_TIMEOUT_MS: int = 15000
+
+    # ---- RAG 分块（对应 TS RAG_CHUNK_SIZE/OVERLAP，token 数）----
+    RAG_CHUNK_SIZE: int = 512
+    RAG_CHUNK_OVERLAP: int = 64
 
 
 @lru_cache

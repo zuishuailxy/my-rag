@@ -22,12 +22,12 @@ from app.db.session import async_session_factory
 from app.main import app
 from app.models.doc_chunk import DocChunk
 from app.models.document import DocumentEntity
-from app.services.chunker import chunk_markdown
+from app.services.chunker import chunking_service
 from app.services.embedding import embedding_provider
 
 # 多段长正文（>500 字符，保证切成多块）
 LONG_CONTENT = "\n\n".join(
-    [f"## 第 {i} 节\n\n" + ("企业知识库系统支持多模态文档的归档与检索。" * 8) for i in range(4)]
+    [f"## 第 {i} 节\n\n" + ("企业知识库系统支持多模态文档的归档与检索。" * 60) for i in range(4)]
 )
 
 
@@ -70,9 +70,9 @@ async def _verify_and_cleanup(doc_id: str, expect_chunks: int) -> None:
 
 def main() -> None:
     # 0) 单元：chunker / embedding（纯 Python，独立循环）
-    chunks = chunk_markdown(LONG_CONTENT)
+    chunks = __import__('asyncio').run(chunking_service.chunk(content=LONG_CONTENT, document_id='0', document_title='t'))
     assert len(chunks) >= 2, f"应切成多块，实际 {len(chunks)}"
-    assert all(len(c) <= 600 for c in chunks), "分块超长"
+    assert all(len(c.content) <= 1100 for c in chunks), "分块超长"
     v1 = asyncio.run(embedding_provider.embed_texts(["企业知识库系统支持多模态检索"]))[0]
     v2 = asyncio.run(embedding_provider.embed_texts(["企业知识库系统支持多模态检索"]))[0]
     v3 = asyncio.run(embedding_provider.embed_texts(["完全无关的股市行情讨论"]))[0]

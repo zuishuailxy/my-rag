@@ -1,12 +1,15 @@
 """
-文本向量服务（对应架构「嵌入」：sentence-transformers / DashScope API，1024 维）
+文本向量服务（对应 TS EmbeddingService，LangChain OpenAIEmbeddings）
 
-- EmbeddingProvider：协议（async embed_texts）
-- LocalDeterministicEmbedding：确定性伪向量（开发/测试，无外部依赖；
-  基于 3-gram 激活维度，相似文本余弦相似度更高，可离线跑通链路）
-- OpenAICompatibleEmbedding：任意 OpenAI 兼容 /embeddings 接口（DashScope 等）
+把 chunk 文本变成固定维度浮点向量，供语义检索。
 
-配置：EMBEDDING_PROVIDER=local|openai，其余见 config.py。
+- LocalDeterministicEmbedding：确定性伪向量（开发/测试，无外部依赖，
+  基于 3-gram 激活维度，相似文本余弦更高，可离线跑通链路）
+- OpenAICompatibleEmbedding：OpenAI 兼容 /embeddings（DashScope 百炼等），
+  基于 LangChain OpenAIEmbeddings；对齐 TS：API Key fallback 链、
+  batch 钳制 ≤10（DashScope 上限）、正文保留换行
+
+配置见 config.py（EMBEDDING_PROVIDER / BASE_URL / MODEL / DIMENSION / BATCH_SIZE）。
 """
 import hashlib
 import logging
@@ -14,11 +17,15 @@ import math
 import random
 from typing import Protocol
 
-import httpx
+from langchain_openai import OpenAIEmbeddings
+from pydantic import SecretStr
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# DashScope text-embedding-v3 单次最多条数上限
+_DASHSCOPE_BATCH_LIMIT = 10
 
 
 class EmbeddingProvider(Protocol):
@@ -51,7 +58,16 @@ class LocalDeterministicEmbedding:
 
 
 class OpenAICompatibleEmbedding:
-    """OpenAI 兼容 /embeddings 接口（DashScope 等）"""
+    """OpenAI 兼容 /embeddings 接口（DashScope 百炼等）
+
+    对齐 TS EmbeddingService：
+    - API Key fallback：EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
+    - batchSize 钳制到 10（DashScope 单次上限，超出 400 InvalidParameter）
+    - 正文原样发送（保留换行，对齐 stripNewLines=false）
+
+    注意：langchain-openai 1.x 中 batch_size / strip_new_lines 已不是参数
+    （传入会被塞进 model_kwargs 并告警），分批由本类自行处理。
+    """
 
     def __init__(
         self,
@@ -59,39 +75,66 @@ class OpenAICompatibleEmbedding:
         api_key: str,
         model: str,
         dim: int = 1024,
+        batch_size: int = 10,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.model = model
         self.dim = dim
+        # 钳制到 DashScope 上限
+        self.batch_size = max(1, min(batch_size, _DASHSCOPE_BATCH_LIMIT))
+        if batch_size > _DASHSCOPE_BATCH_LIMIT:
+            logger.warning(
+                "EMBEDDING_BATCH_SIZE=%d 超过 DashScope 上限，已钳制为 %d",
+                batch_size,
+                _DASHSCOPE_BATCH_LIMIT,
+            )
+        self._embeddings = OpenAIEmbeddings(
+            api_key=SecretStr(api_key),
+            model=model,
+            dimensions=dim,
+            base_url=base_url,
+            # 不做本地 token 长度检查（对齐 TS，避免 tiktoken 编码依赖）
+            check_embedding_ctx_length=False,
+        )
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{self.base_url}/embeddings",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": texts},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        items = sorted(data["data"], key=lambda x: x["index"])
-        return [item["embedding"] for item in items]
+        if not texts:
+            return []
+        vectors: list[list[float]] = []
+        for batch in _split_batches(texts, self.batch_size):
+            vectors.extend(await self._embeddings.aembed_documents(batch))
+        logger.debug("嵌入完成：count=%d", len(vectors))
+        return vectors
+
+
+def _split_batches(texts: list[str], size: int) -> list[list[str]]:
+    """按 batch 大小切片（内部分批，避免超 DashScope 单次上限）"""
+    return [texts[i : i + size] for i in range(0, len(texts), size)]
+
+
+def _resolve_api_key() -> str | None:
+    """API Key fallback 链（与 TS 一致）"""
+    return (
+        settings.EMBEDDING_API_KEY
+        or settings.DASHSCOPE_API_KEY
+        or settings.OPENAI_API_KEY
+    )
 
 
 def _build_provider() -> EmbeddingProvider:
     if settings.EMBEDDING_PROVIDER == "openai":
-        if not settings.EMBEDDING_BASE_URL or not settings.EMBEDDING_API_KEY:
+        api_key = _resolve_api_key()
+        if not api_key:
             raise RuntimeError(
-                "EMBEDDING_PROVIDER=openai 但未配置 EMBEDDING_BASE_URL / EMBEDDING_API_KEY"
+                "未配置 EMBEDDING_API_KEY / DASHSCOPE_API_KEY / OPENAI_API_KEY"
             )
         return OpenAICompatibleEmbedding(
             settings.EMBEDDING_BASE_URL,
-            settings.EMBEDDING_API_KEY,
+            api_key,
             settings.EMBEDDING_MODEL,
-            settings.EMBEDDING_DIM,
+            settings.EMBEDDING_DIMENSION,
+            settings.EMBEDDING_BATCH_SIZE,
         )
     logger.info("Embedding 使用本地确定性伪向量（开发/测试）")
-    return LocalDeterministicEmbedding(settings.EMBEDDING_DIM)
+    return LocalDeterministicEmbedding(settings.EMBEDDING_DIMENSION)
 
 
 # 全局单例

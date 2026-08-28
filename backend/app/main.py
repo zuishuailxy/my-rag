@@ -17,14 +17,21 @@ from app.models.base import Base
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时幂等建表，退出时关闭 Postgres 连接池与 Mongo 客户端"""
+    """应用生命周期：启动时幂等建表 + 连接 MQ，退出时关闭各资源"""
+    from app.mq.consumer import register_consumers
+    from app.mq.rabbitmq import rabbitmq_service
+
     # 幂等建表（CREATE TABLE IF NOT EXISTS 语义）：
     # 不依赖 init.sql 是否执行过，任何环境启动都能确保表存在
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # MQ：先注册消费者再连接；连接失败抛错 → 应用启动失败（与 TS onModuleInit 一致）
+    register_consumers()
+    await rabbitmq_service.start()
     yield
     await close_db_engine()
     await close_mongo_client()
+    await rabbitmq_service.close()
 
 
 def create_app() -> FastAPI:
