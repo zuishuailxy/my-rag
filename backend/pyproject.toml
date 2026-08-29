@@ -26,6 +26,8 @@ dependencies = [
     "aio-pika>=9.4",
     "langchain-text-splitters>=1.1.2",
     "langchain-openai>=1.6.0",
+    "elasticsearch>=8.17,<9",
+    "aiohttp>=3.14.3",
 ]
 
 [tool.uv]

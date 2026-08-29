@@ -11,13 +11,15 @@
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
 
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from app.core.config import settings
+from app.pipeline.types import DocumentChunk
 
-logger = logging.getLogger(__name__)
+__all__ = ["ChunkingService", "DocumentChunk", "chunking_service", "extract_heading"]
+
+logger = logging.getLogger("ChunkingService")
 
 # token → 字符粗略换算（中英混合保守值：约 1 token ≈ 2 字符）
 CHARS_PER_TOKEN = 2.0
@@ -30,26 +32,6 @@ SEPARATORS = [
     "\n# ",
     *RecursiveCharacterTextSplitter.get_separators_for_language(Language.MARKDOWN),
 ]
-
-
-@dataclass
-class DocumentChunk:
-    """分块结果（对应 TS types/pipeline.types 的 DocumentChunk）"""
-
-    chunk_id: str
-    document_id: str
-    document_title: str
-    content: str
-    heading: str | None
-    chunk_index: int
-    total_chunks: int
-    category_id: str | None = None
-    author_id: str | None = None
-    team_id: str | None = None
-    doc_status: int | None = None
-    publish_time: str | None = None
-    # 嵌入向量（由调用方在 embedding 后填充，写入时使用）
-    embedding: list[float] | None = None
 
 
 class ChunkingService:

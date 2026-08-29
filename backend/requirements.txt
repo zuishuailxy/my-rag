@@ -17,5 +17,7 @@ openpyxl>=3.1.5
 python-multipart>=0.0.32
 httpx>=0.28.1
 aio-pika>=9.4.0
+elasticsearch>=8.17.0,<9
+aiohttp>=3.9
 langchain-text-splitters>=1.1.2
 langchain-openai>=1.6.0

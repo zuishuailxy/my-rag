@@ -16,9 +16,18 @@ from aio_pika import DeliveryMode, ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage, AbstractRobustConnection
 
 from app.core.config import settings
-from app.mq.constants import RAG_REINDEX_EXCHANGE, RAG_REINDEX_QUEUE, RAG_RK_BY_IDS
+from app.mq.constants import (
+    SEARCH_INDEX_EXCHANGE,
+    SEARCH_INDEX_QUEUE,
+    RAG_REINDEX_EXCHANGE,
+    RAG_REINDEX_QUEUE,
+    RAG_RK_BY_IDS,
+    RAG_RK_DELETE,
+    SEARCH_RK_DELETE,
+    SEARCH_RK_INDEX,
+)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("RabbitMqService")
 
 # 队列消费者处理器：收到消息后执行，由本服务负责 ack/nack
 MessageHandler = Callable[[AbstractIncomingMessage], Awaitable[None]]
@@ -117,12 +126,22 @@ class RabbitMqService:
             return False
 
     async def _assert_topology(self, ch: AbstractChannel) -> None:
+        # RAG：重建索引 / 删除向量块（一个队列绑两个路由键）
         ex = await ch.declare_exchange(
             RAG_REINDEX_EXCHANGE, ExchangeType.TOPIC, durable=True
         )
         q = await ch.declare_queue(RAG_REINDEX_QUEUE, durable=True)
         await q.bind(ex, RAG_RK_BY_IDS)
-        logger.info("RabbitMQ 拓扑已声明（RAG）")
+        await q.bind(ex, RAG_RK_DELETE)
+
+        # Search：整篇快照索引 / 清理（一个队列绑两个路由键）
+        ex_doc = await ch.declare_exchange(
+            SEARCH_INDEX_EXCHANGE, ExchangeType.TOPIC, durable=True
+        )
+        q_search = await ch.declare_queue(SEARCH_INDEX_QUEUE, durable=True)
+        await q_search.bind(ex_doc, SEARCH_RK_INDEX)
+        await q_search.bind(ex_doc, SEARCH_RK_DELETE)
+        logger.info("RabbitMQ 拓扑已声明（RAG + Search）")
 
     async def _bind_consumers(self, ch: AbstractChannel) -> None:
         for queue_name, handler in self._handlers.items():

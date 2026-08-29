@@ -33,7 +33,7 @@ from app.utils.markdown import (
     title_from_filename,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DocumentService")
 
 
 def _utcnow() -> datetime:
@@ -297,7 +297,8 @@ class DocumentService:
     # ----------------------------------------------------------------- remove
 
     async def remove(self, session: AsyncSession, doc_id: str) -> dict:
-        """软删除文档：Postgres、Mongo 两侧都将 deleted 置为 true（不物理删正文）"""
+        """软删除文档：Postgres、Mongo 两侧都将 deleted 置为 true（不物理删正文），
+        并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）"""
         entity = await self._get_active(session, doc_id)
 
         entity.deleted = True
@@ -306,6 +307,13 @@ class DocumentService:
             {"_id": ObjectId(entity.content_id)},
             {"$set": {"deleted": True, "updatedAt": _utcnow()}},
         )
+        # MQ 投递失败不影响删除成功
+        try:
+            await pipeline_publisher.after_unpublish(doc_id)
+        except Exception as err:
+            logger.warning(
+                "删除后索引清理投递失败：documentId=%s, error=%s", doc_id, err
+            )
         return {"id": doc_id, "deleted": True}
 
     # ------------------------------------------------------ upload & create
@@ -462,7 +470,7 @@ class DocumentService:
 
         # MQ 投递失败不影响发布成功
         try:
-            await pipeline_publisher.after_publish(entity)
+            await pipeline_publisher.after_publish(entity, content)
         except Exception as err:
             logger.warning(
                 "发布后管线投递失败（不影响发布）：documentId=%s, error=%s",

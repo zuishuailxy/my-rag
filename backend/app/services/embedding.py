@@ -22,7 +22,7 @@ from pydantic import SecretStr
 
 from app.core.config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("EmbeddingService")
 
 # DashScope text-embedding-v3 单次最多条数上限
 _DASHSCOPE_BATCH_LIMIT = 10
@@ -101,7 +101,7 @@ class OpenAICompatibleEmbedding:
         vectors: list[list[float]] = []
         for batch in _split_batches(texts, self.batch_size):
             vectors.extend(await self._embeddings.aembed_documents(batch))
-        logger.debug("嵌入完成：count=%d", len(vectors))
+        logger.info("嵌入完成：count=%d", len(vectors))
         return vectors
 
 

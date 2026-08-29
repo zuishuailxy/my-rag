@@ -77,7 +77,8 @@ def main() -> None:
     v2 = asyncio.run(embedding_provider.embed_texts(["企业知识库系统支持多模态检索"]))[0]
     v3 = asyncio.run(embedding_provider.embed_texts(["完全无关的股市行情讨论"]))[0]
     cos = lambda a, b: sum(x * y for x, y in zip(a, b))
-    assert v1 == v2, "同文本向量应一致"
+    # 真实 API 跨请求非逐位确定（差值 ~2e-4，余弦≈1），用近似相等（local 伪向量恒等也满足）
+    assert cos(v1, v2) > 0.999, "同文本向量应一致（近似）"
     assert cos(v1, v3) < cos(v1, v1), "相似文本余弦应更高"
     print(f"0) chunker/embedding OK（{len(chunks)} 块）")
 

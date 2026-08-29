@@ -5,8 +5,12 @@ RAG 向量索引（对应 TS VectorIndexService，写入 Elasticsearch kh_chunk 
 - delete_by_doc_id：按 document_id 删除旧块（发布重建 / 下架时调用）
 - index_chunks：bulk 写入 / 覆盖 chunk（chunk_id 唯一，ON CONFLICT upsert，对应 ES _id 覆盖）
 
-index_document_vectors：编排入口（拉正文 → 分块 → 嵌入 → 删旧 → 写新），
-被 DocumentService.index_document 与 MQ 消费者调用。
+- load_pipeline_document：Postgres 元数据 + Mongo 正文 → PipelineDocument 快照（对应 TS loadDocumentsByIds + toPipelineDoc）
+- reindex_document：单篇重建（对应 TS reindexOne，分块 → 嵌入 → 删旧 → 写新）
+- index_document_vectors：按 ID 加载 + 重建的兼容入口，被 DocumentService 与 MQ 消费者调用。
+
+注意：删旧块在嵌入之后执行（有意优化 TS 的先删后建）——新数据就绪才清旧块，
+重建中途失败不会留下检索空窗。
 """
 import logging
 from datetime import datetime
@@ -18,10 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.mongo import get_document_content_collection
 from app.models.document import DocumentEntity
 from app.models.doc_chunk import DocChunk
+from app.pipeline.types import PipelineDocument, to_iso_date
 from app.services.chunker import DocumentChunk, chunking_service
 from app.services.embedding import embedding_provider
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("VectorIndexService")
 
 
 class VectorIndexService:
@@ -63,28 +68,63 @@ class VectorIndexService:
         )
         await session.execute(stmt)
         await session.commit()
-        logger.info("PG 批量索引成功：%d chunks → doc_chunk", len(chunks))
+        logger.info("批量索引成功：%d chunks → doc_chunk", len(chunks))
 
 
-async def index_document_vectors(session: AsyncSession, doc_id: int) -> int:
-    """为文档生成向量分片并写入 doc_chunk，返回分片数（幂等：删旧→写新）"""
-    entity = await session.get(DocumentEntity, doc_id)
-    if entity is None or entity.deleted:
-        raise ValueError(f"文档不存在或已删除: {doc_id}")
-
-    content = await _load_content(entity.content_id)
-    chunks = await chunking_service.chunk(
+def to_pipeline_document(entity: DocumentEntity, content: str) -> PipelineDocument:
+    """Postgres 实体 + Mongo 正文 → 管线统一 DTO（对应 TS toPipelineDoc）"""
+    return PipelineDocument(
+        id=str(entity.id),
+        title=entity.title,
         content=content,
-        document_id=str(doc_id),
-        document_title=entity.title,
+        summary=entity.summary,
         category_id=str(entity.category_id) if entity.category_id is not None else None,
         author_id=str(entity.author_id) if entity.author_id is not None else None,
         team_id=str(entity.team_id) if entity.team_id is not None else None,
-        doc_status=int(entity.status) if entity.status is not None else None,
-        publish_time=entity.publish_time.isoformat() if entity.publish_time else None,
+        status=int(entity.status),
+        tags=entity.tags,
+        is_public=entity.is_public,
+        view_count=entity.view_count,
+        like_count=entity.like_count,
+        comment_count=entity.comment_count,
+        publish_time=entity.publish_time,
+        created_at=entity.created_at,
+        updated_at=entity.updated_at,
+    )
+
+
+async def load_pipeline_document(
+    session: AsyncSession, doc_id: int
+) -> PipelineDocument | None:
+    """按 ID 加载单篇文档快照（不存在 / 已删除返回 None）"""
+    entity = await session.get(DocumentEntity, doc_id)
+    if entity is None or entity.deleted:
+        return None
+    content = await _load_content(entity.content_id)
+    return to_pipeline_document(entity, content)
+
+
+async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:
+    """单篇重建（对应 TS reindexOne）：分块 → 批量嵌入 → 删旧 → 写新，返回块数
+
+    删旧块放在嵌入之后（有意优化 TS 的先删后建）：新数据就绪才清旧块，
+    重建中途失败不会留下检索空窗。
+    """
+    if not doc.content or not doc.content.strip():
+        logger.warning("文档内容为空，跳过 RAG：documentId=%s", doc.id)
+        return 0
+
+    chunks = await chunking_service.chunk(
+        content=doc.content,
+        document_id=doc.id,
+        document_title=doc.title,
+        category_id=doc.category_id,
+        author_id=doc.author_id,
+        team_id=doc.team_id,
+        doc_status=doc.status,
+        publish_time=to_iso_date(doc.publish_time),
     )
     if not chunks:
-        logger.warning("文档 %s 无可用分块", doc_id)
         return 0
 
     vectors = await embedding_provider.embed_texts([c.content for c in chunks])
@@ -92,10 +132,18 @@ async def index_document_vectors(session: AsyncSession, doc_id: int) -> int:
         chunk.embedding = vec
 
     svc = VectorIndexService()
-    await svc.delete_by_doc_id(session, doc_id)
+    await svc.delete_by_doc_id(session, int(doc.id))
     await svc.index_chunks(session, chunks)
-    logger.info("文档 %s 已索引 %d 个分片", doc_id, len(chunks))
+    logger.info("RAG 索引完成：documentId=%s, chunks=%d", doc.id, len(chunks))
     return len(chunks)
+
+
+async def index_document_vectors(session: AsyncSession, doc_id: int) -> int:
+    """按 ID 加载文档快照并重建（兼容入口：DocumentService.index_document 直调）"""
+    doc = await load_pipeline_document(session, doc_id)
+    if doc is None:
+        raise ValueError(f"文档不存在或已删除: {doc_id}")
+    return await reindex_document(session, doc)
 
 
 def _chunk_row(chunk: DocumentChunk) -> dict:

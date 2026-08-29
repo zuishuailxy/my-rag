@@ -1,6 +1,7 @@
 """
 应用配置：使用 pydantic-settings 从环境变量加载
 """
+
 from functools import lru_cache
 from typing import List
 
@@ -74,7 +75,9 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
 
     # ---- Embedding（发布索引：文本向量，对齐架构 1024 维；对应 TS EmbeddingService）----
-    EMBEDDING_PROVIDER: str = "local"  # local=确定性伪向量(开发/测试) | openai=OpenAI 兼容 API
+    EMBEDDING_PROVIDER: str = (
+        "local"  # local=确定性伪向量(开发/测试) | openai=OpenAI 兼容 API
+    )
     # API Key 按 TS 的 fallback 链：EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     EMBEDDING_API_KEY: str | None = None
     DASHSCOPE_API_KEY: str | None = None
@@ -82,7 +85,7 @@ class Settings(BaseSettings):
     # DashScope 百炼 OpenAI 兼容端点
     EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     # 模型 ID 以百炼控制台为准（text-embedding-v3/v4 或 qwen3-embedding-*；写错会 400）
-    EMBEDDING_MODEL: str = "text-embedding-v4"
+    EMBEDDING_MODEL: str = "qwen3.7-text-embedding"
     EMBEDDING_DIMENSION: int = 1024
     # DashScope text-embedding-v3 单次最多 10 条；超出会 400 InvalidParameter（代码内钳制）
     EMBEDDING_BATCH_SIZE: int = 10
@@ -96,6 +99,11 @@ class Settings(BaseSettings):
     # ---- RAG 分块（对应 TS RAG_CHUNK_SIZE/OVERLAP，token 数）----
     RAG_CHUNK_SIZE: int = 512
     RAG_CHUNK_OVERLAP: int = 64
+
+    # ---- Elasticsearch（全文/关键词检索；向量存 PG，不写 dense_vector）----
+    ELASTICSEARCH_ENABLED: bool = True
+    # 本地开发走宿主机映射端口 9200；容器内部署时覆盖为 http://es:9200
+    ELASTICSEARCH_NODE: str = "http://localhost:9200"
 
 
 @lru_cache
