@@ -14,6 +14,7 @@ from bson import ObjectId
 from fastapi import HTTPException
 from sqlalchemy import delete
 
+from app.core.config import settings
 from app.db.mongo import close_mongo_client, get_document_content_collection
 from app.db.session import async_session_factory
 from app.models.document import DocumentEntity, DocumentStatus
@@ -25,6 +26,7 @@ async def main() -> None:
     svc = DocumentService()
     created_id: str | None = None
     content_oid: ObjectId | None = None
+    old_flag = settings.DOCUMENT_REQUIRE_APPROVAL  # 4b 临时切免审，结束时还原
     try:
         async with async_session_factory() as session:
             # 1) 创建（草稿，不传 summary → 从正文生成 contentSummary）
@@ -68,21 +70,31 @@ async def main() -> None:
             print("3) find_all: total =", page["total"], "| items =", len(page["items"]), "| pageSize =", page["pageSize"])
             assert page["total"] >= 1 and page["items"]
 
-            # 4) 更新：改正文 + 草稿→发布
+            # 4) 更新：改正文（状态变更不允许走 PATCH，见 update 守卫）
             updated = await svc.update(
                 session,
                 created_id,
-                DocumentUpdate(content="新的正文内容 New content here", status=DocumentStatus.PUBLISHED),
+                DocumentUpdate(content="新的正文内容 New content here"),
             )
             mdoc = await get_document_content_collection().find_one({"_id": content_oid})
             print(
-                "4) update(content+发布):",
+                "4) update(content):",
                 "| Mongo version =", mdoc["version"],
                 "| contentLength =", mdoc["contentLength"],
                 "| publishTime =", updated["publishTime"],
             )
             assert mdoc["version"] == 2  # 正文变更 version +1
-            assert updated["publishTime"] is not None  # 首次发布写入 publishTime
+            assert updated["publishTime"] is None  # 仍为草稿，无发布时间
+
+            # 4b) 免审模式下发布（需审模式会进 PendingReview，见 smoke_document_publish.py）
+            settings.DOCUMENT_REQUIRE_APPROVAL = "false"
+            published = await svc.publish(session, created_id)
+            print(
+                "4b) publish(免审): status =", published["status"],
+                "| publishTime =", published["publishTime"],
+            )
+            assert published["status"] == int(DocumentStatus.PUBLISHED)
+            assert published["publishTime"] is not None  # 发布写入 publishTime
 
             # 5) 更新：只改摘要（contentSummary 同步，version 不变）
             await svc.update(session, created_id, DocumentUpdate(summary="新的摘要"))
@@ -103,6 +115,7 @@ async def main() -> None:
 
         print("\n集成冒烟测试全部通过 ✅")
     finally:
+        settings.DOCUMENT_REQUIRE_APPROVAL = old_flag
         # 物理清理测试数据（软删记录 + Mongo 正文）
         if created_id is not None:
             async with async_session_factory() as session:

@@ -3,7 +3,7 @@
 
 这些结构在 MQ 消息体、分块结果之间流转。
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypedDict
 
@@ -12,7 +12,7 @@ from typing import TypedDict
 class DocumentChunk:
     """一篇文档切出来的一块文本（RAG：附 embedding 写入 doc_chunk）"""
 
-    # 稳定 ID：sha256(documentId:index)，重建时可覆盖
+    # 稳定 ID：sha256(documentId:index) 前 64 位，重建时可覆盖
     chunk_id: str
     document_id: str
     document_title: str
@@ -80,6 +80,36 @@ class SearchDocumentData(TypedDict, total=False):
     publishTime: str | None
     createdAt: str | None
     updatedAt: str | None
+
+
+@dataclass
+class ExtractedEntity:
+    """图谱实体（如「张三」「入职流程」「知识库」）"""
+
+    name: str
+    # PERSON / ORGANIZATION / CONCEPT / DOCUMENT / PROCESS / PRODUCT 等，见 docs/kg-extraction-schema.md
+    type: str
+    description: str = ""
+    aliases: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ExtractedRelation:
+    """实体间关系：source -[relation]-> target"""
+
+    source: str
+    target: str
+    relation: str
+    weight: float = 0.5
+
+
+@dataclass
+class ExtractionResult:
+    """单个 chunk 的抽取结果（对应 TS ExtractionResult）"""
+
+    chunk_id: str | None = None
+    entities: list[ExtractedEntity] = field(default_factory=list)
+    relations: list[ExtractedRelation] = field(default_factory=list)
 
 
 def to_iso_date(value: datetime | str | None) -> str | None:

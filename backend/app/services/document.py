@@ -14,16 +14,24 @@ from fastapi import HTTPException
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.bigint import parse_bigint, require_bigint
 from app.common.snowflake import next_snowflake_id
 from app.db.mongo import get_document_content_collection
 from app.models.document import DocumentEntity, DocumentStatus
 from app.models.document_content import DocumentContent
+from app.models.document_status import (
+    can_archive,
+    can_edit_content,
+    can_publish_from,
+)
+from app.schemas.auth import AuthUser
 from app.schemas.document import (
     DocumentCreate,
     DocumentQuery,
     DocumentUpdate,
     UploadParseDto,
 )
+from app.services.document_review import document_review_service
 from app.services.file_parser import file_parser_service
 from app.services.pipeline_publisher import pipeline_publisher
 from app.services.rustfs import rustfs_service
@@ -41,28 +49,51 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _to_bigint(value: str | None) -> int | None:
-    """DTO 的字符串 ID → BIGINT（雪花 ID 在 Python 侧为 int）"""
-    if value is None or value == "":
-        return None
-    return int(value)
+def _as_status(value: int | DocumentStatus | None) -> DocumentStatus:
+    """列值（int）→ DocumentStatus；未知值原样按 int 构造（IntEnum 允许）"""
+    if isinstance(value, DocumentStatus):
+        return value
+    return DocumentStatus(int(value) if value is not None else 0)
 
 
-# PostgreSQL BIGINT（int8）上限
-INT64_MAX = 9223372036854775807
+def document_to_dict(entity: DocumentEntity) -> dict:
+    """实体 → 响应 dict（bigint 转字符串与 TS bigintTransformer 一致，键名 camelCase）
 
+    放在模块级是为了给路由层复用：审核服务返回的是 DocumentEntity（不带正文），
+    路由需要同一套 bigint → 字符串的转换后再交给 DocumentResponse 校验。
+    """
 
-def _parse_bigint(value: str | None) -> int | None:
-    """字符串 → bigint；空 / 非法 / 超出 int64 范围返回 None"""
-    if value is None or value == "":
-        return None
-    try:
-        pk = int(value)
-    except ValueError:
-        return None
-    if pk < 0 or pk > INT64_MAX:
-        return None
-    return pk
+    def s(v: int | None) -> str | None:
+        return str(v) if v is not None else None
+
+    def dt(v: datetime | None) -> str | None:
+        return v.isoformat() if v is not None else None
+
+    return {
+        "id": str(entity.id),
+        "title": entity.title,
+        "contentId": entity.content_id,
+        "summary": entity.summary,
+        "categoryId": s(entity.category_id),
+        "teamId": s(entity.team_id),
+        "authorId": s(entity.author_id),
+        "coverImage": entity.cover_image,
+        "tags": entity.tags,
+        "status": int(entity.status) if entity.status is not None else None,
+        "remark": entity.remark,
+        "viewCount": entity.view_count,
+        "likeCount": entity.like_count,
+        "commentCount": entity.comment_count,
+        "favouriteCount": entity.favourite_count,
+        "wordCount": entity.word_count,
+        "publishTime": dt(entity.publish_time),
+        "isPublic": entity.is_public,
+        "createdAt": dt(entity.created_at),
+        "updatedAt": dt(entity.updated_at),
+        "createBy": s(entity.create_by),
+        "updateBy": s(entity.update_by),
+        "deleted": entity.deleted,
+    }
 
 
 class DocumentService:
@@ -70,13 +101,48 @@ class DocumentService:
 
     # ---------------------------------------------------------------- create
 
-    async def create(self, session: AsyncSession, dto: DocumentCreate) -> dict:
+    async def create(
+        self,
+        session: AsyncSession,
+        dto: DocumentCreate,
+        actor: AuthUser | None = None,
+    ) -> dict:
         """创建文档：生成雪花 ID → 写 Mongo 正文（拿 ObjectId）→ 写 Postgres 元数据
+
+        actor 为当前登录用户（TS `create(dto, user)` 的 @CurrentUser()）：
+
+        - authorId / createBy：DTO 未显式传时回退为 actor.userId（TS `?? actor?.userId`）
+        - updateBy：恒为 actor.userId，不跟随 createBy。TS 原文写的是
+          `updateBy: dto.createBy ?? actor?.userId`（已确认为笔误，正确写法是
+          `dto.updateBy ?? actor?.userId`）；而 CreateDocumentDto 并没有 updateBy 字段
+          （TS 里写 dto.updateBy 编译不过，这大概正是原作者顺手取 createBy 的原因），
+          该表达式退化为 `actor?.userId`，故此处不新增可写的 updateBy 字段，
+          避免客户端在创建时就伪造「最后修改人」。
+          副作用（刻意为之）：导入场景显式传 createBy=原作者时，updateBy 记的是
+          实际执行导入的操作者，而不是被复制成原作者。
 
         Postgres 写入失败时回滚删除已写入的 Mongo 正文，避免脏数据。
         """
+        requested_status = (
+            dto.status if dto.status is not None else DocumentStatus.DRAFT
+        )
+        # 创建时不允许直接设为 Archived / PendingReview
+        if requested_status not in (
+            DocumentStatus.DRAFT,
+            DocumentStatus.PUBLISHED,
+        ):
+            raise HTTPException(status_code=400, detail="创建文档仅允许草稿或已发布状态")
+        # DOCUMENT_REQUIRE_APPROVAL=true 时必须先草稿，再通过 publish / 提交审核发布
+        if (
+            requested_status == DocumentStatus.PUBLISHED
+            and document_review_service.is_require_approval()
+        ):
+            raise HTTPException(
+                status_code=400, detail="开启审核时请先创建草稿，再提交发布/审核"
+            )
+
         doc_id = next_snowflake_id()
-        status = dto.status if dto.status is not None else DocumentStatus.DRAFT
+        status = requested_status
         word_count = self.count_words(dto.content)
         # 未传 summary 时，从正文截取预览作为 contentSummary
         content_summary = (
@@ -84,7 +150,22 @@ class DocumentService:
             if dto.summary is not None
             else self.build_content_summary(dto.content)
         )
-        create_by = _to_bigint(dto.create_by)
+        # ID 字段先校验再写 Mongo：非法值（如 Swagger 默认的 "string"）直接 400，
+        # 避免先写正文再回滚删除，也避免非数字串落到 PG 报驱动级错误变成 500
+        #
+        # DTO 未传 authorId / createBy 时回退当前登录用户（TS `?? actor?.userId`）。
+        # update_by 单独取 actor（见 docstring：TS `dto.createBy ?? actor?.userId` 是笔误，
+        # 已确认应为 `dto.updateBy ?? actor?.userId`，而 CreateDocumentDto 无 updateBy）。
+        actor_id = actor.user_id if actor is not None else None
+        create_by = require_bigint(
+            dto.create_by if dto.create_by is not None else actor_id, "createBy"
+        )
+        update_by = require_bigint(actor_id, "updateBy")
+        category_id = require_bigint(dto.category_id, "categoryId")
+        team_id = require_bigint(dto.team_id, "teamId")
+        author_id = require_bigint(
+            dto.author_id if dto.author_id is not None else actor_id, "authorId"
+        )
         now = _utcnow()
 
         # 先写 Mongo，_id 由驱动自动生成 ObjectId
@@ -109,9 +190,9 @@ class DocumentService:
                 title=dto.title,
                 content_id=content_id,
                 summary=dto.summary,
-                category_id=_to_bigint(dto.category_id),
-                team_id=_to_bigint(dto.team_id),
-                author_id=_to_bigint(dto.author_id),
+                category_id=category_id,
+                team_id=team_id,
+                author_id=author_id,
                 cover_image=dto.cover_image,
                 tags=dto.tags,
                 status=status,
@@ -121,18 +202,23 @@ class DocumentService:
                 # 创建即发布时，记录发布时间
                 publish_time=now if status == DocumentStatus.PUBLISHED else None,
                 create_by=create_by,
-                update_by=create_by,
+                update_by=update_by,
                 deleted=False,
             )
             session.add(entity)
             await session.commit()
             await session.refresh(entity)
+
+            # 仅 Published 才建索引。需审时创建即 Published 已在上方拒绝，
+            # 能走到这里的 Published 一定是免审；草稿不投 MQ。
+            if status == DocumentStatus.PUBLISHED:
+                await self._safe_publish(entity, dto.content)
+
+            return {**document_to_dict(entity), "content": dto.content}
         except Exception:
             # Postgres 失败：物理删除刚写入的 Mongo 正文
             await coll.delete_one({"_id": result.inserted_id})
             raise
-
-        return {**self._to_dict(entity), "content": dto.content}
 
     # -------------------------------------------------------------- find_all
 
@@ -148,27 +234,22 @@ class DocumentService:
         conditions: list[ColumnElement[bool]] = [DocumentEntity.deleted.is_(False)]
         if query.title:
             conditions.append(DocumentEntity.title.ilike(f"%{query.title}%"))
-        if query.category_id is not None:
-            cid = _parse_bigint(query.category_id)
-            if cid is None:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid categoryId: {query.category_id}"
-                )
-            conditions.append(DocumentEntity.category_id == cid)
-        if query.team_id is not None:
-            tid = _parse_bigint(query.team_id)
-            if tid is None:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid teamId: {query.team_id}"
-                )
-            conditions.append(DocumentEntity.team_id == tid)
-        if query.author_id is not None:
-            aid = _parse_bigint(query.author_id)
-            if aid is None:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid authorId: {query.author_id}"
-                )
-            conditions.append(DocumentEntity.author_id == aid)
+        # 用真值判断（与 title 一致、也与 TS 的 `if (categoryId)` 一致）：
+        # ?categoryId= 空串视为未筛选，而非筛选 category_id IS NULL；
+        # 非空但非法（如 "string" / 超 int64）由 require_bigint 抛 400
+        if query.category_id:
+            conditions.append(
+                DocumentEntity.category_id
+                == require_bigint(query.category_id, "categoryId")
+            )
+        if query.team_id:
+            conditions.append(
+                DocumentEntity.team_id == require_bigint(query.team_id, "teamId")
+            )
+        if query.author_id:
+            conditions.append(
+                DocumentEntity.author_id == require_bigint(query.author_id, "authorId")
+            )
         if query.status is not None:
             conditions.append(DocumentEntity.status == query.status)
 
@@ -185,7 +266,7 @@ class DocumentService:
         items = (await session.scalars(stmt)).all()
 
         return {
-            "items": [self._to_dict(item) for item in items],
+            "items": [document_to_dict(item) for item in items],
             "total": total or 0,
             "page": page,
             "pageSize": page_size,
@@ -199,29 +280,74 @@ class DocumentService:
         """查询文档详情（默认附带 Mongo 正文）"""
         entity = await self._get_active(session, doc_id)
         if not with_content:
-            return self._to_dict(entity)
+            return document_to_dict(entity)
         return {
-            **self._to_dict(entity),
+            **document_to_dict(entity),
             "content": await self._get_content(entity.content_id),
         }
 
     # ----------------------------------------------------------------- update
 
     async def update(
-        self, session: AsyncSession, doc_id: str, dto: DocumentUpdate
+        self,
+        session: AsyncSession,
+        doc_id: str,
+        dto: DocumentUpdate,
+        actor: AuthUser | None = None,
     ) -> dict:
         """更新文档
 
         - 有 content：同步更新 Mongo 正文，并递增 version
         - 仅改 summary：同步更新 Mongo contentSummary
         - 其余字段只更新 Postgres 元数据
-        - 首次变为「已发布」时写入 publishTime
+        - 审核中（PendingReview）不可改正文 / 标题
+        - PATCH 不允许随意改 status；仅兼容 Published→Draft
+        - 提交后按状态变化同步 RAG / Search / KG
+
+        actor 为当前登录用户（TS `update(id, dto, user)`）：DTO 未传 updateBy 时
+        回退为 actor.userId（TS `else if (actor?.userId) doc.updateBy = actor.userId`）。
         """
         entity = await self._get_active(session, doc_id)
         coll = get_document_content_collection()
+        old_status = _as_status(entity.status)
+
+        # —— 状态与编辑权限（待审核中不可改标题 / 正文）——
+        if old_status == DocumentStatus.PENDING_REVIEW:
+            if dto.content is not None or dto.title is not None:
+                raise HTTPException(status_code=400, detail="审核中的文档不可编辑")
+        elif not can_edit_content(old_status):
+            raise HTTPException(status_code=400, detail="当前文档状态不允许编辑")
+
+        # —— ID 字段先校验 ——
+        # 位置刻意排在「改 entity / 写 Mongo」之前：非法 ID（如 Swagger 默认的
+        # "string"、或超 int64 的数字串）在这里就 400，避免出现「正文已更新、PG 元数据
+        # 未提交」的两侧不一致，也避免非数字串落到 PG 由驱动报错变成 500。
+        # 空串保持「清空该字段」语义（与改动前一致）。
+        new_category_id = require_bigint(dto.category_id, "categoryId")
+        new_team_id = require_bigint(dto.team_id, "teamId")
+        new_author_id = require_bigint(dto.author_id, "authorId")
+        new_update_by = require_bigint(dto.update_by, "updateBy")
+
+        # PATCH 不允许随意改 status；仅兼容 Published→Draft，其余走专用接口
+        if dto.status is not None and dto.status != old_status:
+            if (
+                dto.status == DocumentStatus.DRAFT
+                and old_status == DocumentStatus.PUBLISHED
+            ):
+                entity.status = DocumentStatus.DRAFT
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="请使用 publish / archive / save-draft / 审核接口变更文档状态",
+                )
+
+        content_changed = False
+        new_content: str | None = None
 
         # —— 正文变更 ——
         if dto.content is not None:
+            content_changed = True
+            new_content = dto.content
             content_summary = (
                 dto.summary
                 if dto.summary is not None
@@ -258,11 +384,11 @@ class DocumentService:
         if dto.summary is not None:
             entity.summary = dto.summary
         if dto.category_id is not None:
-            entity.category_id = _to_bigint(dto.category_id)
+            entity.category_id = new_category_id
         if dto.team_id is not None:
-            entity.team_id = _to_bigint(dto.team_id)
+            entity.team_id = new_team_id
         if dto.author_id is not None:
-            entity.author_id = _to_bigint(dto.author_id)
+            entity.author_id = new_author_id
         if dto.cover_image is not None:
             entity.cover_image = dto.cover_image
         if dto.tags is not None:
@@ -272,27 +398,32 @@ class DocumentService:
         if dto.is_public is not None:
             entity.is_public = dto.is_public
         if dto.update_by is not None:
-            entity.update_by = _to_bigint(dto.update_by)
-
-        # 状态从非发布 → 发布时，记录发布时间
-        if dto.status is not None:
-            if (
-                dto.status == DocumentStatus.PUBLISHED
-                and entity.status != DocumentStatus.PUBLISHED
-            ):
-                entity.publish_time = _utcnow()
-            entity.status = dto.status
+            entity.update_by = new_update_by
+        elif actor is not None and actor.user_id:
+            # DTO 未传 updateBy → 记当前登录用户（TS `else if (actor?.userId)`）
+            entity.update_by = require_bigint(actor.user_id, "updateBy")
 
         await session.commit()
         await session.refresh(entity)
 
         # 本次已带新正文则直接返回；否则再查一次 Mongo
-        if dto.content is not None:
-            return {**self._to_dict(entity), "content": dto.content}
-        return {
-            **self._to_dict(entity),
-            "content": await self._get_content(entity.content_id),
-        }
+        final_content = (
+            new_content
+            if new_content is not None
+            else await self._get_content(entity.content_id)
+        )
+
+        # 已发布文档改内容 / 下架时同步 RAG / Search / KG
+        # （需审核模式下已发布改稿不立即重建索引，等再次发布 / 审核通过）
+        await self._sync_pipeline_after_update(
+            entity,
+            old_status,
+            _as_status(entity.status),
+            content_changed,
+            final_content,
+        )
+
+        return {**document_to_dict(entity), "content": final_content}
 
     # ----------------------------------------------------------------- remove
 
@@ -301,19 +432,16 @@ class DocumentService:
         并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）"""
         entity = await self._get_active(session, doc_id)
 
+        if _as_status(entity.status) == DocumentStatus.PUBLISHED:
+            # 仅已发布需要清索引；草稿 / 待审 / 归档删除时不投递 unpublish
+            await self._safe_unpublish(doc_id)
+
         entity.deleted = True
         await session.commit()
         await get_document_content_collection().update_one(
             {"_id": ObjectId(entity.content_id)},
             {"$set": {"deleted": True, "updatedAt": _utcnow()}},
         )
-        # MQ 投递失败不影响删除成功
-        try:
-            await pipeline_publisher.after_unpublish(doc_id)
-        except Exception as err:
-            logger.warning(
-                "删除后索引清理投递失败：documentId=%s, error=%s", doc_id, err
-            )
         return {"id": doc_id, "deleted": True}
 
     # ------------------------------------------------------ upload & create
@@ -325,11 +453,15 @@ class DocumentService:
         filename: str,
         content_type: str | None,
         meta: UploadParseDto,
+        actor: AuthUser | None = None,
     ) -> dict:
         """上传并解析文件 → 创建草稿文档
 
         流程：校验格式 → 解析为 Markdown（PDF 图片走 RustFS）→ 原文件存 RustFS →
         创建草稿（DocumentStatus.DRAFT）→ 返回摘要。
+
+        actor 透传给 create（TS `uploadAndCreateDocument(file, meta, user)` 同款），
+        用于回填 authorId / createBy。
         """
         if not file_data:
             raise HTTPException(status_code=400, detail="文件不能为空")
@@ -408,6 +540,7 @@ class DocumentService:
                 is_public=meta.is_public,
                 status=DocumentStatus.DRAFT,
             ),
+            actor,
         )
 
         preview_len = min(200, len(parsed_content))
@@ -436,7 +569,7 @@ class DocumentService:
 
     async def index_document(self, session: AsyncSession, doc_id: str) -> dict:
         """发布后索引（RAG 消费者）：分块 → 嵌入 → 写入 PGVector doc_chunk"""
-        pk = _parse_bigint(doc_id)
+        pk = parse_bigint(doc_id)
         if pk is None:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
         from app.services.indexing import index_document_vectors
@@ -450,15 +583,43 @@ class DocumentService:
     # --------------------------------------------------------------- publish
 
     async def publish(self, session: AsyncSession, doc_id: str) -> dict:
-        """直接发布文档（不做审核）
+        """发布文档
 
-        流程：校验存在且状态为草稿/已发布 → 写库 status=Published、刷新 publishTime
-        → 读 Mongo 正文 → 投递 RabbitMQ（失败只记日志，不回滚发布）。
+        - 需审核：Draft / Published → PendingReview（不建索引）
+        - 免审：Draft / Published / Archived → Published + 建索引
+        """
+        logger.info("发布文档：documentId=%s", doc_id)
+
+        entity = await self._get_active(session, doc_id)
+        status = _as_status(entity.status)
+
+        if not can_publish_from(status):
+            raise HTTPException(status_code=400, detail="当前文档状态不允许发布")
+
+        if status == DocumentStatus.PENDING_REVIEW:
+            raise HTTPException(status_code=400, detail="文档审核中，请等待审核结果")
+
+        if document_review_service.is_require_approval() and status in (
+            DocumentStatus.DRAFT,
+            DocumentStatus.PUBLISHED,
+        ):
+            # 草稿或已发布：进入待审，不建索引；
+            # 来自 Published 时 submit_for_review 内部会清旧索引
+            saved = await document_review_service.submit_for_review(session, doc_id)
+            content = await self._get_content(saved.content_id)
+            return {**document_to_dict(saved), "content": content}
+
+        return await self.direct_publish(session, doc_id)
+
+    async def direct_publish(self, session: AsyncSession, doc_id: str) -> dict:
+        """免审直接发布（Draft / Published / Archived / PendingReview → Published）
+
+        也供 DocumentReviewService.approve_review 间接使用
+        （审核通过后 status→Published，索引由审核服务自行投递）。
         """
         entity = await self._get_active(session, doc_id)
 
-        # 仅草稿 / 已发布可发布（已发布再次发布会重建索引）
-        if entity.status not in (DocumentStatus.DRAFT, DocumentStatus.PUBLISHED):
+        if not can_publish_from(_as_status(entity.status)):
             raise HTTPException(status_code=400, detail="当前文档状态不允许发布")
 
         entity.status = DocumentStatus.PUBLISHED
@@ -467,25 +628,94 @@ class DocumentService:
         await session.refresh(entity)
 
         content = await self._get_content(entity.content_id)
-
-        # MQ 投递失败不影响发布成功
-        try:
-            await pipeline_publisher.after_publish(entity, content)
-        except Exception as err:
-            logger.warning(
-                "发布后管线投递失败（不影响发布）：documentId=%s, error=%s",
-                doc_id,
-                err,
-            )
+        await self._safe_publish(entity, content)
 
         logger.info("文档发布成功：documentId=%s", doc_id)
-        return {**self._to_dict(entity), "content": content}
+        return {**document_to_dict(entity), "content": content}
+
+    # ---------------------------------------------------------------- archive
+
+    async def archive(self, session: AsyncSession, doc_id: str) -> dict:
+        """归档：Published → Archived，清索引"""
+        entity = await self._get_active(session, doc_id)
+
+        if not can_archive(_as_status(entity.status)):
+            raise HTTPException(status_code=400, detail="只有已发布文档可以归档")
+
+        entity.status = DocumentStatus.ARCHIVED
+        await session.commit()
+        await session.refresh(entity)
+        await self._safe_unpublish(doc_id)
+
+        logger.info("文档已归档：documentId=%s", doc_id)
+        return document_to_dict(entity)
+
+    # ------------------------------------------------------------ save as draft
+
+    async def save_as_draft(self, session: AsyncSession, doc_id: str) -> dict:
+        """已发布 → 草稿（保存草稿），清索引"""
+        entity = await self._get_active(session, doc_id)
+
+        if _as_status(entity.status) != DocumentStatus.PUBLISHED:
+            raise HTTPException(status_code=400, detail="只有已发布文档可以保存为草稿")
+
+        entity.status = DocumentStatus.DRAFT
+        await session.commit()
+        await session.refresh(entity)
+        await self._safe_unpublish(doc_id)
+
+        logger.info("文档已保存为草稿：documentId=%s", doc_id)
+        return document_to_dict(entity)
 
     # ---------------------------------------------------------------- helpers
 
+    async def _sync_pipeline_after_update(
+        self,
+        doc: DocumentEntity,
+        old_status: DocumentStatus,
+        new_status: DocumentStatus,
+        content_changed: bool,
+        content: str,
+    ) -> None:
+        """更新后根据状态变化同步索引
+
+        - Published → 非 Published：清索引
+        - 仍为 Published 且正文变了：免审模式重建索引；需审核模式等再次发布 / 审核通过
+        """
+        was_published = old_status == DocumentStatus.PUBLISHED
+        is_published = new_status == DocumentStatus.PUBLISHED
+
+        if was_published and not is_published:
+            await self._safe_unpublish(doc.id)
+            return
+
+        if is_published and content_changed:
+            if not document_review_service.is_require_approval():
+                await self._safe_publish(doc, content)
+
+    async def _safe_publish(self, doc: DocumentEntity, content: str) -> None:
+        """投递 MQ：RAG 分块向量 + 全文搜索 + KG 建图（失败不回滚文档状态）"""
+        try:
+            await pipeline_publisher.after_publish(doc, content)
+        except Exception as err:
+            logger.warning(
+                "索引投递失败（不影响文档状态）：documentId=%s, error=%s",
+                doc.id,
+                err,
+            )
+
+    async def _safe_unpublish(self, document_id: str | int) -> None:
+        """投递 MQ：删除该文档在 ES / Neo4j 等侧的索引数据"""
+        try:
+            await pipeline_publisher.after_unpublish(document_id)
+        except Exception as err:
+            logger.warning(
+                "索引清理投递失败：documentId=%s, error=%s", document_id, err
+            )
+
     async def _get_active(self, session: AsyncSession, doc_id: str) -> DocumentEntity:
         """按 id 查询未软删文档，不存在（或 id 非法 / 超出 bigint 范围）则抛 404"""
-        pk = _parse_bigint(doc_id)
+        pk = parse_bigint(doc_id)
         if pk is None:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
         stmt = select(DocumentEntity).where(
@@ -528,38 +758,3 @@ class DocumentService:
         latin = len(re.sub(r"[\u4e00-\u9fff]", " ", trimmed).strip().split())
         return cjk + latin
 
-    @staticmethod
-    def _to_dict(entity: DocumentEntity) -> dict:
-        """实体 → 响应 dict（bigint 转字符串与 TS bigintTransformer 一致，键名 camelCase）"""
-
-        def s(v: int | None) -> str | None:
-            return str(v) if v is not None else None
-
-        def dt(v: datetime | None) -> str | None:
-            return v.isoformat() if v is not None else None
-
-        return {
-            "id": str(entity.id),
-            "title": entity.title,
-            "contentId": entity.content_id,
-            "summary": entity.summary,
-            "categoryId": s(entity.category_id),
-            "teamId": s(entity.team_id),
-            "authorId": s(entity.author_id),
-            "coverImage": entity.cover_image,
-            "tags": entity.tags,
-            "status": int(entity.status) if entity.status is not None else None,
-            "remark": entity.remark,
-            "viewCount": entity.view_count,
-            "likeCount": entity.like_count,
-            "commentCount": entity.comment_count,
-            "favouriteCount": entity.favourite_count,
-            "wordCount": entity.word_count,
-            "publishTime": dt(entity.publish_time),
-            "isPublic": entity.is_public,
-            "createdAt": dt(entity.created_at),
-            "updatedAt": dt(entity.updated_at),
-            "createBy": s(entity.create_by),
-            "updateBy": s(entity.update_by),
-            "deleted": entity.deleted,
-        }

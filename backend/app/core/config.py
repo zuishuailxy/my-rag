@@ -18,6 +18,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ---- JWT 认证（对应 TS auth.module.ts JwtModule + AuthService）----
+    # ⚠️ 刻意偏离 TS：TS 开发默认 'dev-secret-change-me' 仅 20 字节，PyJWT 对 <32 字节
+    # 的 HS256 密钥会发 InsecureKeyLengthWarning（RFC 7518 要求 ≥32 字节）。此处把开发
+    # 默认值加长到 47 字节以消除告警；生产环境必须通过 JWT_SECRET 配置强随机密钥。
+    JWT_SECRET: str = "dev-secret-change-me-please-use-32-bytes-random"
+    # 过期时长格式与 NestJS @nestjs/jwt 一致：<数字><s|m|h|d>，如 2h / 7d / 30m
+    JWT_ACCESS_EXPIRES: str = "2h"
+    JWT_REFRESH_EXPIRES: str = "7d"
+
     # ---- 应用基础 ----
     APP_NAME: str = "企业智能知识库系统"
     APP_VERSION: str = "1.0.0"
@@ -27,6 +36,11 @@ class Settings(BaseSettings):
     # ---- 服务器 ----
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+
+    # ---- 文档发布审核（对应 TS DOCUMENT_REQUIRE_APPROVAL）----
+    # 字符串而非 bool，保持与 TS `config.get(..., 'true') !== 'false'` 完全一致的判定：
+    # 只有严格等于 "false" 才免审，其余任何值（含 TRUE/0/空串）都视为开启审核。
+    DOCUMENT_REQUIRE_APPROVAL: str = "true"
 
     # ---- 数据库 (PostgreSQL + PGVector) ----
     POSTGRES_HOST: str = "localhost"
@@ -104,6 +118,27 @@ class Settings(BaseSettings):
     ELASTICSEARCH_ENABLED: bool = True
     # 本地开发走宿主机映射端口 9200；容器内部署时覆盖为 http://es:9200
     ELASTICSEARCH_NODE: str = "http://localhost:9200"
+
+    # ---- KG 抽取（LLM 实体/关系抽取，DeepSeek OpenAI 兼容端点；对应 TS ExtractionService）----
+    # API Key fallback 链与 TS 一致：OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY
+    LLM_API_KEY: str | None = None
+    # DeepSeek OpenAI 兼容端点
+    LLM_BASE_URL: str = "https://api.deepseek.com/v1"
+    # 模型：deepseek-v4-flash
+    LLM_MODEL: str = "deepseek-v4-flash"
+    # 单 chunk 最多实体 / 关系数，防止图爆炸
+    KG_MAX_ENTITIES: int = 12
+    KG_MAX_RELATIONS: int = 15
+    # 单次抽取 LLM 超时（毫秒）
+    KG_LLM_TIMEOUT_MS: int = 60000
+
+    # ---- Neo4j（KG 知识图谱存储；与 docker-compose 中 neo4j 服务一致）----
+    NEO4J_ENABLED: bool = True
+    # 本地开发走宿主机映射端口 7687；容器内部署时覆盖为 bolt://neo4j:7687
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    # 与 docker-compose NEO4J_AUTH=neo4j/12345678 保持一致
+    NEO4J_PASSWORD: str = "12345678"
 
 
 @lru_cache

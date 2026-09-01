@@ -17,6 +17,10 @@ from aio_pika.abc import AbstractChannel, AbstractIncomingMessage, AbstractRobus
 
 from app.core.config import settings
 from app.mq.constants import (
+    KG_GRAPH_EXCHANGE,
+    KG_GRAPH_QUEUE,
+    KG_RK_BUILD_BY_IDS,
+    KG_RK_DELETE,
     SEARCH_INDEX_EXCHANGE,
     SEARCH_INDEX_QUEUE,
     RAG_REINDEX_EXCHANGE,
@@ -141,7 +145,15 @@ class RabbitMqService:
         q_search = await ch.declare_queue(SEARCH_INDEX_QUEUE, durable=True)
         await q_search.bind(ex_doc, SEARCH_RK_INDEX)
         await q_search.bind(ex_doc, SEARCH_RK_DELETE)
-        logger.info("RabbitMQ 拓扑已声明（RAG + Search）")
+
+        # KG：知识图谱构建 / 删除（一个队列绑两个路由键）
+        ex_kg = await ch.declare_exchange(
+            KG_GRAPH_EXCHANGE, ExchangeType.TOPIC, durable=True
+        )
+        q_kg = await ch.declare_queue(KG_GRAPH_QUEUE, durable=True)
+        await q_kg.bind(ex_kg, KG_RK_BUILD_BY_IDS)
+        await q_kg.bind(ex_kg, KG_RK_DELETE)
+        logger.info("RabbitMQ 拓扑已声明（RAG + Search + KG）")
 
     async def _bind_consumers(self, ch: AbstractChannel) -> None:
         for queue_name, handler in self._handlers.items():

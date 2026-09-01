@@ -3,8 +3,12 @@
 
 前置条件：docker 的 postgres + mongodb 运行中。
 
+注意：本脚本用 TestClient 且触发 lifespan，会真的连 MQ / ES / Neo4j 并启动消费者
+（KG 消费者会调 LLM）。只想验证 HTTP 语义时加 RABBITMQ_ENABLED=false 屏蔽投递。
+
 用法：
-    cd backend && PYTHONPATH=. .venv/bin/python scripts/smoke_document_api.py
+    cd backend && RABBITMQ_ENABLED=false PYTHONPATH=. .venv/bin/python \
+        scripts/smoke_document_api.py
 """
 import asyncio
 
@@ -16,6 +20,7 @@ from app.db.mongo import get_document_content_collection
 from app.db.session import async_session_factory
 from app.main import app
 from app.models.document import DocumentEntity
+from smoke_auth import SEED_ADMIN_ID, bearer_headers
 
 doc_id: str | None = None
 content_oid: ObjectId | None = None
@@ -38,8 +43,10 @@ def main() -> None:
     global doc_id, content_oid
     try:
         # with 形式触发 lifespan：退出时关闭 Postgres 连接池与 Mongo 客户端
-        with TestClient(app) as client:
-            # 1) 创建（camelCase body + status=1 直接发布）
+        with TestClient(app, headers=bearer_headers()) as client:
+            # 1) 创建（camelCase body；建草稿）
+            # 不传 status=1：DOCUMENT_REQUIRE_APPROVAL=true 时「创建即发布」会被
+            # 服务层拒绝（400 开启审核时请先创建草稿），草稿路径两种模式下都成立。
             resp = client.post(
                 "/api/v1/documents",
                 json={
@@ -49,7 +56,6 @@ def main() -> None:
                     "authorId": "600",
                     "isPublic": True,
                     "createBy": "700",
-                    "status": 1,
                 },
             )
             print("1) POST /documents:", resp.status_code)
@@ -57,12 +63,17 @@ def main() -> None:
             data = resp.json()
             doc_id = data["id"]
             content_oid = ObjectId(data["contentId"])
-            assert data["wordCount"] > 0 and data["publishTime"] is not None
+            assert data["wordCount"] > 0 and data["publishTime"] is None
+            assert data["status"] == 0
+            # createBy 用 DTO 显式值；updateBy 恒取 JWT 中的操作者，不被 createBy 覆盖
+            # （TS 原文 `updateBy: dto.createBy ?? actor?.userId` 是笔误，已修正）
+            assert data["createBy"] == "700"
+            assert data["updateBy"] == SEED_ADMIN_ID
 
             # 2) 列表查询：camelCase query 参数（title 模糊 + status 过滤 + pageSize）
             resp = client.get(
                 "/api/v1/documents",
-                params={"title": "API测试", "status": "1", "pageSize": "5"},
+                params={"title": "API测试", "status": "0", "pageSize": "5"},
             )
             print("2) GET /documents?title=&status=&pageSize=:", resp.status_code)
             assert resp.status_code == 200, resp.text

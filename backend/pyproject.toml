@@ -28,6 +28,10 @@ dependencies = [
     "langchain-openai>=1.6.0",
     "elasticsearch>=8.17,<9",
     "aiohttp>=3.14.3",
+    "neo4j>=6.3.0",
+    "bcrypt>=5.0.0",
+    "pyjwt>=2.13.0",
+    "email-validator>=2.3.0",
 ]
 
 [tool.uv]

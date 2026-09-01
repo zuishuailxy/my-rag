@@ -13,6 +13,9 @@ import uuid
 
 from app.models.document import DocumentEntity
 from app.mq.constants import (
+    KG_GRAPH_EXCHANGE,
+    KG_RK_BUILD_BY_IDS,
+    KG_RK_DELETE,
     SEARCH_INDEX_EXCHANGE,
     RAG_REINDEX_EXCHANGE,
     RAG_RK_BY_IDS,
@@ -21,6 +24,7 @@ from app.mq.constants import (
     SEARCH_RK_INDEX,
 )
 from app.mq.messages import (
+    KgBuildMessage,
     ReindexMessage,
     SearchDeleteMessage,
     SearchIndexMessage,
@@ -78,17 +82,19 @@ class DocumentPipelinePublisher:
     async def after_publish(
         self, document: DocumentEntity, content: str | None = None
     ) -> None:
-        """发布成功后调用：并行投递 RAG 分块向量化 + Search 全文索引任务"""
+        """发布成功后调用：并行投递 RAG 分块向量化 + Search 全文索引 + KG 建图任务"""
         await asyncio.gather(
             self._trigger_rag_reindex(document.id),
             self._trigger_search_index(document, content),
+            self._trigger_kg_build(document.id),
         )
 
     async def after_unpublish(self, document_id: str | int) -> None:
-        """归档 / 删除后：并行通知 RAG / Search 按文档 ID 清理索引"""
+        """归档 / 删除后：并行通知 RAG / Search / KG 按文档 ID 清理"""
         await asyncio.gather(
             self._trigger_rag_delete(document_id),
             self._trigger_search_delete(document_id),
+            self._trigger_kg_delete(document_id),
         )
 
     async def _trigger_rag_reindex(self, document_id: int) -> None:
@@ -120,6 +126,40 @@ class DocumentPipelinePublisher:
         )
         logger.info(
             "RAG 向量块清理%s：documentId=%s, taskId=%s",
+            "已投递" if ok else "投递失败",
+            document_id,
+            message["taskId"],
+        )
+
+    async def _trigger_kg_build(self, document_id: int) -> None:
+        """KG：按文档 ID 建图谱"""
+        message: KgBuildMessage = {
+            "taskId": str(uuid.uuid4()),
+            "type": "BUILD_BY_DOC_IDS",
+            "documentIds": [str(document_id)],
+        }
+        ok = await rabbitmq_service.publish(
+            KG_GRAPH_EXCHANGE, KG_RK_BUILD_BY_IDS, message
+        )
+        logger.info(
+            "KG 建图%s：documentId=%s, taskId=%s",
+            "已投递" if ok else "投递失败",
+            document_id,
+            message["taskId"],
+        )
+
+    async def _trigger_kg_delete(self, document_id: str | int) -> None:
+        """KG：按文档 ID 删除图谱"""
+        message: KgBuildMessage = {
+            "taskId": str(uuid.uuid4()),
+            "type": "DELETE_BY_DOC_IDS",
+            "documentIds": [str(document_id)],
+        }
+        ok = await rabbitmq_service.publish(
+            KG_GRAPH_EXCHANGE, KG_RK_DELETE, message
+        )
+        logger.info(
+            "KG 图谱清理%s：documentId=%s, taskId=%s",
             "已投递" if ok else "投递失败",
             document_id,
             message["taskId"],

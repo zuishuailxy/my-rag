@@ -3,7 +3,6 @@
 """
 
 from datetime import datetime
-from enum import IntEnum
 
 from sqlalchemy import (
     BigInteger,
@@ -17,14 +16,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.document_status import DocumentStatus
 
-
-class DocumentStatus(IntEnum):
-    """文档状态（对应 TypeORM DocumentStatus 枚举）"""
-
-    DRAFT = 0  # 草稿
-    PUBLISHED = 1  # 已发布
-    ARCHIVED = 2  # 已归档：不会作为知识被检索
+__all__ = ["DocumentEntity", "DocumentStatus"]
 
 
 class DocumentEntity(Base):
@@ -59,7 +53,7 @@ class DocumentEntity(Base):
     # 标签（逗号分隔）
     tags: Mapped[str | None] = mapped_column(String)
 
-    # 状态：0 草稿 / 1 已发布 / 2 已归档
+    # 状态：0 草稿 / 1 已发布 / 2 已归档 / 3 待审核（见 document_status.py）
     status: Mapped[DocumentStatus] = mapped_column(
         SmallInteger, default=DocumentStatus.DRAFT, server_default="0"
     )

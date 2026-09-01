@@ -10,6 +10,10 @@ PGVector 发布索引冒烟测试（RAG 消费者）
 
 用法：
     cd backend && PYTHONPATH=. .venv/bin/python scripts/smoke_index_pgvector.py
+
+⚠️ 强制免审（见下方 settings 覆写）：本脚本需要一个「已发布」文档才能验索引链路，
+而需审模式下创建即发布会被服务层拒绝（400「开启审核时请先创建草稿」）。
+审核链路本身由 smoke_document_review*.py 覆盖。
 """
 import asyncio
 import math
@@ -17,6 +21,7 @@ import math
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select, text
 
+from app.core.config import settings
 from app.db.mongo import get_document_content_collection
 from app.db.session import async_session_factory
 from app.main import app
@@ -24,6 +29,10 @@ from app.models.doc_chunk import DocChunk
 from app.models.document import DocumentEntity
 from app.services.chunker import chunking_service
 from app.services.embedding import embedding_provider
+from smoke_auth import bearer_headers
+
+# 测试夹具：关掉审核开关（DOCUMENT_REQUIRE_APPROVAL 判定严格等于 "false" 才免审）
+settings.DOCUMENT_REQUIRE_APPROVAL = "false"
 
 # 多段长正文（>500 字符，保证切成多块）
 LONG_CONTENT = "\n\n".join(
@@ -84,7 +93,7 @@ def main() -> None:
 
     doc_id: str | None = None
     try:
-        with TestClient(app) as client:
+        with TestClient(app, headers=bearer_headers()) as client:
             # 1) 创建已发布文档
             r = client.post(
                 "/api/v1/documents",

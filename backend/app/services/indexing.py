@@ -15,12 +15,12 @@ RAG 向量索引（对应 TS VectorIndexService，写入 Elasticsearch kh_chunk 
 import logging
 from datetime import datetime
 
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.mongo import get_document_content_collection
-from app.models.document import DocumentEntity
+from app.models.document import DocumentEntity, DocumentStatus
 from app.models.doc_chunk import DocChunk
 from app.pipeline.types import PipelineDocument, to_iso_date
 from app.services.chunker import DocumentChunk, chunking_service
@@ -102,6 +102,24 @@ async def load_pipeline_document(
         return None
     content = await _load_content(entity.content_id)
     return to_pipeline_document(entity, content)
+
+
+async def load_all_published_documents(
+    session: AsyncSession,
+) -> list[PipelineDocument]:
+    """加载全部已发布文档快照（对应 TS loadAllPublishedDocuments，KG BUILD_ALL 用）"""
+    result = await session.execute(
+        select(DocumentEntity).where(
+            DocumentEntity.deleted.is_(False),
+            DocumentEntity.status == DocumentStatus.PUBLISHED,
+        )
+    )
+    entities = result.scalars().all()
+    docs: list[PipelineDocument] = []
+    for entity in entities:
+        content = await _load_content(entity.content_id)
+        docs.append(to_pipeline_document(entity, content))
+    return docs
 
 
 async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:

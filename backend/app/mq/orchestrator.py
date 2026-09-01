@@ -6,13 +6,16 @@
 
 - RAG：分块 → 嵌入 → 写入 PostgreSQL doc_chunk（见 services/indexing.py）
 - Search：整篇快照 → ES kh_document（见 services/search_index.py）
+- KG：分块 → 抽实体关系 → 写 Neo4j（见 services/graph_build.py）
 """
 import logging
 
 from app.db.session import async_session_factory
 from app.pipeline.types import PipelineDocument
+from app.services.graph_build import graph_build_service
 from app.services.indexing import (
     VectorIndexService,
+    load_all_published_documents,
     load_pipeline_document,
     reindex_document,
 )
@@ -97,6 +100,40 @@ class PipelineOrchestrator:
             await search_index_service.index_document(doc)
         except Exception as err:
             logger.error("搜索索引失败：documentId=%s, %s", document_id, err)
+
+    # ------------------------------------------------------------------- KG
+
+    async def handle_kg_build(
+        self, message_type: str, document_ids: list[str]
+    ) -> None:
+        """处理 KG 建图消息（对应 TS handleKgBuild）：按 type 分发
+
+        - BUILD_*：读正文 → 分块 → 抽实体关系 → 写 Neo4j
+        - DELETE_*：删文档节点及其 chunk / 孤儿实体
+        """
+        if message_type == "DELETE_BY_DOC_IDS" and document_ids:
+            for doc_id in document_ids:
+                await graph_build_service.delete_for_document(doc_id)
+            return
+
+        if message_type == "BUILD_BY_DOC_IDS" and document_ids:
+            docs = await self._load_documents_by_ids(document_ids)
+        elif message_type == "BUILD_ALL":
+            docs = await self._load_all_published_documents()
+        else:
+            docs = []
+
+        if not docs:
+            logger.warning("忽略未支持或空的 KG 消息：type=%s", message_type)
+            return
+
+        logger.info("KG 开始建图：type=%s, total=%d", message_type, len(docs))
+        await graph_build_service.build_batch(docs)
+
+    async def _load_all_published_documents(self) -> list[PipelineDocument]:
+        """加载全部已发布文档快照（对应 TS loadAllPublishedDocuments）"""
+        async with async_session_factory() as session:
+            return await load_all_published_documents(session)
 
     async def _load_documents_by_ids(self, ids: list[str]) -> list[PipelineDocument]:
         """按 ID 列表加载 Postgres 元数据 + Mongo 正文 → 管线统一快照"""

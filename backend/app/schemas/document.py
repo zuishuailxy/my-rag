@@ -55,7 +55,7 @@ class DocumentQuery(BaseModel):
     # 作者 ID
     author_id: str | None = Field(default=None, description="作者 ID")
 
-    # 状态：0 草稿 / 1 已发布 / 2 已归档
+    # 状态：0 草稿 / 1 已发布 / 2 已归档 / 3 待审核
     status: DocumentStatus | None = Field(default=None, description="状态")
 
     # 页码，从 1 开始
@@ -71,12 +71,27 @@ class DocumentUpdate(BaseModel):
     等价于 NestJS 的 PartialType(OmitType(CreateDocumentDto, ['createBy']))：
     取 CreateDocumentDto 除 createBy 外的全部字段并改为可选，另加 updateBy。
     注意：新增字段时需与 DocumentCreate 保持同步。
+
+    所有字段均可选，未出现的字段保持原值不变（发 {} 也合法）。
+    json_schema_extra.example 用于覆盖 Swagger UI 自动生成的示例 —— 默认示例
+    会把 categoryId 等填成字面量 "string"，直接点 Execute 会触发 400
+    `Invalid categoryId: string`。
     """
 
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True,
         alias_generator=to_camel,
+        json_schema_extra={
+            "example": {
+                "title": "文档标题",
+                "summary": "一句话摘要",
+                "categoryId": "1001",
+                "tags": "技术,文档",
+                "isPublic": True,
+                "updateBy": "1001",
+            }
+        },
     )
 
     # 标题
@@ -103,8 +118,13 @@ class DocumentUpdate(BaseModel):
     # 标签（逗号分隔）
     tags: str | None = Field(default=None, description="标签（逗号分隔）")
 
-    # 状态：0 草稿 / 1 已发布 / 2 已归档
-    status: DocumentStatus | None = Field(default=None, description="状态")
+    # 状态：0 草稿 / 1 已发布 / 2 已归档 / 3 待审核
+    status: DocumentStatus | None = Field(
+        default=None,
+        description="状态：0 草稿 / 1 已发布 / 2 已归档 / 3 待审核。"
+        "PATCH 仅允许 1→0（下架为草稿），其余状态变更请走 "
+        "publish / archive / save-draft / 审核接口",
+    )
 
     # 备注
     remark: str | None = Field(default=None, description="备注")
@@ -139,7 +159,7 @@ class DocumentMetadata(BaseModel):
     cover_image: str | None = None
     # 标签（逗号分隔）
     tags: str | None = None
-    # 状态：0 草稿 / 1 已发布 / 2 已归档
+    # 状态：0 草稿 / 1 已发布 / 2 已归档 / 3 待审核
     status: DocumentStatus
     # 备注
     remark: str | None = None

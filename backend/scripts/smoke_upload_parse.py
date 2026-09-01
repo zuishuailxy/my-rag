@@ -20,6 +20,7 @@ from app.db.session import async_session_factory
 from app.main import app
 from app.models.document import DocumentEntity
 from app.services.rustfs import rustfs_service
+from smoke_auth import bearer_headers
 
 doc_id: str | None = None
 rustfs_keys: list[str] = []
@@ -45,7 +46,7 @@ async def _cleanup() -> None:
 def main() -> None:
     global doc_id, rustfs_keys
     try:
-        with TestClient(app) as client:
+        with TestClient(app, headers=bearer_headers()) as client:
             # 1) 上传 .md → 201
             content = "# 部署指南\n\n1. docker compose up -d\n2. 初始化数据库"
             resp = client.post(

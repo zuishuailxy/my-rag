@@ -46,3 +46,18 @@ class SearchDeleteMessage(TypedDict):
     # 动作：从 kh_document 删除
     type: Literal["DELETE"]
     documentId: str
+
+
+class KgBuildMessage(TypedDict):
+    """KG 知识图谱构建 / 删除消息（kg.graph.exchange）
+
+    type 区分建图（BUILD_BY_DOC_IDS / BUILD_ALL）与删除（DELETE_BY_DOC_IDS），
+    与 TS 一致。
+    """
+
+    # 任务 ID（uuid4）
+    taskId: str
+    # 消息类型：按文档 ID 建图、全量建图，或按文档 ID 删除图谱
+    type: Literal["BUILD_BY_DOC_IDS", "BUILD_ALL", "DELETE_BY_DOC_IDS"]
+    # 待处理（建图 / 删除）的文档 ID 列表
+    documentIds: list[str]
