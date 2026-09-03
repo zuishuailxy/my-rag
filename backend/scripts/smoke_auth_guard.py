@@ -117,6 +117,11 @@ async def main() -> None:
         assert set(admin["userInfo"]["roles"]) == {"ROLE_ADMIN", "ROLE_REVIEWER"}
         assert reviewer["userInfo"]["roles"] == ["ROLE_REVIEWER"]
         assert plain_user["userInfo"]["roles"] == ["ROLE_USER"]
+        # permissions：管理员追加 ADMIN_OPERATION_PERMISSIONS（含 system:user 等）；
+        # 普通用户为 ROLE_USER 绑定的角色权限码（非空、不含管理码）
+        assert "system:user" in admin["userInfo"]["permissions"], admin["userInfo"]
+        assert len(plain_user["userInfo"]["permissions"]) > 0
+        assert "system:user" not in plain_user["userInfo"]["permissions"]
         admin_at = admin["accessToken"]
         admin_rt = admin["refreshToken"]
 
@@ -152,6 +157,8 @@ async def main() -> None:
         assert me["username"] == "admin"
         assert me["userId"] == admin["userInfo"]["userId"]
         assert set(me["roles"]) == {"ROLE_ADMIN", "ROLE_REVIEWER"}
+        # me 的 permissions 与登录响应一致（同一 build_auth_user 组装）
+        assert set(me["permissions"]) == set(admin["userInfo"]["permissions"])
 
         # 8) 角色守卫：ADMIN / REVIEWER 放行，USER 拒绝
         resp = await client.get(

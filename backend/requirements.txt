@@ -26,3 +26,5 @@ neo4j>=6.3.0
 bcrypt>=5.0.0
 pyjwt>=2.13.0
 email-validator>=2.3.0
+redis>=8.1.0
+aiosmtplib>=5.1.2

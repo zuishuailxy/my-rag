@@ -74,6 +74,32 @@ class Settings(BaseSettings):
             f"?authSource={self.MONGO_AUTH_SOURCE}"
         )
 
+    # ---- Redis（密码重置验证码等；对应 TS RedisModule 全局单例）----
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    # 空串视为未设密码（compose 里 redis:7-alpine 无密码；TS `password || undefined` 同义）
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+
+    # ---- 邮箱验证（注册激活 / 密码重置；对应 TS REQUIRE_EMAIL_VERIFICATION）----
+    # 默认 false：注册后立即可登录；true 时需邮件激活
+    REQUIRE_EMAIL_VERIFICATION: bool = False
+    # 激活链接拼接用的基址（TS `config.get('APP_PUBLIC_URL', 'http://localhost:3000')`）。
+    # TS 原设计指向前端（链接 /auth/verify-email 是前端页面路由）；无前端阶段
+    # 直接指向后端 API 时必须含全局前缀 /api/v1（如 http://localhost:8000/api/v1），
+    # 否则邮件里的激活链接会 404
+    APP_PUBLIC_URL: str = "http://localhost:3000"
+
+    # ---- SMTP 邮件（aiosmtplib；对应 TS @nestjs-modules/mailer + nodemailer）----
+    MAIL_HOST: str = "smtp.qq.com"
+    MAIL_PORT: int = 587
+    # true=隐式 TLS（通常 465）；false=STARTTLS（通常 587）——与 nodemailer 的 secure 语义一致
+    MAIL_SECURE: bool = False
+    MAIL_USER: str = ""
+    MAIL_PASS: str = ""
+    # 发件人（支持 "显示名 <addr@domain>" 格式，与 TS mail.from 一致）
+    MAIL_FROM: str = "Knowledge Hub <no-reply@example.com>"
+
     # ---- RustFS（S3 兼容对象存储，替代 MinIO）----
     RUSTFS_ENABLED: bool = True
     # 本地开发走宿主机映射端口 9000；容器内由 compose 覆盖为 http://rustfs:9000

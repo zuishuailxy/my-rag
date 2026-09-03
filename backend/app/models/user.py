@@ -3,13 +3,15 @@
 
 已对照 TS src/user/entities/user.entity.ts 逐字段核验一致（2026-09-01）：
 id / username(50) / password(255) / email?(100) / realName?(50) / avatar?(500) /
-status(smallint, default 1) / lastLoginAt? / createdAt / updatedAt / deleted(default false)。
+email_verified(smallint, default 1) / status(smallint, default 1) / lastLoginAt? /
+createdAt / updatedAt / deleted(default false)。
 TS 实体的 id 经 bigintTransformer 在应用层是 string；Python ORM 层用 int，
 转 string 的职责在 DTO / 响应层（与 document 模型同款约定）。
 TS 实体未声明 username 唯一约束——它在 DDL 里是 partial unique index（见下方 __table_args__），
 TypeORM 同步自数据库，Python 侧在 ORM 层显式声明以保证 create_all 语义完整。
 
-第一期：简化注册，注册后立即可登录（无邮箱验证、无审批流）。
+REQUIRE_EMAIL_VERIFICATION=false（默认）时注册立即可登录；true 且带邮箱注册时
+email_verified 与 status 一起置 0，邮件激活（activateEmail）后恢复 1（services/user.py）。
 
 ⚠️ schema 真相源是 init-scripts/postgresql/init.sql：改字段请先改那里的 DDL 再同步本模型，
 应用启动的 create_all 只建不 ALTER（见 main.py lifespan 注释）。
@@ -67,6 +69,16 @@ class User(Base):
 
     # 头像 URL
     avatar: Mapped[str | None] = mapped_column(String(500))
+
+    # 邮箱验证状态：0 未验证 1 已验证（默认已验证）。
+    # REQUIRE_EMAIL_VERIFICATION=true 的注册分叉会写 0（status 同步置 0），
+    # activateEmail 激活时双双恢复 1；存量数据回填为 1（见 init.sql 同步记录）
+    email_verified: Mapped[int] = mapped_column(
+        SmallInteger,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
 
     # 状态：0 禁用 1 启用
     status: Mapped[int] = mapped_column(

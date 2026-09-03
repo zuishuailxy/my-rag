@@ -14,7 +14,11 @@ services:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/postgres:/var/lib/postgresql/data
       - ./init-scripts/postgresql:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-user} -d $${POSTGRES_DB:-knowledge_hub}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER:-user} -d $${POSTGRES_DB:-knowledge_hub}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -166,6 +170,36 @@ services:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/data:/data
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/logs:/logs
     restart: unless-stopped
+
+  # Redis — 密码重置验证码等
+  redis:
+    image: redis:7-alpine
+    container_name: knowledge_hub_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Web GUI: RedisInsight
+  redisinsight:
+    image: redis/redisinsight:2.50
+    container_name: knowledge_hub_redisinsight
+    restart: always
+    ports:
+      - "5540:5540"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/redisinsight:/data
+    environment:
+      - RI_HOST=0.0.0.0
+    depends_on:
+      redis:
+        condition: service_healthy
 
 networks:
   default:

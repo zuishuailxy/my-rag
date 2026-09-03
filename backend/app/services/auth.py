@@ -5,16 +5,24 @@
   TokenPayload 完全一致：{ sub, username, type: 'access' | 'refresh' }。
 - 过期时长沿用 NestJS 的 <数字><s|m|h|d> 格式（JWT_ACCESS_EXPIRES / JWT_REFRESH_EXPIRES），
   非法格式 accessExpiresSeconds 回退 7200 秒（TS 同款）。
+- 注册邮箱验证分叉：REQUIRE_EMAIL_VERIFICATION=true 且带邮箱注册 →
+  建未激活用户 + 发激活邮件（发送失败补偿回滚删 token）；verifyEmail 消费令牌激活。
+- 密码重置：验证码存 Redis（PasswordResetService，10 分钟有效 / 60 秒发送冷却），
+  邮件发送失败补偿回滚删码；verify 只比对，重置成功后由本服务显式删码。
 - 服务层无状态、不持会话，session 由路由层传入（同 UserService 惯例）。
 
 与 TS 的对应关系（构造器注入 → 模块导入 / settings）：
-  userService  → app.services.user.user_service
-  jwtService   → PyJWT（app.core.config.settings.JWT_SECRET）
-  config       → pydantic-settings 单例 settings
+  userService       → app.services.user.user_service
+  jwtService        → PyJWT（app.core.config.settings.JWT_SECRET）
+  config            → pydantic-settings 单例 settings
+  emailService      → app.services.email.email_service
+  emailActivation   → app.services.email_activation.email_activation_service
+  passwordReset     → app.services.password_reset.password_reset_service
 """
 
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -27,8 +35,16 @@ from app.schemas.auth import (
     AuthUser,
     LoginRequest,
     LoginResult,
+    MessageResult,
     RegisterRequest,
     RegisterResult,
+)
+from app.services.email import email_service
+from app.services.email_activation import email_activation_service
+from app.services.password_reset import (
+    RESET_CODE_COOLDOWN_SECONDS,
+    RESET_CODE_TTL_SECONDS,
+    password_reset_service,
 )
 from app.services.user import user_service
 
@@ -68,6 +84,14 @@ class AuthService:
         """accessToken 有效秒数；配置格式非法时回退 7200（TS 同款兜底）"""
         seconds = _parse_duration_seconds(self._access_expires())
         return seconds if seconds is not None else 7200
+
+    def _require_email_verification(self) -> bool:
+        """是否要求注册邮箱激活（对应 TS requireEmailVerification）
+
+        TS 比较字符串 'true'；Python 侧 settings 字段本身是 bool（pydantic 解析
+        "true"/"1" 等），语义等价。
+        """
+        return settings.REQUIRE_EMAIL_VERIFICATION
 
     # ---------------------------------------------------------------- 签发
 
@@ -115,11 +139,91 @@ class AuthService:
     async def register(
         self, session: AsyncSession, dto: RegisterRequest
     ) -> RegisterResult:
-        """注册（对应 TS register）：建用户 + 授 USER 角色，返回提示语"""
-        result = await user_service.register(session, dto)
-        return RegisterResult(
-            user_id=result["userId"], message="注册成功，请登录"
+        """注册（对应 TS register）：建用户 + 授 USER 角色
+
+        邮箱验证分叉：需要验证且传了 email → 发激活邮件（失败补偿回滚删 token，
+        抛 400「激活邮件发送失败，请稍后再试」），返回体带
+        emailVerificationRequired=true；否则返回「注册成功，请登录」（无该键，
+        路由层 exclude_none 对齐 TS 的按需返回）。
+        """
+        result = await user_service.register(
+            session, dto, require_email_verification=self._require_email_verification()
         )
+        user_id = str(result["userId"])
+        need_verify = bool(result["emailVerificationRequired"])
+
+        if need_verify and dto.email:
+            token = await email_activation_service.create_token(user_id)
+            try:
+                await email_service.send_activation_email(
+                    str(dto.email), dto.username, token
+                )
+            except Exception:
+                # 邮件发送失败 → 作废刚发的激活令牌（TS catch 同款补偿回滚）
+                await email_activation_service.delete_by_token(token)
+                raise HTTPException(
+                    status_code=400, detail="激活邮件发送失败，请稍后再试"
+                )
+            return RegisterResult(
+                user_id=user_id,
+                message="注册成功，请查收邮件激活账户",
+                email_verification_required=True,
+            )
+
+        return RegisterResult(user_id=user_id, message="注册成功，请登录")
+
+    async def verify_email(self, session: AsyncSession, token: str) -> MessageResult:
+        """邮箱激活（对应 TS verifyEmail）：消费一次性令牌 → 恢复账户状态
+
+        令牌无效 / 已过期 → 400「激活链接无效或已过期」；用户不存在（激活前被删）
+        由 activateEmail 内部 findByIdOrThrow 抛 404「用户不存在」。
+        """
+        user_id = await email_activation_service.consume_token(token)
+        if not user_id:
+            raise HTTPException(status_code=400, detail="激活链接无效或已过期")
+        message = await user_service.activate_email(session, user_id)
+        return MessageResult(message=message)
+
+    async def send_reset_code(self, session: AsyncSession, email: str) -> MessageResult:
+        """发送密码重置验证码（对应 TS sendResetCode）
+
+        - 邮箱未注册 → 404「该邮箱未注册」（防枚举与 TS 一致：明确提示邮箱不存在）
+        - 冷却：Redis 剩余 TTL > TTL - COOLDOWN（即距上次发送不足 60s）→ 400
+        - 验证码：6 位数字，范围与 TS Math.floor(100000 + Math.random()*900000)
+          一致（100000~999999）；用 secrets.randbelow 取同等随机性更强的实现
+        - 发送失败 → 补偿回滚删码，抛 400「邮件发送失败，请稍后再试」
+        """
+        user = await user_service.find_by_email(session, email)
+        if not user:
+            raise HTTPException(status_code=404, detail="该邮箱未注册")
+
+        # Redis 剩余 TTL：刚发出去时约 600s。剩余 > 540s 说明距上次发送不足 60s
+        ttl = await password_reset_service.get_ttl(email)
+        if ttl > RESET_CODE_TTL_SECONDS - RESET_CODE_COOLDOWN_SECONDS:
+            raise HTTPException(status_code=400, detail="验证码已发送，请稍后再试")
+
+        code = str(100000 + secrets.randbelow(900000))
+        await password_reset_service.set(email, code)
+        try:
+            await email_service.send_reset_code_email(email, user.username, code)
+        except Exception:
+            await password_reset_service.delete(email)
+            raise HTTPException(status_code=400, detail="邮件发送失败，请稍后再试")
+        return MessageResult(message="验证码已发送")
+
+    async def reset_password_by_email(
+        self, session: AsyncSession, email: str, code: str, new_password: str
+    ) -> MessageResult:
+        """按邮箱重置密码（对应 TS resetPasswordByEmail）
+
+        验证码错误 / 过期 → 400「验证码错误或已过期」；重置成功后删码
+        （verify 只比对不删，删除由本方法显式做，TS 同款时序）。
+        """
+        if not await password_reset_service.verify(email, code):
+            raise HTTPException(status_code=400, detail="验证码错误或已过期")
+        await user_service.reset_password_by_email(session, email, new_password)
+        await password_reset_service.delete(email)
+        return MessageResult(message="密码重置成功，请登录")
 
     async def refresh(self, session: AsyncSession, refresh_token: str) -> LoginResult:
         """刷新令牌（对应 TS refresh）：验签 → 校验 type → 重新签发双令牌

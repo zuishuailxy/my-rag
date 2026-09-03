@@ -15,6 +15,7 @@ from app.api.v1 import api_router
 from app.core.config import settings
 from app.db.es import es_service
 from app.db.mongo import close_mongo_client
+from app.db.redis import redis_service
 from app.db.session import close_db_engine, engine
 from app.models.base import Base
 from app.services.graph_build import graph_build_service
@@ -35,6 +36,8 @@ async def lifespan(app: FastAPI):
     await es_service.start()
     # Neo4j：连通性验证，不可用只降级不阻断启动（KG 写入时跳过）
     await graph_build_service.start()
+    # Redis：验证码等短时存储；连接失败只告警不阻断启动（后续命令自动重连）
+    await redis_service.start()
     # MQ：先注册消费者再连接；连接失败抛错 → 应用启动失败（与 TS onModuleInit 一致）
     register_consumers()
     await rabbitmq_service.start()
@@ -44,6 +47,7 @@ async def lifespan(app: FastAPI):
     await close_db_engine()
     await close_mongo_client()
     await es_service.close()
+    await redis_service.close()
     await graph_build_service.close()
     await rabbitmq_service.close()
 

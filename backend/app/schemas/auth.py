@@ -32,9 +32,12 @@ __all__ = [
     "BCRYPT_MAX_PASSWORD_BYTES",
     "LoginRequest",
     "LoginResult",
+    "MessageResult",
     "RefreshTokenRequest",
     "RegisterRequest",
     "RegisterResult",
+    "ResetPasswordByEmailRequest",
+    "SendResetCodeRequest",
 ]
 
 # bcrypt 的硬上限（字节）。超过 72 字节 bcrypt 5.0 抛 ValueError，不再静默截断
@@ -67,7 +70,8 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     """注册请求体（对应 TS RegisterDto）
 
-    简化注册：注册后 status=1，立即可登录（无邮箱验证、无审批流）。
+    REQUIRE_EMAIL_VERIFICATION=false（默认）注册后立即可登录；
+    true 且传了 email 时需邮件激活（status/email_verified 置 0，激活后恢复）。
     """
 
     model_config = ConfigDict(
@@ -135,6 +139,10 @@ class AuthUser(BaseModel):
     avatar: str | None = None
     # 角色编码列表（如 ["ROLE_USER"]；TS 为必填，此处默认空列表，鉴权判断交给依赖层）
     roles: list[str] = Field(default_factory=list)
+    # 合并权限码列表（直接授权 + 角色授权，管理员追加 ADMIN_OPERATION_PERMISSIONS；
+    # TS AuthUser 必填 permissions，此处默认空列表——守卫层 require_permission
+    # 每次实时查库判定，不依赖本快照，字段主要用于登录/me 响应透出）
+    permissions: list[str] = Field(default_factory=list)
 
 
 class LoginResult(BaseModel):
@@ -155,11 +163,70 @@ class LoginResult(BaseModel):
 
 
 class RegisterResult(BaseModel):
-    """注册成功响应（对应 TS register 返回的内联类型 { userId, message }）"""
+    """注册成功响应（对应 TS register 返回的内联类型）
+
+    emailVerificationRequired 仅在需要邮件激活时出现（TS 按需返回键）；
+    Python 侧用 None 表达「不出现」，路由层配 response_model_exclude_none
+    使响应里彻底省略该键（而非序列化成 null）。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
     # 新用户 ID
     user_id: str
-    # 提示语（固定「注册成功，请登录」）
+    # 提示语（「注册成功，请登录」/「注册成功，请查收邮件激活账户」）
+    message: str
+    # 需要邮件激活时为 true；免验证路径不返回该键
+    email_verification_required: bool | None = Field(
+        default=None, description="是否需要邮件激活（仅需要时返回）"
+    )
+
+
+class SendResetCodeRequest(BaseModel):
+    """发送密码重置验证码请求体（对应 TS user/dto/extra.dto.ts 的 SendResetCodeDto）"""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+        json_schema_extra={"example": {"email": "alice@example.com"}},
+    )
+
+    # TS @IsEmail()；未注册邮箱由服务层 404（与 TS 一致，明确提示防枚举）
+    email: EmailStr = Field(..., description="注册时填写的邮箱")
+
+
+class ResetPasswordByEmailRequest(BaseModel):
+    """按邮箱重置密码请求体（对应 TS ResetPasswordByEmailDto）"""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+        json_schema_extra={
+            "example": {
+                "email": "alice@example.com",
+                "code": "123456",
+                "newPassword": "newpass123",
+            }
+        },
+    )
+
+    # TS @IsEmail()
+    email: EmailStr = Field(..., description="注册时填写的邮箱")
+    # TS 只有 @IsString()（无 MinLength）：空串也放行，交由验证码比对统一 400
+    code: str = Field(..., description="邮箱收到的 6 位验证码")
+    # TS @MinLength(6)；上限见模块文档（防 bcrypt 72 字节 ValueError，服务层再按字节兜一次）
+    new_password: str = Field(
+        ...,
+        min_length=6,
+        max_length=BCRYPT_MAX_PASSWORD_BYTES,
+        description="新密码（至少 6 位，最长 72 字符）",
+    )
+
+
+class MessageResult(BaseModel):
+    """通用消息响应（对应 TS verifyEmail / sendResetCode / resetPasswordByEmail
+    返回的 { message: string }）"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
     message: str
