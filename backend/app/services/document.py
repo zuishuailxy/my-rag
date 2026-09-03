@@ -163,9 +163,9 @@ class DocumentService:
         update_by = require_bigint(actor_id, "updateBy")
         category_id = require_bigint(dto.category_id, "categoryId")
         team_id = require_bigint(dto.team_id, "teamId")
-        author_id = require_bigint(
-            dto.author_id if dto.author_id is not None else actor_id, "authorId"
-        )
+        # TS 严格以当前登录用户为作者：`authorId: actor.userId`，不读 dto.authorId
+        # （避免客户端伪造作者）。actor 必传，故 actor_id 恒非空。
+        author_id = require_bigint(actor_id, "authorId")
         now = _utcnow()
 
         # 先写 Mongo，_id 由驱动自动生成 ObjectId
@@ -427,7 +427,9 @@ class DocumentService:
 
     # ----------------------------------------------------------------- remove
 
-    async def remove(self, session: AsyncSession, doc_id: str) -> dict:
+    async def remove(
+        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+    ) -> dict:
         """软删除文档：Postgres、Mongo 两侧都将 deleted 置为 true（不物理删正文），
         并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）"""
         entity = await self._get_active(session, doc_id)
@@ -437,6 +439,9 @@ class DocumentService:
             await self._safe_unpublish(doc_id)
 
         entity.deleted = True
+        if actor is not None and actor.user_id:
+            # TS remove：`doc.updateBy = actor.userId;`
+            entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await get_document_content_collection().update_one(
             {"_id": ObjectId(entity.content_id)},
@@ -582,7 +587,9 @@ class DocumentService:
 
     # --------------------------------------------------------------- publish
 
-    async def publish(self, session: AsyncSession, doc_id: str) -> dict:
+    async def publish(
+        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+    ) -> dict:
         """发布文档
 
         - 需审核：Draft / Published → PendingReview（不建索引）
@@ -609,9 +616,11 @@ class DocumentService:
             content = await self._get_content(saved.content_id)
             return {**document_to_dict(saved), "content": content}
 
-        return await self.direct_publish(session, doc_id)
+        return await self.direct_publish(session, doc_id, actor)
 
-    async def direct_publish(self, session: AsyncSession, doc_id: str) -> dict:
+    async def direct_publish(
+        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+    ) -> dict:
         """免审直接发布（Draft / Published / Archived / PendingReview → Published）
 
         也供 DocumentReviewService.approve_review 间接使用
@@ -624,6 +633,9 @@ class DocumentService:
 
         entity.status = DocumentStatus.PUBLISHED
         entity.publish_time = _utcnow()
+        if actor is not None and actor.user_id:
+            # TS directPublish：`if (actor?.userId) doc.updateBy = actor.userId;`
+            entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
 
@@ -635,7 +647,9 @@ class DocumentService:
 
     # ---------------------------------------------------------------- archive
 
-    async def archive(self, session: AsyncSession, doc_id: str) -> dict:
+    async def archive(
+        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+    ) -> dict:
         """归档：Published → Archived，清索引"""
         entity = await self._get_active(session, doc_id)
 
@@ -643,6 +657,9 @@ class DocumentService:
             raise HTTPException(status_code=400, detail="只有已发布文档可以归档")
 
         entity.status = DocumentStatus.ARCHIVED
+        if actor is not None and actor.user_id:
+            # TS archive：`doc.updateBy = actor.userId;`
+            entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
         await self._safe_unpublish(doc_id)
@@ -652,7 +669,9 @@ class DocumentService:
 
     # ------------------------------------------------------------ save as draft
 
-    async def save_as_draft(self, session: AsyncSession, doc_id: str) -> dict:
+    async def save_as_draft(
+        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+    ) -> dict:
         """已发布 → 草稿（保存草稿），清索引"""
         entity = await self._get_active(session, doc_id)
 
@@ -660,6 +679,9 @@ class DocumentService:
             raise HTTPException(status_code=400, detail="只有已发布文档可以保存为草稿")
 
         entity.status = DocumentStatus.DRAFT
+        if actor is not None and actor.user_id:
+            # TS saveAsDraft：`doc.updateBy = actor.userId;`
+            entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
         await self._safe_unpublish(doc_id)

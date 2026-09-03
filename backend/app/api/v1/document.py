@@ -25,9 +25,21 @@
 
 鉴权（对应 document.controller.ts）：
 - 本 router 用 auth_router() → **全部接口都需要 Bearer token**（TS 的全局 JwtAuthGuard）
-- 4 个审核接口额外 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)（TS 的 @Roles）：
+- 逐接口权限码（对应 TS @RequirePermission，与 NestJS 同款 OR 语义：拥有 codes 中任一即通过）：
+  POST /upload/parse、POST /            → document:create
+  GET /                                  → document:list
+  GET /{id}                             → document:list
+  PUT /{id}/publish、archive、save-draft→ document:edit
+  PATCH /{id}                           → document:edit
+  DELETE /{id}                          → document:delete
+  POST /{id}/reviews/submit             → document:edit
+  GET /{id}/reviews/current、history    → document:list + document:review
+  审核 4 接口（见下）额外 document:review
+  ADMIN 经 ADMIN_OPERATION_PERMISSIONS 自动拥有上述全部权限码。
+- 4 个审核接口额外 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)（TS 的 @Roles，先于权限码拦截）：
   GET /reviews/tasks、GET /reviews/tasks/pending-count、
   POST /reviews/tasks/{taskId}/approve、POST /reviews/tasks/{taskId}/reject
+  这 4 个接口同时挂 @roles 与 require_permission(document:review)。
 - 需要用户身份的接口用 Depends(get_current_user)（等价 @CurrentUser()）：
   create / upload-parse 回填 authorId、createBy；update 回填 updateBy；
   approve / reject 取审核人 userId 与 `realName ?? username`。
@@ -39,6 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_route import auth_router, roles
 from app.api.deps import get_current_user
+from app.api.permission_guard import require_permission
 from app.common.roles import RoleCode
 from app.db.session import get_db_session
 from app.schemas.auth import AuthUser
@@ -103,6 +116,7 @@ def _reviewer_name(user: AuthUser) -> str:
     summary="上传并解析文件",
     status_code=201,
     response_model=UploadParseResult,
+    dependencies=[Depends(require_permission("document:create"))],
 )
 async def upload_and_parse(
     file: UploadFile = File(..., description="文件（form-data 字段名: file）"),
@@ -143,7 +157,13 @@ async def upload_and_parse(
     )
 
 
-@router.post("", summary="创建文档", status_code=201, response_model=DocumentResponse)
+@router.post(
+    "",
+    summary="创建文档",
+    status_code=201,
+    response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:create"))],
+)
 async def create_document(
     dto: DocumentCreate,
     current_user: AuthUser = Depends(get_current_user),
@@ -163,6 +183,7 @@ async def create_document(
     "/reviews/tasks",
     summary="审核任务列表",
     response_model=ReviewTaskListResponse,
+    dependencies=[Depends(require_permission("document:review"))],
 )
 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)
 async def list_review_tasks(
@@ -186,6 +207,7 @@ async def list_review_tasks(
 @router.get(
     "/reviews/tasks/pending-count",
     summary="待审核数量",
+    dependencies=[Depends(require_permission("document:review"))],
 )
 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)
 async def pending_review_count(
@@ -196,7 +218,12 @@ async def pending_review_count(
     return await service.get_pending_count(session)
 
 
-@router.get("", summary="分页查询文档列表", response_model=DocumentListResponse)
+@router.get(
+    "",
+    summary="分页查询文档列表",
+    response_model=DocumentListResponse,
+    dependencies=[Depends(require_permission("document:list"))],
+)
 async def find_all_documents(
     title: str | None = Query(default=None, description="标题（模糊）"),
     category_id: str | None = Query(
@@ -250,9 +277,11 @@ async def index_document(
     "/{doc_id}/publish",
     summary="发布文档",
     response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:edit"))],
 )
 async def publish_document(
     doc_id: str,
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
@@ -261,35 +290,45 @@ async def publish_document(
     - 审核开启（DOCUMENT_REQUIRE_APPROVAL≠false）：草稿 / 已发布 → 待审核，不建索引
     - 免审：草稿 / 已发布 / 已归档 → 已发布，MQ 异步触发 RAG / Search / KG 索引
     """
-    return DocumentResponse.model_validate(await service.publish(session, doc_id))
+    return DocumentResponse.model_validate(
+        await service.publish(session, doc_id, current_user)
+    )
 
 
 @router.put(
     "/{doc_id}/archive",
     summary="归档文档",
     response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:edit"))],
 )
 async def archive_document(
     doc_id: str,
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
     """归档：仅已发布可归档，状态置 Archived 并清理 RAG / Search / KG 索引"""
-    return DocumentResponse.model_validate(await service.archive(session, doc_id))
+    return DocumentResponse.model_validate(
+        await service.archive(session, doc_id, current_user)
+    )
 
 
 @router.put(
     "/{doc_id}/save-draft",
     summary="保存为草稿",
     response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:edit"))],
 )
 async def save_document_as_draft(
     doc_id: str,
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
     """保存草稿：仅已发布可下架，状态置 Draft 并清理 RAG / Search / KG 索引"""
-    return DocumentResponse.model_validate(await service.save_as_draft(session, doc_id))
+    return DocumentResponse.model_validate(
+        await service.save_as_draft(session, doc_id, current_user)
+    )
 
 
 @router.post(
@@ -297,6 +336,7 @@ async def save_document_as_draft(
     summary="提交审核",
     status_code=201,
     response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:edit"))],
 )
 async def submit_review(
     doc_id: str,
@@ -314,6 +354,9 @@ async def submit_review(
     "/{doc_id}/reviews/current",
     summary="当前待审记录",
     response_model=ReviewTaskItem | None,
+    dependencies=[
+        Depends(require_permission("document:list", "document:review"))
+    ],
 )
 async def get_current_review(
     doc_id: str,
@@ -328,6 +371,9 @@ async def get_current_review(
     "/{doc_id}/reviews/history",
     summary="审核历史",
     response_model=list[ReviewTaskItem],
+    dependencies=[
+        Depends(require_permission("document:list", "document:review"))
+    ],
 )
 async def get_review_history(
     doc_id: str,
@@ -343,6 +389,7 @@ async def get_review_history(
     summary="审核通过",
     status_code=201,
     response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:review"))],
 )
 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)
 async def approve_review(
@@ -373,6 +420,7 @@ async def approve_review(
     summary="审核驳回",
     status_code=201,
     response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:review"))],
 )
 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)
 async def reject_review(
@@ -399,7 +447,12 @@ async def reject_review(
     )
 
 
-@router.get("/{doc_id}", summary="查询文档详情", response_model=DocumentResponse)
+@router.get(
+    "/{doc_id}",
+    summary="查询文档详情",
+    response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:list"))],
+)
 async def find_one_document(
     doc_id: str,
     session: AsyncSession = Depends(get_db_session),
@@ -409,7 +462,12 @@ async def find_one_document(
     return DocumentResponse.model_validate(await service.find_one(session, doc_id))
 
 
-@router.patch("/{doc_id}", summary="更新文档", response_model=DocumentResponse)
+@router.patch(
+    "/{doc_id}",
+    summary="更新文档",
+    response_model=DocumentResponse,
+    dependencies=[Depends(require_permission("document:edit"))],
+)
 async def update_document(
     doc_id: str,
     dto: DocumentUpdate,
@@ -426,11 +484,19 @@ async def update_document(
     )
 
 
-@router.delete("/{doc_id}", summary="软删除文档", response_model=DocumentRemoveResponse)
+@router.delete(
+    "/{doc_id}",
+    summary="软删除文档",
+    response_model=DocumentRemoveResponse,
+    dependencies=[Depends(require_permission("document:delete"))],
+)
 async def remove_document(
     doc_id: str,
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentRemoveResponse:
     """软删除：Postgres 与 Mongo 双侧 deleted=true"""
-    return DocumentRemoveResponse.model_validate(await service.remove(session, doc_id))
+    return DocumentRemoveResponse.model_validate(
+        await service.remove(session, doc_id, current_user)
+    )
