@@ -105,6 +105,104 @@ class SearchIndexService:
             return
         logger.info("搜索索引已删除：documentId=%s", doc_id)
 
+    async def search_documents(
+        self,
+        *,
+        keyword: str,
+        page: int = 1,
+        page_size: int = 10,
+        category_id: str | None = None,
+        author_id: str | None = None,
+    ) -> dict[str, Any]:
+        """关键词全文检索（对应 TS SearchIndexService.searchDocuments）
+
+        命中 kh_document 的 title / summary / content（IK 分词）；支持按分类 / 作者过滤，
+        返回关键词高亮片段（ES 默认 <em> 包裹）。ES 不可用时返回空分页（不抛错）。
+        """
+        # TS: Math.min(params.pageSize ?? 10, 50) —— schema 已限 50，这里双保险
+        page_size = min(page_size, 50)
+        from_ = (page - 1) * page_size
+
+        c = es_service.client
+        if c is None:
+            logger.warning("跳过搜索查询（ES 不可用）")
+            return {"items": [], "total": 0, "page": page, "pageSize": page_size}
+
+        await self.ensure_es_index()
+
+        filters: list[dict[str, Any]] = []
+        if category_id:
+            filters.append({"term": {"categoryId": category_id}})
+        if author_id:
+            filters.append({"term": {"authorId": author_id}})
+
+        keyword = keyword.strip()
+        # title^3 / summary^2：标题、摘要命中比正文权重大；analyzer 与 mapping 的 search_analyzer 一致
+        multi_match: dict[str, Any] = {
+            "multi_match": {
+                "query": keyword,
+                "fields": ["title^3", "summary^2", "content"],
+                "analyzer": "ik_smart",
+            }
+        }
+        # 有过滤条件才包 bool（filter 只筛不参与打分）；否则直接用 multi_match
+        query = (
+            {"bool": {"must": [multi_match], "filter": filters}}
+            if filters
+            else multi_match
+        )
+
+        try:
+            response = await c.search(
+                index=DOCUMENT_INDEX,
+                from_=from_,
+                size=page_size,
+                query=query,
+                # 列表不回传全文，仍用 content 做匹配与高亮
+                source={"excludes": ["content"]},
+                # 命中片段打 <em>，给前端做摘要；正文最多 3 段、标题整段不高亮切片
+                highlight={
+                    "fields": {
+                        "title": {"number_of_fragments": 0},
+                        "content": {"fragment_size": 160, "number_of_fragments": 3},
+                        "summary": {"fragment_size": 120, "number_of_fragments": 1},
+                    }
+                },
+            )
+        except Exception as err:
+            logger.warning("搜索查询失败：%s", err)
+            return {"items": [], "total": 0, "page": page, "pageSize": page_size}
+
+        # total 可能是 number（旧版）或 {value, relation}（ES8 默认）
+        total_raw = response.get("hits", {}).get("total", 0)
+        total = total_raw if isinstance(total_raw, int) else (total_raw or {}).get("value", 0)
+
+        items: list[dict[str, Any]] = []
+        for hit in response.get("hits", {}).get("hits", []):
+            src = hit.get("_source", {}) or {}
+            highlight = hit.get("highlight", {}) or {}
+            _score = hit.get("_score")
+            items.append(
+                {
+                    "id": str(src.get("id") or hit.get("_id")),
+                    "title": src.get("title") or "",
+                    "summary": src.get("summary"),
+                    "categoryId": src.get("categoryId"),
+                    "tags": src.get("tags"),
+                    "authorId": src.get("authorId"),
+                    "status": src.get("status"),
+                    "publishTime": src.get("publishTime"),
+                    "score": 0 if _score is None else _score,
+                    "highlight": {
+                        "title": highlight.get("title", []),
+                        "summary": highlight.get("summary", []),
+                        "content": highlight.get("content", []),
+                    },
+                }
+            )
+
+        return {"items": items, "total": total, "page": page, "pageSize": page_size}
+
 
 def _utc_iso() -> str:
     """ES date 字段用的 UTC ISO-8601（对应 TS new Date().toISOString()）"""

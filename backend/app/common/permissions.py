@@ -33,6 +33,7 @@ ADMIN_OPERATION_PERMISSIONS: tuple[str, ...] = (
     "system:team",
     "system:statistics",
     "system:settings",
+    "search",
 )
 
 # 视为管理员的角色编码（getUserPermissionCodes 据此追加 ADMIN_OPERATION_PERMISSIONS）
