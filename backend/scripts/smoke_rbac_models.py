@@ -33,6 +33,7 @@ logger = logging.getLogger("SmokeRbac")
 # 种子数据（init.sql 固定雪花 ID，本脚本依赖其存在）
 SEED_ADMIN_ID = 1000000000000000001
 SEED_REVIEWER_ID = 1000000000000000002
+SEED_USER_ID = 1000000000000000003
 SEED_ROLE_ADMIN_ID = 2000000000000000001
 SEED_ROLE_REVIEWER_ID = 2000000000000000002
 
@@ -84,7 +85,12 @@ async def main() -> None:
         links = (
             await session.execute(select(UserRole).order_by(UserRole.id))
         ).scalars().all()
-        assert len(links) == 4, f"预置关联应为 4 条，实际 {len(links)}"
+        # 只断言 4 条种子关联存在（按固定 ID 逐条找），不断言总数 ——
+        # 库里可能有手工注册的真实账号（如 alice），总计数是脆弱前提
+        seed_link_ids = {3000000000000000001, 3000000000000000002, 3000000000000000003, 3000000000000000004}
+        link_ids = {link.id for link in links}
+        missing = seed_link_ids - link_ids
+        assert not missing, f"种子关联缺失：{missing}，实际关联 {len(links)} 条"
         admin_roles = sorted(link.role_id for link in links if link.user_id == SEED_ADMIN_ID)
         assert admin_roles == [SEED_ROLE_ADMIN_ID, SEED_ROLE_REVIEWER_ID], admin_roles
         ok(f"admin 持角色 {admin_roles}（管理员+审核员）")
@@ -197,13 +203,28 @@ async def main() -> None:
     step += 1
     print(f"{step}) 冒烟结束后数据未被污染")
     async with async_session_factory() as session:
-        users = (await session.execute(select(User))).scalars().all()
+        # 只断言种子数据原样存在（按固定 ID 逐条找），不断言总行数 ——
+        # 库里可能有手工注册的真实账号（如 alice），总计数是脆弱前提
+        for uid, uname in (
+            (SEED_ADMIN_ID, "admin"),
+            (SEED_REVIEWER_ID, "reviewer"),
+            (SEED_USER_ID, "user"),
+        ):
+            u = (
+                await session.execute(
+                    select(User).where(
+                        User.id == uid, User.status == 1, User.deleted == False
+                    )
+                )
+            ).scalar_one()
+            assert u.username == uname, f"种子账号 {uid} 异常：{u.username!r}"
         roles = (await session.execute(select(Role))).scalars().all()
-        links = (await session.execute(select(UserRole))).scalars().all()
-        assert len(users) == 3, f"kh_user 应仍为 3 行，实际 {len(users)}"
         assert len(roles) == 3, f"kh_role 应仍为 3 行，实际 {len(roles)}"
-        assert len(links) == 4, f"kh_user_role 应仍为 4 行，实际 {len(links)}"
-        ok(f"kh_user={len(users)} kh_role={len(roles)} kh_user_role={len(links)}")
+        seed_link_ids = {3000000000000000001, 3000000000000000002, 3000000000000000003, 3000000000000000004}
+        links = (await session.execute(select(UserRole))).scalars().all()
+        missing = seed_link_ids - {link.id for link in links}
+        assert not missing, f"种子关联缺失：{missing}"
+        ok(f"种子数据原样（kh_user_role 共 {len(links)} 行，含非种子账号关联属正常）")
 
     print(f"\n全部通过（{step} 步）")
 
