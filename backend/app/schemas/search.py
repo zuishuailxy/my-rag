@@ -49,3 +49,34 @@ class SearchResponse(BaseModel):
     total: int = 0
     page: int = 1
     pageSize: int = 10
+
+
+class HybridSearchRequest(BaseModel):
+    """chunk 级混合检索请求（方案 B：ES 关键词 + PG 向量，RRF 融合）"""
+
+    query: str = Field(..., description="检索关键词（语义 + 关键词双通道）")
+    topK: int = Field(default=10, ge=1, le=50, description="返回条数，1~50")
+
+
+class HybridChunkItem(BaseModel):
+    """混合检索单条命中（doc_chunk 全量行 + RRF 融合分）"""
+
+    chunkId: str | None = None
+    documentId: str | None = None
+    documentTitle: str | None = None
+    heading: str | None = None
+    content: str | None = None
+    chunkIndex: int | None = None
+    totalChunks: int | None = None
+    categoryId: str | None = None
+    authorId: str | None = None
+    teamId: str | None = None
+    docStatus: int | None = None
+    publishTime: str | None = None
+    score: float | None = None
+
+
+class HybridSearchResponse(BaseModel):
+    """chunk 级混合检索响应（仅 doc_chunk 行内字段，无 ES _source 附加字段）"""
+
+    items: List[HybridChunkItem] = Field(default_factory=list)

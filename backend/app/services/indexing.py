@@ -25,19 +25,22 @@ from app.models.doc_chunk import DocChunk
 from app.pipeline.types import PipelineDocument, to_iso_date
 from app.services.chunker import DocumentChunk, chunking_service
 from app.services.embedding import embedding_provider
+from app.services.es_index import es_chunk_index_service
 
 logger = logging.getLogger("VectorIndexService")
 
 
 class VectorIndexService:
-    """向量索引存储（写入 PostgreSQL doc_chunk）"""
+    """向量索引存储（PG doc_chunk 写入；删除时同步清 ES kh_chunk 关键词侧）"""
 
     async def delete_by_doc_id(self, session: AsyncSession, document_id: int) -> None:
-        """删除某文档全部向量块（发布重建 / 下架时调用）"""
+        """删除某文档全部向量块 + ES 关键词 chunk（发布重建 / 下架时调用）"""
         await session.execute(
             delete(DocChunk).where(DocChunk.document_id == document_id)
         )
         await session.commit()
+        # 方案 B：ES kh_chunk 关键词侧同步清理（不可用/失败降级，不抛错）
+        await es_chunk_index_service.delete_by_doc_id(document_id)
         logger.info("已删除文档向量块：documentId=%s", document_id)
 
     async def index_chunks(
@@ -150,8 +153,10 @@ async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:
         chunk.embedding = vec
 
     svc = VectorIndexService()
-    await svc.delete_by_doc_id(session, int(doc.id))
-    await svc.index_chunks(session, chunks)
+    await svc.delete_by_doc_id(session, int(doc.id))   # PG + ES kh_chunk 旧块
+    await svc.index_chunks(session, chunks)            # PG 向量（语义）
+    await es_chunk_index_service.index_chunks(chunks)  # ES 关键词（IK，方案 B；失败降级）
+
     logger.info("RAG 索引完成：documentId=%s, chunks=%d", doc.id, len(chunks))
     return len(chunks)
 
