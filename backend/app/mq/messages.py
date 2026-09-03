@@ -3,8 +3,6 @@
 """
 from typing import Literal, TypedDict
 
-from app.pipeline.types import SearchDocumentData
-
 
 class ReindexMessage(TypedDict):
     """RAG 重建 / 删除消息（rag.reindex.exchange）
@@ -22,29 +20,19 @@ class ReindexMessage(TypedDict):
 
 
 class SearchIndexMessage(TypedDict):
-    """Search 全文索引消息（search.index.exchange / search.index.document）
+    """Search 全文索引消息（search.index.exchange）
 
-    消息内直接带文档快照（document），消费者无需再查库即可写索引；
-    type 区分写入（INDEX）与删除（DELETE），与 TS 一致。
+    只传 documentId：消费者按 ID 从 Postgres + Mongo 拉取文档全文后再写
+    ES kh_document。早期版本曾在消息内携带 1000 字正文快照，因队列字符
+    限制改为按 ID 拉库（对齐 TS 新版 SearchIndexMessage）。
+    type 区分写入（INDEX）与删除（DELETE）。
     """
 
     # 任务 ID（uuid4）
     taskId: str
-    # 动作：整篇快照 upsert 到 kh_document
-    type: Literal["INDEX"]
-    # 文档 ID（顶层冗余，便于路由 / 日志）
-    documentId: str
-    # 文档快照（字段约定见 DocumentPipelinePublisher.build_search_index_data）
-    document: SearchDocumentData
-
-
-class SearchDeleteMessage(TypedDict):
-    """Search 索引清理消息（search.index.exchange / search.index.delete）"""
-
-    # 任务 ID（uuid4）
-    taskId: str
-    # 动作：从 kh_document 删除
-    type: Literal["DELETE"]
+    # 动作：按 documentId 拉库写索引（INDEX）/ 从 kh_document 删除（DELETE）
+    type: Literal["INDEX", "DELETE"]
+    # 文档 ID
     documentId: str
 
 

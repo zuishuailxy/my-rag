@@ -11,6 +11,7 @@
 客户端复用 app.db.es 单例（对应 TS 各 service 各自 new Client）。
 """
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -65,7 +66,7 @@ class SearchIndexService:
             mappings=DOCUMENT_MAPPINGS,
         )
 
-    async def index_document(self, doc: dict[str, Any]) -> None:
+    async def index_document(self, doc: Mapping[str, Any]) -> None:
         """Upsert 一篇文档的搜索记录（id 相同则整条覆盖）
 
         ES 不可用时只记日志跳过；写入异常向上抛，由调用方（编排器 / 消费者）决定重试。

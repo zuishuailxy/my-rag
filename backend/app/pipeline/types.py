@@ -56,16 +56,17 @@ class PipelineDocument:
 
 
 class SearchDocumentData(TypedDict, total=False):
-    """ES kh_document 一条记录（对应 TS DocumentPipelinePublisher.buildSearchIndexData）
+    """ES kh_document 一条记录（对应 TS PipelineOrchestrator.toSearchIndexDoc）
 
     字段名保持 camelCase，与 TS 侧写入的数据同构（已有索引可平滑复用）。
-    写入时由 SearchIndexService 补 indexedAt。
+    由编排器在消费侧按 documentId 拉库构建（content 取全文），写入时由
+    SearchIndexService 补 indexedAt。
     """
 
     id: str
     title: str
     summary: str | None
-    # 正文（截断到前 1000 字，作为预览；与 TS 行为一致，可为空）
+    # 正文全文（消费侧拉库获得；不再截断 1000 字）
     content: str | None
     tags: str | None
     status: int

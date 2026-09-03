@@ -5,13 +5,13 @@
 「加载文档快照 → 调具体服务」，不直接碰 RabbitMQ。</p>
 
 - RAG：分块 → 嵌入 → 写入 PostgreSQL doc_chunk（见 services/indexing.py）
-- Search：整篇快照 → ES kh_document（见 services/search_index.py）
+- Search：按 documentId 拉库取全文 → ES kh_document（见 services/search_index.py）
 - KG：分块 → 抽实体关系 → 写 Neo4j（见 services/graph_build.py）
 """
 import logging
 
 from app.db.session import async_session_factory
-from app.pipeline.types import PipelineDocument
+from app.pipeline.types import PipelineDocument, SearchDocumentData, to_iso_date
 from app.services.graph_build import graph_build_service
 from app.services.indexing import (
     VectorIndexService,
@@ -70,12 +70,13 @@ class PipelineOrchestrator:
     # ----------------------------------------------------------------- Search
 
     async def handle_search_index(
-        self, message_type: str, document_id: str, doc: dict
+        self, message_type: str, document_id: str
     ) -> None:
         """处理 Search 消息（对应 TS handleSearchIndex）：按 type 分发
 
         - DELETE → 从 kh_document 移除（向量块由 RAG delete 腿清理）
-        - INDEX → 整篇快照 upsert 到 kh_document
+        - INDEX → 按文档 ID 从 Postgres + Mongo 拉全文，写入 ES kh_document
+          （消息只带 ID，不再携带正文快照）
         """
         if message_type == "DELETE":
             try:
@@ -90,14 +91,16 @@ class PipelineOrchestrator:
             logger.warning("忽略未支持的搜索消息：type=%s", message_type)
             return
 
-        if not doc:
-            logger.warning(
-                "Search INDEX 消息缺少 document 快照：documentId=%s", document_id
-            )
+        docs = await self._load_documents_by_ids([document_id])
+        doc = docs[0] if docs else None
+        if doc is None:
+            logger.warning("Search INDEX 文档不存在：documentId=%s", document_id)
             return
 
         try:
-            await search_index_service.index_document(doc)
+            await search_index_service.index_document(
+                self._to_search_index_doc(doc)
+            )
         except Exception as err:
             logger.error("搜索索引失败：documentId=%s, %s", document_id, err)
 
@@ -134,6 +137,30 @@ class PipelineOrchestrator:
         """加载全部已发布文档快照（对应 TS loadAllPublishedDocuments）"""
         async with async_session_factory() as session:
             return await load_all_published_documents(session)
+
+    def _to_search_index_doc(self, doc: PipelineDocument) -> SearchDocumentData:
+        """Postgres 元数据 + Mongo 全文 → ES kh_document 文档
+
+        对应 TS toSearchIndexDoc；content 取全文（不再截断 1000 字），
+        字段名保持 camelCase 与 TS 侧写入的数据同构（已有索引可平滑复用）。
+        """
+        return SearchDocumentData(
+            id=doc.id,
+            title=doc.title,
+            summary=doc.summary,
+            content=doc.content or "",
+            categoryId=doc.category_id,
+            tags=doc.tags,
+            status=doc.status,
+            isPublic=doc.is_public,
+            viewCount=doc.view_count,
+            likeCount=doc.like_count,
+            commentCount=doc.comment_count,
+            authorId=doc.author_id,
+            publishTime=to_iso_date(doc.publish_time),
+            createdAt=to_iso_date(doc.created_at),
+            updatedAt=to_iso_date(doc.updated_at),
+        )
 
     async def _load_documents_by_ids(self, ids: list[str]) -> list[PipelineDocument]:
         """按 ID 列表加载 Postgres 元数据 + Mongo 正文 → 管线统一快照"""

@@ -142,8 +142,8 @@ class DocumentReviewService:
         await session.commit()
         await session.refresh(doc)
 
-        content = await self._load_content(doc.content_id)
-        await self._safe_publish(doc, content)
+        # 消息只带 documentId，正文由消费者按 ID 拉库，此处不再加载 content
+        await self._safe_publish(doc)
 
         logger.info("审核通过：reviewId=%s, documentId=%s", review_id, doc.id)
         return doc
@@ -356,10 +356,10 @@ class DocumentReviewService:
         )
         return doc.get("content", "") if doc else ""
 
-    async def _safe_publish(self, doc: DocumentEntity, content: str) -> None:
+    async def _safe_publish(self, doc: DocumentEntity) -> None:
         """审核通过后投递索引（失败只告警，不回滚审核结论）"""
         try:
-            await pipeline_publisher.after_publish(doc, content)
+            await pipeline_publisher.after_publish(doc.id)
         except Exception as err:
             logger.warning(
                 "审核通过后索引投递失败：documentId=%s, error=%s", doc.id, err

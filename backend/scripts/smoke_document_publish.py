@@ -39,9 +39,9 @@ def _install_spy() -> None:
     orig_publish = pipeline_publisher.after_publish
     orig_unpublish = pipeline_publisher.after_unpublish
 
-    async def spy_publish(document, content=None):  # type: ignore[no-untyped-def]
-        PUBLISHED.append(str(document.id))
-        return await orig_publish(document, content)
+    async def spy_publish(document_id):  # type: ignore[no-untyped-def]
+        PUBLISHED.append(str(document_id))
+        return await orig_publish(document_id)
 
     async def spy_unpublish(document_id):  # type: ignore[no-untyped-def]
         UNPUBLISHED.append(str(document_id))

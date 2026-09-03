@@ -212,7 +212,7 @@ class DocumentService:
             # 仅 Published 才建索引。需审时创建即 Published 已在上方拒绝，
             # 能走到这里的 Published 一定是免审；草稿不投 MQ。
             if status == DocumentStatus.PUBLISHED:
-                await self._safe_publish(entity, dto.content)
+                await self._safe_publish(entity)
 
             return {**document_to_dict(entity), "content": dto.content}
         except Exception:
@@ -628,7 +628,7 @@ class DocumentService:
         await session.refresh(entity)
 
         content = await self._get_content(entity.content_id)
-        await self._safe_publish(entity, content)
+        await self._safe_publish(entity)
 
         logger.info("文档发布成功：documentId=%s", doc_id)
         return {**document_to_dict(entity), "content": content}
@@ -691,12 +691,15 @@ class DocumentService:
 
         if is_published and content_changed:
             if not document_review_service.is_require_approval():
-                await self._safe_publish(doc, content)
+                await self._safe_publish(doc)
 
-    async def _safe_publish(self, doc: DocumentEntity, content: str) -> None:
-        """投递 MQ：RAG 分块向量 + 全文搜索 + KG 建图（失败不回滚文档状态）"""
+    async def _safe_publish(self, doc: DocumentEntity) -> None:
+        """投递 MQ：RAG 分块向量 + 全文搜索 + KG 建图（失败不回滚文档状态）
+
+        消息只带 documentId，正文由消费者按 ID 拉库，此处不再传 content。
+        """
         try:
-            await pipeline_publisher.after_publish(doc, content)
+            await pipeline_publisher.after_publish(doc.id)
         except Exception as err:
             logger.warning(
                 "索引投递失败（不影响文档状态）：documentId=%s, error=%s",

@@ -59,7 +59,6 @@ class DocumentPipelineConsumer:
         await self._orchestrator.handle_search_index(
             body.get("type", ""),
             str(body.get("documentId", "")),
-            body.get("document") or {},
         )
 
     async def handle_kg(self, msg: AbstractIncomingMessage) -> None:
