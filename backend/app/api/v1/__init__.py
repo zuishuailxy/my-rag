@@ -10,6 +10,7 @@ from app.api.auth_route import auth_router
 from app.api.v1 import (
     auth,
     document,
+    graph,
     health,
     permissions,
     role,
@@ -28,3 +29,4 @@ api_router.include_router(users.router, prefix="/users", tags=["用户管理"])
 api_router.include_router(permissions.router, prefix="/permissions", tags=["权限管理"])
 api_router.include_router(teams.router, prefix="/teams", tags=["团队管理"])
 api_router.include_router(search.router, prefix="/search", tags=["全文搜索"])
+api_router.include_router(graph.router, prefix="/graph", tags=["知识图谱"])

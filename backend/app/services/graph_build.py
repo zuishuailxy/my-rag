@@ -339,6 +339,149 @@ class GraphBuildService:
 
         return count
 
+    async def list_nodes(
+        self, type: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """查询知识实体节点（对应 TS listNodes）。Neo4j 不可用时返回 []。"""
+        if self._driver is None:
+            logger.warning("跳过图谱节点查询（Neo4j 不可用）")
+            return []
+        cap = min(max(limit, 1), 500)
+        async with self._driver.session() as session:
+            try:
+                result = await session.run(
+                    """
+                    MATCH (e:KnowledgeEntity)
+                    WHERE $type IS NULL OR $type = '' OR e.type = $type
+                    RETURN e.name AS id, e.name AS name, e.type AS type,
+                           e.description AS description
+                    LIMIT $limit
+                    """,
+                    type=type,
+                    limit=cap,
+                )
+                records = await result.data()
+            except Exception as err:
+                logger.warning("图谱节点查询失败：%s", err)
+                return []
+        return [
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "type": row.get("type"),
+                "description": row.get("description"),
+            }
+            for row in records
+        ]
+
+    async def list_edges(self, limit: int = 500) -> list[dict[str, Any]]:
+        """查询实体间 RELATED_TO 边（对应 TS listEdges）。Neo4j 不可用时返回 []。"""
+        if self._driver is None:
+            logger.warning("跳过图谱边查询（Neo4j 不可用）")
+            return []
+        cap = min(max(limit, 1), 1000)
+        async with self._driver.session() as session:
+            try:
+                result = await session.run(
+                    """
+                    MATCH (a:KnowledgeEntity)-[r:RELATED_TO]->(b:KnowledgeEntity)
+                    RETURN a.name AS source, b.name AS target,
+                           r.relation AS relation, r.weight AS weight
+                    LIMIT $limit
+                    """,
+                    limit=cap,
+                )
+                records = await result.data()
+            except Exception as err:
+                logger.warning("图谱边查询失败：%s", err)
+                return []
+        return [
+            {
+                "source": row.get("source"),
+                "target": row.get("target"),
+                "relation": row.get("relation") or "RELATED_TO",
+                "weight": _to_number(row.get("weight"), 0.5),
+            }
+            for row in records
+        ]
+
+    async def search_graph(self, keyword: str, limit: int = 50) -> list[dict[str, Any]]:
+        """图谱关键词检索：匹配实体名/描述、文档标题/摘要、块标题/正文。
+
+        对应 TS searchGraph。Neo4j 不可用或关键词为空时返回 []。
+        """
+        if self._driver is None:
+            logger.warning("跳过图谱检索（Neo4j 不可用）")
+            return []
+        kw = keyword.strip()
+        if not kw:
+            return []
+        cap = min(max(limit, 1), 200)
+        async with self._driver.session() as session:
+            try:
+                result = await session.run(
+                    """
+                    MATCH (n)
+                    WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($kw)
+                       OR toLower(coalesce(n.title, '')) CONTAINS toLower($kw)
+                       OR toLower(coalesce(n.heading, '')) CONTAINS toLower($kw)
+                       OR toLower(coalesce(n.description, '')) CONTAINS toLower($kw)
+                       OR toLower(coalesce(n.summary, '')) CONTAINS toLower($kw)
+                       OR toLower(coalesce(n.content, '')) CONTAINS toLower($kw)
+                    RETURN labels(n)[0] AS label,
+                           coalesce(n.name, n.title, n.heading, n.id, n.chunkId) AS name,
+                           coalesce(n.id, n.chunkId, n.name) AS id,
+                           n.type AS type,
+                           n.title AS title,
+                           n.description AS description,
+                           n.heading AS heading,
+                           n.documentId AS documentId,
+                           n.summary AS summary,
+                           CASE
+                             WHEN n.content IS NULL THEN null
+                             ELSE substring(n.content, 0, 160)
+                           END AS snippet
+                    ORDER BY label, name
+                    LIMIT $limit
+                    """,
+                    kw=kw,
+                    limit=cap,
+                )
+                records = await result.data()
+            except Exception as err:
+                logger.warning("图谱检索失败：%s", err)
+                return []
+        return [
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "label": row.get("label"),
+                "type": row.get("type"),
+                "title": row.get("title"),
+                "description": row.get("description"),
+                "heading": row.get("heading"),
+                "documentId": row.get("documentId"),
+                "summary": row.get("summary"),
+                "snippet": row.get("snippet"),
+            }
+            for row in records
+        ]
+
+
+def _to_number(value: Any, default: float) -> float:
+    """Neo4j 数值字段统一转 float（对齐 TS toNumber）。
+
+    None/非数字回退 default；int/float 直接转 float。
+    """
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 
 # 全局单例
 graph_build_service = GraphBuildService()
