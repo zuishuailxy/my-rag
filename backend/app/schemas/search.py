@@ -59,7 +59,11 @@ class HybridSearchRequest(BaseModel):
 
 
 class HybridChunkItem(BaseModel):
-    """混合检索单条命中（doc_chunk 全量行 + RRF 融合分）"""
+    """混合检索单条命中（doc_chunk 全量行 + RRF 融合分 + 各通道原始分）
+
+    bm25Score / vectorScore 对齐 ES 侧 ChunkHit：两路各自命中时带各自原始分，
+    未命中的通道为 0。
+    """
 
     chunkId: str | None = None
     documentId: str | None = None
@@ -74,6 +78,8 @@ class HybridChunkItem(BaseModel):
     docStatus: int | None = None
     publishTime: str | None = None
     score: float | None = None
+    bm25Score: float | None = None
+    vectorScore: float | None = None
 
 
 class HybridSearchResponse(BaseModel):

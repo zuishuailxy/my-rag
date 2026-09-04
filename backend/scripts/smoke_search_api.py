@@ -2,10 +2,14 @@
 
 覆盖 SearchController 全部路径：
   1. 未登录 → 401
-  2. 无 search 权限的普通用户 → 403
+  2. 无 search 权限的用户（临时用户清空角色关联 → 零权限码）→ 403
   3. 管理员关键词搜索 → 200，命中 ≥ 1，且返回命中词高亮（<em> 标签包裹关键词）
   4. 分类过滤：categoryId 生效（只命中指定分类的文档）
   5. 分页：pageSize 生效（返回条数 = pageSize，total 不裁剪）
+
+注：403 用例不用种子 REVIEWER 测——9-3 补齐 11 行权限矩阵时 REVIEWER 也绑了 search 码
+（init.sql 4100000000000000011 行），种子角色已无「无 search」者；改为临时用户清空角色。
+smoke_search_hybrid.py 同款方案。
 
 运行：
     cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/smoke_search_api.py
@@ -15,18 +19,16 @@
 import asyncio
 import re
 import sys
+import time
 
 import httpx
+from sqlalchemy import text
 
 from app.db.es import es_service
 from app.db.session import engine
 from app.main import app
 from app.services.search_index import DOCUMENT_INDEX, search_index_service
-from scripts.smoke_auth import (
-    SEED_REVIEWER_ID,
-    SEED_REVIEWER_USERNAME,
-    bearer_headers,
-)
+from scripts.smoke_auth import bearer_headers
 
 BASE = "http://testserver/api/v1"
 
@@ -76,6 +78,36 @@ def check(step: str, ok: bool, detail: str) -> None:
         raise AssertionError(f"{step} 失败：{detail}")
 
 
+async def _create_roleless_user(client: httpx.AsyncClient) -> tuple[str, str]:
+    """创建临时用户并清空其角色关联 → 零权限码（403 用例用，用完即物理删）"""
+    username = f"smokesearch0{int(time.time() * 1000)}"
+    r = await client.post(
+        f"{BASE}/users",
+        json={"username": username, "password": "123456", "roleCodes": ["ROLE_USER"]},
+        headers=bearer_headers(),
+    )
+    assert r.status_code == 201, f"创建临时用户失败：{r.status_code} {r.text[:200]}"
+    user_id = r.json()["id"]
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM kh_user_role WHERE user_id = :uid"), {"uid": int(user_id)}
+        )
+    return user_id, username
+
+
+async def _cleanup_user(username: str) -> None:
+    """物理删除临时用户（先子表后主表）"""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "DELETE FROM kh_user_role WHERE user_id IN "
+                "(SELECT id FROM kh_user WHERE username = :u)"
+            ),
+            {"u": username},
+        )
+        await conn.execute(text("DELETE FROM kh_user WHERE username = :u"), {"u": username})
+
+
 async def cleanup() -> None:
     """物理清理 ES 测试文档（幂等）"""
     c = es_service.client
@@ -108,12 +140,16 @@ async def main() -> None:
         r = await client.post(f"{BASE}/search", json={"keyword": KEYWORD})
         check("未登录", r.status_code == 401, f"期望 401，实际 {r.status_code}")
 
-        # 3) 无 search 权限的用户（REVIEWER 角色只绑 document:list/review）→ 403
-        r = await client.post(
-            f"{BASE}/search",
-            json={"keyword": KEYWORD},
-            headers=bearer_headers(SEED_REVIEWER_ID, SEED_REVIEWER_USERNAME),
-        )
+        # 3) 无 search 权限的用户（角色清空 → 零权限码）→ 403
+        nobody_id, nobody_name = await _create_roleless_user(client)
+        try:
+            r = await client.post(
+                f"{BASE}/search",
+                json={"keyword": KEYWORD},
+                headers=bearer_headers(nobody_id, nobody_name),
+            )
+        finally:
+            await _cleanup_user(nobody_name)
         check("无权限用户", r.status_code == 403, f"期望 403，实际 {r.status_code}")
 
         # 4) 管理员关键词搜索 → 200 + 高亮
