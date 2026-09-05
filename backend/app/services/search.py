@@ -1,23 +1,28 @@
 """
-chunk 级混合检索（方案 B：关键词 ES kh_chunk + 语义 PG doc_chunk，RRF 融合）
+chunk 级混合检索召回（方案 B：关键词 ES kh_chunk + 语义 PG doc_chunk，RRF 融合）
 
-对齐 ES 侧 vector-index.service 的混合检索语义：
+对应 TS VectorIndexService.searchHybrid（向量 + 关键词 → RRF 粗融合）：
 - 关键词通道：ES kh_chunk multi_match（document_title^2 + content，IK ik_smart）top-N
 - 语义通道：doc_chunk.embedding（PG，HNSW 余弦）top-N
 - 两路并行发起（asyncio.gather，对齐 Promise.all）
-- RRF：score = Σ 1/(k + rank)，k=60，按 chunk_id 跨两路去重合并；
+- RRF：score = Σ 1/(C + rank)，C 默认 60，按 chunk_id 跨两路去重合并；
   每条附各通道原始分（bm25Score / vectorScore，对齐 ChunkHit）
 
 返回每条带 PG 全量行（content / heading / document_title 等）。
-ES 不可用只走向量、向量为空只走关键词，任一路故障降级不抛错。
-文档级全文检索（ES kh_document）见 services/search_index.py；Reranker / 权限过滤待后续。
+任一路不可用 / 为空时单路降级不抛错；query 向量化失败只走关键词（对齐 TS embedQuery 容错，
+真正的 embed 调用通常在编排层 HybridRetrievalService 完成并注入 query_vector）。
+
+文档级全文检索（ES kh_document）见 services/search_index.py；
+rerank 精排在上层 services/retrieval.py（HybridRetrievalService），权限过滤待后续。
 """
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.db.es import es_service
 from app.db.session import async_session_factory
 from app.services.embedding import embedding_provider
@@ -25,14 +30,14 @@ from app.services.es_index import CHUNK_INDEX
 
 logger = logging.getLogger("HybridSearchService")
 
-# RRF 常数（与 ES RRF 默认一致）
-RRF_K = 60
-
 # 结果字段（对齐 doc_chunk 列，camelCase 输出在 schema 层转换）
 _FIELDS = (
     "chunk_id, document_id, chunk_index, content, heading, document_title, "
     "total_chunks, category_id, author_id, team_id, doc_status, publish_time"
 )
+
+# 哨兵：区分「调用方未传 query_vector（需内部 embed）」与「显式传 None（跳过向量，仅关键词）」
+_UNSET: Any = object()
 
 
 async def _vector_recall(query_vec: list[float], limit: int) -> list[tuple[str, float]]:
@@ -83,24 +88,41 @@ async def _keyword_recall(query: str, limit: int) -> list[tuple[str, float]]:
 
 async def hybrid_search(
     query: str,
-    top_k: int = 10,
-    vector_candidates: int = 20,
-    keyword_candidates: int = 20,
+    top_k: int | None = None,
+    vector_candidates: int | None = None,
+    keyword_candidates: int | None = None,
+    query_vector: list[float] | None = _UNSET,
+    rrf_c: int | None = None,
 ) -> list[dict]:
-    """关键词（ES）+ 语义（PG）并行混合检索，RRF 融合后返回 chunk 详情列表
+    """关键词（ES）+ 语义（PG）并行召回，RRF 融合后返回 chunk 详情列表（对齐 searchHybrid）
 
-    每条结果附加 bm25Score / vectorScore（各通道原始分），对齐 ES 的 ChunkHit。
+    - top_k / vector_candidates / keyword_candidates / rrf_c 缺省取自配置
+      RAG_HYBRID_TOP_K / RAG_RRF_C；
+    - query_vector 不传（哨兵）时内部尝试 embed，失败仅走关键词；显式传 None 直接跳过
+      向量通道（如编排层已 embed 失败降级）。
+    每条结果附 bm25Score / vectorScore（各通道原始分），对齐 ChunkHit。
     """
     query = query.strip()
     if not query:
         return []
-    top_k = max(1, min(top_k, 50))
 
-    query_vec = (await embedding_provider.embed_texts([query]))[0]
-    vector_results, keyword_results = await asyncio.gather(
-        _vector_recall(query_vec, vector_candidates),
-        _keyword_recall(query, keyword_candidates),
-    )
+    hybrid_top_k = _clamp(top_k)
+    vector_candidates = _clamp(vector_candidates)
+    keyword_candidates = _clamp(keyword_candidates)
+    rrf_k = rrf_c if rrf_c and rrf_c > 0 else settings.RAG_RRF_C
+
+    if query_vector is _UNSET:
+        query_vec = await _embed_query(query)
+    else:
+        query_vec = query_vector
+
+    vector_tasks: list[Any] = []
+    if query_vec:
+        vector_tasks.append(_vector_recall(query_vec, vector_candidates))
+    vector_tasks.append(_keyword_recall(query, keyword_candidates))
+    results_per_channel = await asyncio.gather(*vector_tasks)
+    vector_results = results_per_channel[0] if query_vec else []
+    keyword_results = results_per_channel[-1]
 
     # RRF 融合（按 chunk_id 跨两路叠加；附各通道原始分）
     fused: dict[str, dict[str, float]] = {}
@@ -110,7 +132,7 @@ async def hybrid_search(
             sorted(results, key=lambda x: x[1], reverse=True), start=1
         ):
             entry = fused.setdefault(cid, {"rrf": 0.0, "bm25": 0.0, "vector": 0.0})
-            entry["rrf"] += 1.0 / (RRF_K + rank)
+            entry["rrf"] += 1.0 / (rrf_k + rank)
             if keyword:
                 entry["bm25"] = score
             else:
@@ -119,7 +141,7 @@ async def hybrid_search(
     _add(vector_results, keyword=False)
     _add(keyword_results, keyword=True)
 
-    merged = sorted(fused.items(), key=lambda kv: -kv[1]["rrf"])[:top_k]
+    merged = sorted(fused.items(), key=lambda kv: -kv[1]["rrf"])[:hybrid_top_k]
     if not merged:
         return []
 
@@ -141,6 +163,22 @@ async def hybrid_search(
             continue
         results.append(_to_camel_row(row, channels))
     return results
+
+
+async def _embed_query(query: str) -> list[float] | None:
+    """query 向量化；失败仅走关键词（对齐 TS HybridRetrievalService.embedQuery 容错）"""
+    try:
+        return (await embedding_provider.embed_texts([query]))[0]
+    except Exception as err:  # noqa: BLE001
+        message = str(err)
+        logger.warning("查询向量化失败，仅走关键词：%s", message)
+        return None
+
+
+def _clamp(top_k: int | None) -> int:
+    """缺省取配置 RAG_HYBRID_TOP_K；不在 [1, 50] 则钳制"""
+    value = top_k if top_k is not None else settings.RAG_HYBRID_TOP_K
+    return max(1, min(value, 50))
 
 
 def _to_camel_row(row: dict, channels: dict[str, float]) -> dict:

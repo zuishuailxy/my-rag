@@ -8,6 +8,7 @@ API v1 路由（对应 NestJS 各业务 Module 的路由装配）
 
 from app.api.auth_route import auth_router
 from app.api.v1 import (
+    ai,
     auth,
     document,
     graph,
@@ -29,4 +30,6 @@ api_router.include_router(users.router, prefix="/users", tags=["用户管理"])
 api_router.include_router(permissions.router, prefix="/permissions", tags=["权限管理"])
 api_router.include_router(teams.router, prefix="/teams", tags=["团队管理"])
 api_router.include_router(search.router, prefix="/search", tags=["全文搜索"])
+api_router.include_router(ai.rag_router, prefix="/rag", tags=["AI 问答"])
+api_router.include_router(ai.router, prefix="/ai", tags=["AI 问答"])
 api_router.include_router(graph.router, prefix="/graph", tags=["知识图谱"])

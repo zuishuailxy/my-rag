@@ -15,7 +15,7 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
-from app.services.search import hybrid_search
+from app.services.retrieval import hybrid_retrieval_service
 from app.services.search_index import search_index_service
 
 router = auth_router()
@@ -39,6 +39,6 @@ async def search_documents(dto: SearchRequest) -> SearchResponse:
     dependencies=[Depends(require_permission("search"))],
 )
 async def hybrid_search_documents(dto: HybridSearchRequest) -> HybridSearchResponse:
-    """chunk 级混合检索：ES 关键词（IK）+ PG 向量（语义），RRF 融合"""
-    items = await hybrid_search(query=dto.query, top_k=dto.topK)
+    """chunk 级混合检索：ES 关键词 + PG 向量 → RRF 融合 → Reranker 精排"""
+    items = await hybrid_retrieval_service.retrieve(query=dto.query, top_k=dto.topK)
     return HybridSearchResponse(items=[HybridChunkItem(**item) for item in items])

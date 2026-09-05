@@ -34,6 +34,43 @@ class DocumentChunk:
 
 
 @dataclass
+class ChunkHit:
+    """kh_chunk 检索命中（关键词 / 向量 / RRF 融合后共用；对齐 TS pipeline.types ChunkHit）
+
+    字段名保持 camelCase，与 search 输出的 chunk 详情 dict 同键，贯穿
+    混合检索（keyword/vector）→ RRF 融合 → Reranker 重排全阶段复用。
+    """
+
+    chunkId: str
+    documentId: str
+    documentTitle: str
+    content: str
+    heading: str | None
+    # 当前阶段得分：原始检索分、RRF 分或 rerank 分
+    score: float = 0.0
+    bm25Score: float | None = None
+    vectorScore: float | None = None
+
+    @classmethod
+    def from_row(cls, row: dict) -> "ChunkHit":
+        """从 search 输出的 chunk 详情 dict（camelCase 键）构造"""
+        return cls(
+            chunkId=str(row.get("chunkId") or ""),
+            documentId=str(row.get("documentId") or ""),
+            documentTitle=str(row.get("documentTitle") or ""),
+            content=str(row.get("content") or ""),
+            heading=row.get("heading"),
+            score=float(row.get("score") or 0),
+            bm25Score=(
+                float(row["bm25Score"]) if row.get("bm25Score") is not None else None
+            ),
+            vectorScore=(
+                float(row["vectorScore"]) if row.get("vectorScore") is not None else None
+            ),
+        )
+
+
+@dataclass
 class PipelineDocument:
     """管线内部使用的「文档快照」（Postgres 元数据 + Mongo 正文）"""
 

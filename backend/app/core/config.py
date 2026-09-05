@@ -130,6 +130,31 @@ class Settings(BaseSettings):
     # DashScope text-embedding-v3 单次最多 10 条；超出会 400 InvalidParameter（代码内钳制）
     EMBEDDING_BATCH_SIZE: int = 10
 
+    # ---- Reranker（重排：DashScope text-rerank；对应 TS RerankerService）----
+    # 字符串而非 bool，与 TS `config.get(..., 'true') !== 'false'` 判定一致：
+    # 仅严格等于 "false" 才关闭重排。
+    RAG_RERANK_ENABLED: str = "true"
+    # API Key fallback 链与 TS 一致：RERANK_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
+    RERANK_API_KEY: str | None = None
+    # 模型 ID 以百炼控制台为准（qwen3-rerank 等；写错会 400）
+    RAG_RERANK_MODEL: str = "qwen3-rerank"
+    # DashScope 原生（非 OpenAI 兼容）端点前缀，重排走专用 /api/v1/services/rerank/...
+    RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com"
+
+    @property
+    def RERANK_ENDPOINT(self) -> str:
+        """text-rerank 专用端点（去掉尾部斜杠再拼路径）"""
+        return (
+            f"{self.RERANK_BASE_URL.rstrip('/')}"
+            f"/api/v1/services/rerank/text-rerank/text-rerank"
+        )
+
+    # ---- 混合检索（对应 TS HybridRetrievalService：RAG_HYBRID_TOP_K / RAG_RRF_C）----
+    # 多路召回每路的候选数 / 默认返回条数（RRF 前召回规模）
+    RAG_HYBRID_TOP_K: int = 20
+    # RRF 常数（与 ES RRF 默认一致）：score = Σ 1/(C + rank)
+    RAG_RRF_C: int = 60
+
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
     RABBITMQ_ENABLED: bool = True
     # 本地开发走宿主机映射端口 5672；容器内由 compose 覆盖为 amqp://rabbitmq:5672
@@ -150,13 +175,22 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     # DeepSeek OpenAI 兼容端点
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
-    # 模型：deepseek-v4-flash
+    # 模型：deepseek-v4-flash（DeepSeek-V4-Flash）
     LLM_MODEL: str = "deepseek-v4-flash"
     # 单 chunk 最多实体 / 关系数，防止图爆炸
     KG_MAX_ENTITIES: int = 12
     KG_MAX_RELATIONS: int = 15
     # 单次抽取 LLM 超时（毫秒）
     KG_LLM_TIMEOUT_MS: int = 60000
+
+    # ---- AI 对话（RAG 问答：混合检索 → LLM 作答；对应 TS AiChatService）----
+    # 大模型 DeepSeek，复用上面的 LLM_BASE_URL / LLM_MODEL；逐个可独立覆盖。
+    OPENAI_API_KEY: str | None = None
+    OPENAI_BASE_URL: str | None = None
+    # 模型覆盖：MODEL_NAME → LLM_MODEL（默认 deepseek-v4-flash）
+    MODEL_NAME: str | None = None
+    # LLM 单次作答超时（毫秒，对应 TS AI_CHAT_TIMEOUT_MS）
+    AI_CHAT_TIMEOUT_MS: int = 60000
 
     # ---- Neo4j（KG 知识图谱存储；与 docker-compose 中 neo4j 服务一致）----
     NEO4J_ENABLED: bool = True
