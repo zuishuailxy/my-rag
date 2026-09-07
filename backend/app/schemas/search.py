@@ -32,7 +32,8 @@ class SearchHitItem(BaseModel):
     title: str | None = None
     summary: str | None = None
     categoryId: str | None = None
-    tags: list[str] | None = None
+    # 与 PostgreSQL / Elasticsearch 中的逗号分隔字符串保持一致
+    tags: str | None = None
     authorId: str | None = None
     status: int | None = None
     publishTime: str | None = None
