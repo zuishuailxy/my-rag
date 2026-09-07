@@ -467,6 +467,313 @@ class GraphBuildService:
             for row in records
         ]
 
+    async def get_overview(
+        self,
+        keyword: str | None = None,
+        entity_type: str | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        doc_limit: int | None = None,
+    ) -> dict[str, Any]:
+        """全景图：文档 + 被提及实体 + 标签 + 统计（对应 TS getOverview）。
+
+        不含 chunk（块太碎，不适合画布）。文档→实体为「提及」，
+        实体→实体为 RELATED_TO 上的 relation，文档→标签为「标注」。
+        Neo4j 不可用或查询失败时返回空结构（不抛错）。
+
+        刻意差异：参数名 from_time/to_time —— from 是 Python 保留字；
+        HTTP 查询参数仍叫 from/to（API 层用 alias 对齐 TS）。
+        """
+        empty: dict[str, Any] = {
+            "nodes": [],
+            "edges": [],
+            "stats": {
+                "nodeCount": 0,
+                "edgeCount": 0,
+                "documentCount": 0,
+                "entityCount": 0,
+                "tagCount": 0,
+                "mentionCount": 0,
+                "relatedCount": 0,
+                "entityTypes": [],
+            },
+            "topEntities": [],
+            "recentNodes": [],
+            "entityTypes": [],
+        }
+        if self._driver is None:
+            logger.warning("跳过图谱全景（Neo4j 不可用）")
+            return empty
+
+        kw = (keyword or "").strip()
+        etype = (entity_type or "").strip() or None
+        date_from = (from_time or "").strip() or None
+        date_to = (to_time or "").strip() or None
+        # 默认 24，夹取 1..80（对齐 TS Math.min(Math.max(params.docLimit ?? 24, 1), 80)）
+        limit = min(max(doc_limit if doc_limit is not None else 24, 1), 80)
+
+        try:
+            async with self._driver.session() as session:
+                # 全库统计：文档数、实体数、RELATED_TO 边数、MENTIONS 提及次数
+                # （分段 WITH 避免笛卡尔积）
+                stats_records = await (
+                    await session.run(
+                        """
+                        OPTIONAL MATCH (d:KnowledgeDocument)
+                        WITH count(d) AS documentCount
+                        OPTIONAL MATCH (e:KnowledgeEntity)
+                        WITH documentCount, count(e) AS entityCount
+                        OPTIONAL MATCH ()-[rel:RELATED_TO]->()
+                        WITH documentCount, entityCount, count(rel) AS relatedCount
+                        OPTIONAL MATCH (:KnowledgeDocument)-[:HAS_CHUNK]
+                            ->(:DocumentChunk)-[:MENTIONS]->(e0:KnowledgeEntity)
+                        RETURN documentCount, entityCount, relatedCount,
+                               count(e0) AS mentionCount
+                        """
+                    )
+                ).data()
+                stats_row = stats_records[0] if stats_records else {}
+                document_count = int(_to_number(stats_row.get("documentCount"), 0))
+                entity_count = int(_to_number(stats_row.get("entityCount"), 0))
+                related_count = int(_to_number(stats_row.get("relatedCount"), 0))
+                mention_count = int(_to_number(stats_row.get("mentionCount"), 0))
+
+                # 按实体 type 分组计数，供前端筛选
+                type_rows = await (
+                    await session.run(
+                        """
+                        MATCH (e:KnowledgeEntity)
+                        WHERE e.type IS NOT NULL AND e.type <> ''
+                        RETURN e.type AS type, count(*) AS count
+                        ORDER BY count DESC
+                        """
+                    )
+                ).data()
+                entity_types = [
+                    {
+                        "type": str(row["type"]),
+                        "count": int(_to_number(row.get("count"), 0)),
+                    }
+                    for row in type_rows
+                ]
+
+                # 被文档块 MENTIONS 最多的 5 个实体（degree = 提及次数）
+                top_rows = await (
+                    await session.run(
+                        """
+                        MATCH (e:KnowledgeEntity)<-[:MENTIONS]-(:DocumentChunk)
+                        RETURN e.name AS name, e.type AS type, count(*) AS degree
+                        ORDER BY degree DESC
+                        LIMIT 5
+                        """
+                    )
+                ).data()
+                top_entities = [
+                    {
+                        "name": str(row["name"]),
+                        "type": row.get("type"),
+                        "degree": int(_to_number(row.get("degree"), 0)),
+                    }
+                    for row in top_rows
+                ]
+
+                # 最近更新的 8 篇文档（不受 keyword / 时间 / 类型过滤）
+                recent_rows = await (
+                    await session.run(
+                        """
+                        MATCH (d:KnowledgeDocument)
+                        RETURN d.id AS id, d.title AS name, d.updatedAt AS updatedAt
+                        ORDER BY d.updatedAt DESC
+                        LIMIT 8
+                        """
+                    )
+                ).data()
+                recent_nodes = [
+                    {
+                        "id": f"doc:{row['id']}",
+                        "name": str(row.get("name") or ""),
+                        "kind": "document",
+                        "updatedAt": row.get("updatedAt"),
+                    }
+                    for row in recent_rows
+                ]
+
+                # 主查询：按标题/摘要/标签 + 时间筛文档，LIMIT 后挂上 MENTIONS 实体
+                #（可按 entityType 再筛）
+                main_params: dict[str, Any] = {
+                    "kw": kw,
+                    "entityType": etype,
+                    "from": date_from,
+                    "to": date_to,
+                    "docLimit": limit,
+                }
+                main_records = await (
+                    await session.run(
+                        """
+                        MATCH (d:KnowledgeDocument)
+                        WHERE ($kw = '' OR toLower(coalesce(d.title, '')) CONTAINS toLower($kw)
+                              OR toLower(coalesce(d.summary, '')) CONTAINS toLower($kw)
+                              OR toLower(coalesce(d.tags, '')) CONTAINS toLower($kw))
+                          AND ($from IS NULL OR d.updatedAt >= $from)
+                          AND ($to IS NULL OR d.updatedAt <= $to)
+                        WITH d ORDER BY d.updatedAt DESC LIMIT $docLimit
+                        OPTIONAL MATCH (d)-[:HAS_CHUNK]->(:DocumentChunk)
+                            -[:MENTIONS]->(e:KnowledgeEntity)
+                        WHERE $entityType IS NULL OR e.type = $entityType
+                        RETURN d.id AS docId, d.title AS docTitle, d.summary AS summary,
+                               d.tags AS tags, d.updatedAt AS updatedAt,
+                               collect(DISTINCT CASE WHEN e IS NULL THEN NULL ELSE {
+                                 name: e.name, type: e.type, description: e.description
+                               } END) AS entities
+                        """,
+                        main_params,
+                    )
+                ).data()
+                doc_records: list[dict[str, Any]] = list(main_records)
+
+                # 关键词命中实体但标题未命中时，把提及该实体的文档补进来
+                if kw:
+                    extra_params: dict[str, Any] = {
+                        "kw": kw,
+                        "entityType": etype,
+                        "from": date_from,
+                        "to": date_to,
+                        "docLimit": limit,
+                    }
+                    extra_records = await (
+                        await session.run(
+                            """
+                            MATCH (e:KnowledgeEntity)
+                              <-[:MENTIONS]-(:DocumentChunk)
+                              <-[:HAS_CHUNK]-(d:KnowledgeDocument)
+                            WHERE toLower(coalesce(e.name, '')) CONTAINS toLower($kw)
+                               OR toLower(coalesce(e.description, '')) CONTAINS toLower($kw)
+                            WITH DISTINCT d
+                            WHERE ($from IS NULL OR d.updatedAt >= $from)
+                              AND ($to IS NULL OR d.updatedAt <= $to)
+                            OPTIONAL MATCH (d)-[:HAS_CHUNK]->(:DocumentChunk)
+                                -[:MENTIONS]->(e2:KnowledgeEntity)
+                            WHERE $entityType IS NULL OR e2.type = $entityType
+                            RETURN d.id AS docId, d.title AS docTitle,
+                                   d.summary AS summary, d.tags AS tags,
+                                   d.updatedAt AS updatedAt,
+                                   collect(DISTINCT CASE WHEN e2 IS NULL THEN NULL ELSE {
+                                     name: e2.name, type: e2.type, description: e2.description
+                                   } END) AS entities
+                            LIMIT $docLimit
+                            """,
+                            extra_params,
+                        )
+                    ).data()
+                    seen = {str(r["docId"]) for r in doc_records}
+                    for record in extra_records:
+                        if str(record["docId"]) not in seen:
+                            doc_records.append(record)
+
+                node_map: dict[str, dict[str, Any]] = {}
+                edge_map: dict[str, dict[str, Any]] = {}
+                entity_names: set[str] = set()
+
+                def add_edge(
+                    source: str, target: str, relation: str, kind: str
+                ) -> None:
+                    key = f"{kind}|{source}|{target}|{relation}"
+                    if key not in edge_map:
+                        edge_map[key] = {
+                            "source": source,
+                            "target": target,
+                            "relation": relation,
+                            "kind": kind,
+                        }
+
+                def split_tags(raw: Any) -> list[str]:
+                    """逗号分隔标签串拆分（对齐 TS splitTags 的 /[,，]/）"""
+                    return [
+                        t.strip() for t in str(raw or "").replace("，", ",").split(",")
+                        if t.strip()
+                    ]
+
+                for record in doc_records:
+                    doc_id = str(record["docId"])
+                    doc_node_id = f"doc:{doc_id}"
+                    node_map[doc_node_id] = {
+                        "id": doc_node_id,
+                        "name": str(record.get("docTitle") or ""),
+                        "kind": "document",
+                        "type": "DOCUMENT",
+                        "documentId": doc_id,
+                        "updatedAt": record.get("updatedAt"),
+                        "description": record.get("summary"),
+                    }
+                    for tag in split_tags(record.get("tags")):
+                        tag_id = f"tag:{tag}"
+                        node_map[tag_id] = {
+                            "id": tag_id,
+                            "name": tag,
+                            "kind": "tag",
+                            "type": "TAG",
+                        }
+                        add_edge(doc_node_id, tag_id, "标注", "tagged")
+                    for entity in record.get("entities") or []:
+                        if not isinstance(entity, dict) or not entity.get("name"):
+                            continue
+                        name = str(entity["name"])
+                        entity_id = f"entity:{name}"
+                        entity_names.add(name)
+                        node_map[entity_id] = {
+                            "id": entity_id,
+                            "name": name,
+                            "kind": "entity",
+                            "type": entity.get("type") or "CONCEPT",
+                            "description": entity.get("description"),
+                        }
+                        add_edge(doc_node_id, entity_id, "提及", "mentions")
+
+                if entity_names:
+                    # 只取当前画布上实体之间的 RELATED_TO，避免拉全库关系
+                    related_rows = await (
+                        await session.run(
+                            """
+                            MATCH (a:KnowledgeEntity)-[r:RELATED_TO]->(b:KnowledgeEntity)
+                            WHERE a.name IN $names AND b.name IN $names
+                            RETURN a.name AS source, b.name AS target,
+                                   r.relation AS relation, r.weight AS weight
+                            LIMIT 400
+                            """,
+                            names=sorted(entity_names),
+                        )
+                    ).data()
+                    for row in related_rows:
+                        source = f"entity:{row['source']}"
+                        target = f"entity:{row['target']}"
+                        relation = row.get("relation") or "关联"
+                        add_edge(source, target, relation, "related")
+
+                nodes = list(node_map.values())
+                edges = list(edge_map.values())
+                tag_count = sum(1 for n in nodes if n["kind"] == "tag")
+
+                return {
+                    "nodes": nodes,
+                    "edges": edges,
+                    "stats": {
+                        "nodeCount": len(nodes),
+                        "edgeCount": len(edges),
+                        "documentCount": document_count,
+                        "entityCount": entity_count,
+                        "tagCount": tag_count,
+                        "mentionCount": mention_count,
+                        "relatedCount": related_count,
+                        "entityTypes": entity_types,
+                    },
+                    "topEntities": top_entities,
+                    "recentNodes": recent_nodes,
+                    "entityTypes": [t["type"] for t in entity_types],
+                }
+        except Exception as err:
+            logger.warning("图谱全景查询失败：%s", err)
+            return empty
+
 
 def _to_number(value: Any, default: float) -> float:
     """Neo4j 数值字段统一转 float（对齐 TS toNumber）。

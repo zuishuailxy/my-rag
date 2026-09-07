@@ -1,7 +1,10 @@
 """图谱检索响应 schema（对应 TS graph/graph.controller.ts 返回结构）
 
-图谱节点 / 边 / 关键词检索的命中项。字段名对齐 TS（camelCase）。
+图谱节点 / 边 / 关键词检索的命中项，以及全景图（overview）聚合结构。
+字段名对齐 TS（camelCase）。
 """
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -39,3 +42,78 @@ class GraphSearchItem(BaseModel):
     documentId: str | None = None
     summary: str | None = None
     snippet: str | None = None
+
+
+# ---- 全景图（TS getOverview 返回结构）----
+
+GraphOverviewKind = Literal["document", "entity", "tag"]
+GraphOverviewEdgeKind = Literal["mentions", "related", "tagged"]
+
+
+class GraphOverviewNode(BaseModel):
+    """全景图节点：文档 / 实体 / 标签"""
+
+    id: str
+    name: str
+    kind: GraphOverviewKind
+    type: str | None = None
+    documentId: str | None = None
+    updatedAt: str | None = None
+    description: str | None = None
+
+
+class GraphOverviewEdge(BaseModel):
+    """全景图边：文档→实体「提及」/ 实体→实体 RELATED_TO / 文档→标签「标注」"""
+
+    source: str
+    target: str
+    relation: str
+    kind: GraphOverviewEdgeKind
+
+
+class GraphEntityTypeCount(BaseModel):
+    """实体类型分组计数（stats.entityTypes 元素）"""
+
+    type: str
+    count: int
+
+
+class GraphOverviewStats(BaseModel):
+    """全景图统计"""
+
+    nodeCount: int
+    edgeCount: int
+    documentCount: int
+    entityCount: int
+    tagCount: int
+    mentionCount: int
+    relatedCount: int
+    entityTypes: list[GraphEntityTypeCount]
+
+
+class GraphTopEntity(BaseModel):
+    """被提及最多的实体（degree = MENTIONS 次数）"""
+
+    name: str
+    type: str | None = None
+    degree: int
+
+
+class GraphRecentNode(BaseModel):
+    """最近更新的文档节点（不受筛选条件影响）"""
+
+    id: str
+    name: str
+    kind: str
+    updatedAt: str | None = None
+
+
+class GraphOverviewResponse(BaseModel):
+    """全景图聚合响应（供前端力导向图）"""
+
+    nodes: list[GraphOverviewNode]
+    edges: list[GraphOverviewEdge]
+    stats: GraphOverviewStats
+    topEntities: list[GraphTopEntity]
+    recentNodes: list[GraphRecentNode]
+    entityTypes: list[str]
