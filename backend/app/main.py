@@ -2,6 +2,7 @@
 FastAPI 应用入口
 """
 
+import asyncio
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,6 +22,39 @@ from app.models.base import Base
 from app.services.graph_build import graph_build_service
 
 
+async def _init_database_with_retry() -> None:
+    """等待 PostgreSQL 完成恢复后建表，避免应用与数据库同时启动时产生竞态。"""
+    last_error: Exception | None = None
+    for attempt in range(30):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            return
+        except Exception as error:
+            last_error = error
+            if attempt == 29:
+                break
+            await asyncio.sleep(1)
+
+    raise RuntimeError("PostgreSQL 在 30 秒内未完成启动") from last_error
+
+
+async def _start_rabbitmq_with_retry(rabbitmq_service: Any) -> None:
+    """等待 RabbitMQ 完成 AMQP 初始化，避免端口已开放但协议尚未就绪。"""
+    last_error: Exception | None = None
+    for attempt in range(30):
+        try:
+            await rabbitmq_service.start()
+            return
+        except Exception as error:
+            last_error = error
+            if attempt == 29:
+                break
+            await asyncio.sleep(1)
+
+    raise RuntimeError("RabbitMQ 在 30 秒内未完成启动") from last_error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时幂等建表 + 连接 MQ/ES/Neo4j，退出时关闭各资源"""
@@ -30,8 +64,7 @@ async def lifespan(app: FastAPI):
     # 建表兜底（CREATE TABLE IF NOT EXISTS 语义——只建不 ALTER）：
     # schema 真相源是 init-scripts/postgresql/*.sql。加字段 / 改类型请先改那里的 DDL，
     # 再同步 ORM 模型；这里只补表是否存在，不会演进已有表结构。
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await _init_database_with_retry()
     # ES：健康检查，不可用只降级不阻断启动（索引写入时跳过）
     await es_service.start()
     # Neo4j：连通性验证，不可用只降级不阻断启动（KG 写入时跳过）
@@ -40,7 +73,7 @@ async def lifespan(app: FastAPI):
     await redis_service.start()
     # MQ：先注册消费者再连接；连接失败抛错 → 应用启动失败（与 TS onModuleInit 一致）
     register_consumers()
-    await rabbitmq_service.start()
+    await _start_rabbitmq_with_retry(rabbitmq_service)
     # 鉴权自检：告警「route_class 非 AuthRoute 因而不受保护」的路由（漏写会静默裸奔）
     check_route_classes(app)
     yield
@@ -64,9 +97,7 @@ def _inject_bearer_security_scheme(app: FastAPI) -> None:
         if app.openapi_schema:
             return app.openapi_schema  # type: ignore[return-value]
         schema = original_openapi()
-        schemes = schema.setdefault("components", {}).setdefault(
-            "securitySchemes", {}
-        )
+        schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
         schemes.setdefault("HTTPBearer", {"type": "http", "scheme": "bearer"})
         app.openapi_schema = schema
         return schema
