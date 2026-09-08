@@ -1,30 +1,72 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Empty, Input, List, Space, Typography, message } from "antd";
+import { App, Button, Empty, Input, Space, Typography, message } from "antd";
 import { aiApi } from "../api";
 import { ApiError } from "../api/client";
-import type { ChatMessage, ChatSession, ChatSource } from "../types";
+import { getAccessToken } from "../auth";
+import {
+  ChatMessageParts,
+  historyToUIMessages,
+  type KhUIMessage,
+} from "../components/ChatMessageParts";
+import type { ChatMessage, ChatSession } from "../types";
 import { formatTime } from "../utils";
 
-interface Bubble {
-  role: "user" | "assistant";
-  content: string;
-  sources?: ChatSource[] | null;
-}
+const CHAT_ID = "kh-chat";
 
 export default function ChatPage() {
   const navigate = useNavigate();
+  const { modal } = App.useApp();
   const [params] = useSearchParams();
   const sessionId = params.get("session") || undefined;
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [input, setInput] = useState("");
-  const [topK, setTopK] = useState(5);
-  const [loading, setLoading] = useState(false);
-  const [messages, setMessages] = useState<Bubble[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
+  const sessionIdRef = useRef(sessionId);
+  const loadedSessionRef = useRef<string | undefined>(undefined);
+  const pinBottomRef = useRef(true);
+  sessionIdRef.current = sessionId;
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<KhUIMessage>({
+        api: "/api/v1/ai/chat/stream",
+        headers: () => {
+          const token = getAccessToken();
+          const headers: Record<string, string> = {};
+          if (token) headers.Authorization = `Bearer ${token}`;
+          return headers;
+        },
+      }),
+    [],
+  );
+
+  const { messages, sendMessage, setMessages, status, stop, error } =
+    useChat<KhUIMessage>({
+      id: CHAT_ID,
+      transport,
+      onData: (part) => {
+        if (part.type !== "data-session") return;
+        const nextId = part.data.sessionId;
+        if (!nextId || nextId === sessionIdRef.current) return;
+        loadedSessionRef.current = nextId;
+        navigate(`/chat?session=${nextId}`, { replace: true });
+      },
+      onFinish: () => {
+        void loadSessions();
+      },
+      onError: (err) => {
+        message.error(err.message || "请求失败");
+      },
+    });
+
+  const streaming = status === "submitted" || status === "streaming";
+  const busy = streaming;
 
   async function loadSessions() {
     try {
@@ -36,106 +78,113 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
-    loadSessions();
+    void loadSessions();
   }, []);
 
   useEffect(() => {
+    if (streaming) return;
     if (!sessionId) {
-      setMessages([]);
+      if (loadedSessionRef.current) {
+        loadedSessionRef.current = undefined;
+        setMessages([]);
+      }
       return;
     }
+    if (loadedSessionRef.current === sessionId) return;
     let cancelled = false;
+    loadedSessionRef.current = sessionId;
     aiApi
       .messages(sessionId)
       .then((rows: ChatMessage[]) => {
         if (cancelled) return;
-        setMessages(
-          rows.map((m) => ({
-            role: m.role,
-            content: m.content,
-            sources: m.sources,
-          })),
-        );
+        setMessages(historyToUIMessages(rows));
       })
-      .catch((error) => {
+      .catch((err) => {
         if (!cancelled) {
-          message.error(
-            error instanceof ApiError ? error.message : "加载会话失败",
-          );
+          loadedSessionRef.current = undefined;
+          message.error(err instanceof ApiError ? err.message : "加载会话失败");
           navigate("/chat", { replace: true });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionId, navigate]);
+  }, [sessionId, streaming, navigate, setMessages]);
 
-  function scrollLog() {
+  function onLogScroll() {
+    const el = logRef.current;
+    if (!el) return;
+    pinBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
+
+  useEffect(() => {
+    if (!pinBottomRef.current) return;
     requestAnimationFrame(() => {
       logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
     });
+  }, [messages, status]);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    pinBottomRef.current = true;
+    await sendMessage({ text }, { body: { sessionId } });
   }
 
-  async function send(asRagOnly = false) {
-    const text = input.trim();
-    if (!text) return;
-    setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
-    setLoading(true);
-    scrollLog();
-    try {
-      if (asRagOnly) {
-        const hits = await aiApi.ragSearch(text, topK);
-        const content = hits.length
-          ? hits
-              .map(
-                (h, i) =>
-                  `[${i + 1}] ${h.documentTitle}${h.heading ? ` / ${h.heading}` : ""}\n${h.content.slice(0, 180)}`,
-              )
-              .join("\n\n")
-          : "没有召回到相关块。";
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: `仅检索结果：\n\n${content}` },
-        ]);
-      } else {
-        const res = await aiApi.chat(text, topK, sessionId);
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: res.answer, sources: res.sources },
-        ]);
-        if (res.sessionId && res.sessionId !== sessionId) {
-          navigate(`/chat?session=${res.sessionId}`, { replace: true });
-        }
-        void loadSessions();
-      }
-      scrollLog();
-    } catch (error) {
-      message.error(error instanceof ApiError ? error.message : "请求失败");
-    } finally {
-      setLoading(false);
+  function switchSession(id?: string) {
+    if (busy) {
+      message.warning("请等待当前回答结束再切换会话");
+      return;
     }
+    navigate(id ? `/chat?session=${id}` : "/chat");
   }
 
   async function onNew() {
+    if (busy) {
+      message.warning("请等待当前回答结束再开新对话");
+      return;
+    }
     try {
       const created = await aiApi.createSession();
+      loadedSessionRef.current = created.id;
+      setMessages([]);
       navigate(`/chat?session=${created.id}`);
       void loadSessions();
-    } catch (error) {
-      message.error(error instanceof ApiError ? error.message : "创建失败");
+    } catch (err) {
+      message.error(err instanceof ApiError ? err.message : "创建失败");
     }
   }
 
-  async function onRemove(id: string, e: MouseEvent) {
+  function onRemove(id: string, e: MouseEvent) {
     e.stopPropagation();
-    try {
-      await aiApi.removeSession(id);
-      if (sessionId === id) navigate("/chat");
-      void loadSessions();
-    } catch (error) {
-      message.error(error instanceof ApiError ? error.message : "删除失败");
+    if (busy) {
+      message.warning("请等待当前回答结束再删除");
+      return;
     }
+    modal.confirm({
+      title: "确定删除对话？",
+      content: "删除后，聊天记录将不可恢复。",
+      okText: "删除",
+      cancelText: "取消",
+      okType: "danger",
+      centered: true,
+      onOk: async () => {
+        try {
+          await aiApi.removeSession(id);
+          if (sessionId === id) {
+            loadedSessionRef.current = undefined;
+            setMessages([]);
+            navigate("/chat");
+          }
+          void loadSessions();
+        } catch (err) {
+          message.error(err instanceof ApiError ? err.message : "删除失败");
+          throw err;
+        }
+      },
+    });
   }
 
   return (
@@ -145,6 +194,7 @@ export default function ChatPage() {
           type="primary"
           icon={<PlusOutlined />}
           block
+          disabled={busy}
           onClick={() => void onNew()}
         >
           新对话
@@ -159,13 +209,13 @@ export default function ChatPage() {
             sessions.map((s) => (
               <div
                 key={s.id}
-                className={`kh-chat-session-item${sessionId === s.id ? " active" : ""}`}
-                onClick={() => navigate(`/chat?session=${s.id}`)}
+                className={`kh-chat-session-item${sessionId === s.id ? " active" : ""}${busy ? " disabled" : ""}`}
+                onClick={() => switchSession(s.id)}
               >
                 <div className="kh-chat-session-title">{s.title}</div>
                 <div className="kh-chat-session-meta">
                   <span>{formatTime(s.updatedAt)}</span>
-                  <DeleteOutlined onClick={(e) => void onRemove(s.id, e)} />
+                  <DeleteOutlined onClick={(e) => onRemove(s.id, e)} />
                 </div>
               </div>
             ))
@@ -177,75 +227,52 @@ export default function ChatPage() {
           知识问答
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          走混合检索后再生成。无召回不会调模型。问答会写入左侧会话，「仅检索」不落库。
+          流式回答会展示知识库检索、思考与联网搜索过程，并写入左侧会话。
         </Typography.Paragraph>
-        <div className="kh-chat-log" ref={logRef}>
+        <div className="kh-chat-log" ref={logRef} onScroll={onLogScroll}>
           {messages.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description="输入问题开始一段对话"
             />
           ) : (
-            messages.map((m, i) => (
-              <div key={i} className={`kh-bubble ${m.role}`}>
-                {m.content}
-                {m.sources?.length ? (
-                  <List
-                    size="small"
-                    style={{
-                      marginTop: 8,
-                      background: "#fff",
-                      borderRadius: 8,
-                    }}
-                    dataSource={m.sources}
-                    renderItem={(s) => (
-                      <List.Item>
-                        <span>
-                          [{s.index}]{" "}
-                          <Link to={`/documents/${s.documentId}`}>
-                            {s.documentTitle}
-                          </Link>
-                          {s.heading ? ` / ${s.heading}` : ""}
-                          <div style={{ color: "#8c8c8c" }}>{s.excerpt}</div>
-                        </span>
-                      </List.Item>
-                    )}
+            messages.map((m, i) => {
+              const liveAssistant =
+                streaming &&
+                m.role === "assistant" &&
+                i === messages.length - 1;
+              return (
+                <div key={m.id} className={`kh-bubble ${m.role}`}>
+                  <ChatMessageParts
+                    messageId={m.id}
+                    parts={m.parts}
+                    role={m.role}
+                    showSources={!liveAssistant}
                   />
-                ) : null}
-              </div>
-            ))
+                </div>
+              );
+            })
           )}
+          {error ? <div className="kh-chat-error">{error.message}</div> : null}
         </div>
         <Space.Compact style={{ width: "100%" }}>
           <Input
             size="large"
             placeholder="例如：上线前如何做金丝雀验证？"
             value={input}
-            disabled={loading}
+            disabled={busy}
             onChange={(e) => setInput(e.target.value)}
-            onPressEnter={() => void send(false)}
+            onPressEnter={() => void send()}
           />
-          <Input
-            size="large"
-            style={{ width: 80 }}
-            value={topK}
-            onChange={(e) => setTopK(Number(e.target.value) || 5)}
-          />
-          <Button
-            size="large"
-            loading={loading}
-            onClick={() => void send(true)}
-          >
-            仅检索
-          </Button>
-          <Button
-            type="primary"
-            size="large"
-            loading={loading}
-            onClick={() => void send(false)}
-          >
-            发送
-          </Button>
+          {streaming ? (
+            <Button size="large" onClick={() => void stop()}>
+              停止
+            </Button>
+          ) : (
+            <Button type="primary" size="large" onClick={() => void send()}>
+              发送
+            </Button>
+          )}
         </Space.Compact>
       </div>
     </div>
