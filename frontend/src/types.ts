@@ -81,8 +81,25 @@ export interface ChatSource {
 }
 
 export interface ChatResult {
+  sessionId: string | null;
   answer: string;
   sources: ChatSource[];
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: ChatSource[] | null;
+  createdAt: string;
 }
 
 export interface GraphHit {

@@ -83,10 +83,19 @@ export const searchApi = {
 };
 
 export const aiApi = {
-  chat: (content: string, topK = 5) =>
-    post<ChatResult>("/ai/chat", { content, topK }),
+  chat: (content: string, topK = 5, sessionId?: string) =>
+    post<ChatResult>("/ai/chat", { content, topK, sessionId }),
   ragSearch: (query: string, topK = 8) =>
     post<ChunkHit[]>("/rag/search", { query, topK }),
+  sessions: (page = 1, pageSize = 50) =>
+    get<PageResult<ChatSession>>(
+      `/ai/sessions?page=${page}&pageSize=${pageSize}`,
+    ),
+  createSession: () => post<ChatSession>("/ai/sessions", {}),
+  messages: (id: string) => get<ChatMessage[]>(`/ai/sessions/${id}/messages`),
+  renameSession: (id: string, title: string) =>
+    patch<ChatSession>(`/ai/sessions/${id}`, { title }),
+  removeSession: (id: string) => del<{ message: string }>(`/ai/sessions/${id}`),
 };
 
 export const graphApi = {
