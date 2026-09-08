@@ -243,3 +243,31 @@ INSERT INTO kh_team_member (id, team_id, user_id, member_role) VALUES
     (9000000000000000002, 8000000000000000002, 1000000000000000001, 'leader'),
     (9000000000000000003, 8000000000000000002, 1000000000000000003, 'member')
 ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================================
+-- AI 会话（对应 TS：kh_ai_session / kh_ai_message）
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS kh_ai_session (
+    id BIGINT PRIMARY KEY,                          -- 会话 ID（雪花）
+    user_id BIGINT NOT NULL,                        -- 所属用户 → kh_user.id（应用层保证，未建 FK）
+    title VARCHAR(80) NOT NULL,                     -- 会话标题
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+-- 会话列表按「我的会话 + 最近活跃」排序
+CREATE INDEX IF NOT EXISTS idx_kh_ai_session_user_updated
+    ON kh_ai_session(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS kh_ai_message (
+    id BIGINT PRIMARY KEY,                          -- 消息 ID（雪花）
+    session_id BIGINT NOT NULL
+        REFERENCES kh_ai_session(id) ON DELETE CASCADE, -- 删会话级联删消息
+    role VARCHAR(16) NOT NULL,                      -- user / assistant
+    content TEXT NOT NULL,                          -- 消息正文
+    sources JSONB,                                  -- 引用来源（RAG 命中片段）
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+-- 拉取某会话的完整对话（按时间正序）
+CREATE INDEX IF NOT EXISTS idx_kh_ai_message_session_id
+    ON kh_ai_message(session_id, created_at);

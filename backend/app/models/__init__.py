@@ -1,6 +1,7 @@
 """
 ORM 模型包
 """
+from app.models.ai_session import AiMessage, AiSession
 from app.models.base import Base
 from app.models.doc_chunk import DocChunk
 from app.models.document import DocumentEntity, DocumentStatus
@@ -41,6 +42,8 @@ from app.models.role_permission import RolePermission
 
 __all__ = [
     "Base",
+    "AiSession",
+    "AiMessage",
     "DocumentEntity",
     "DocumentStatus",
     "DOCUMENT_STATUS_LABEL",
