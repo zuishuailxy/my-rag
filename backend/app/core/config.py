@@ -154,6 +154,8 @@ class Settings(BaseSettings):
     RAG_HYBRID_TOP_K: int = 20
     # RRF 常数（与 ES RRF 默认一致）：score = Σ 1/(C + rank)
     RAG_RRF_C: int = 60
+    # rerank relevance_score 下限（0–1），低于该值的候选不进入最终结果；<=0 表示不过滤
+    RAG_MIN_SCORE: float = 0.4
 
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
     RABBITMQ_ENABLED: bool = True
