@@ -10,6 +10,7 @@
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_route import auth_router
@@ -20,6 +21,7 @@ from app.models.ai_session import AiMessage, AiSession
 from app.schemas.ai import (
     ChatRequest,
     ChatResponse,
+    ChatStreamRequest,
     CreateSessionRequest,
     MessageResponse,
     QuerySessionRequest,
@@ -32,6 +34,7 @@ from app.schemas.ai import (
 from app.schemas.auth import AuthUser
 from app.schemas.search import HybridChunkItem
 from app.services.ai_chat import ai_chat_service
+from app.services.ai_stream import ai_stream_service
 from app.services.chat_session import chat_session_service
 from app.services.retrieval import hybrid_retrieval_service
 
@@ -89,6 +92,26 @@ async def ai_chat(dto: ChatRequest, user: _USER, db: _DB) -> ChatResponse:
     """RAG 对话：混合检索 + DeepSeek 作答，写入本人会话（无 sessionId 则新建）"""
     result = await ai_chat_service.chat(db, dto.content, top_k=dto.topK, user=user, session_id=dto.sessionId)
     return ChatResponse(**result)
+
+
+@router.post(
+    "/chat/stream",
+    dependencies=[Depends(require_permission("search"))],
+)
+async def ai_chat_stream(dto: ChatStreamRequest, user: _USER, db: _DB) -> StreamingResponse:
+    """流式对话：agent 流式作答，UI Message Stream（AI SDK v6 SSE 协议）
+
+    响应头对齐 TS pipeUIMessageStreamToResponse（content-type 由
+    media_type 提供，协议版本头前端 DefaultChatTransport 校验用）。
+    """
+    return StreamingResponse(
+        ai_stream_service.stream_chat(db, dto, user),
+        media_type="text/event-stream",
+        headers={
+            "x-vercel-ai-ui-message-stream": "v1",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 # ---- 会话（字面量段 /sessions 注册在动态段 /{session_id} 之前）----

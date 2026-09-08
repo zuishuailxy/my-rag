@@ -155,6 +155,22 @@ class ChatSessionService:
         await session.commit()
         return entity
 
+    async def touch_title(
+        self, session: AsyncSession, user_id: str, session_id: str, question: str
+    ) -> AiSession:
+        """仍为默认标题时用首问覆盖（对应 TS touchTitle）
+
+        标题未变时不发 UPDATE（TypeORM save 无变更同样不落库），updated_at 不前进；
+        流式版不在这里刷 updated_at，落库由 append_turn 统一处理。
+        """
+        entity = await self._get_owned(session, user_id, session_id)
+        if entity.title == DEFAULT_TITLE:
+            entity.title = title_from_question(question)
+            session.add(entity)
+            await session.commit()
+            await session.refresh(entity)
+        return entity
+
     async def _get_owned(
         self, session: AsyncSession, user_id: str, session_id: str
     ) -> AiSession:

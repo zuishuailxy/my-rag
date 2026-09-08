@@ -194,6 +194,11 @@ class Settings(BaseSettings):
     MODEL_NAME: str | None = None
     # LLM 单次作答超时（毫秒，对应 TS AI_CHAT_TIMEOUT_MS）
     AI_CHAT_TIMEOUT_MS: int = 60000
+    # 流式对话思考开关（对应 TS LLM_ENABLE_THINKING）：严格 == "false" 才关，
+    # 默认开——deepseek-v4-flash 开思考后 reasoning_content 随流式 delta 返回
+    LLM_ENABLE_THINKING: str = "true"
+    # 联网搜索（Tavily，对应 TS WebSearchService；TS 原版是 Bocha，刻意迁移已文档化）
+    TAVILY_API_KEY: str | None = None
 
     # ---- Neo4j（KG 知识图谱存储；与 docker-compose 中 neo4j 服务一致）----
     NEO4J_ENABLED: bool = True

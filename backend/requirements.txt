@@ -21,6 +21,8 @@ elasticsearch>=8.17.0,<9
 aiohttp>=3.14.3
 langchain-text-splitters>=1.1.2
 langchain-openai>=1.6.0
+langchain>=1.4.0
+langchain-deepseek>=1.1.0
 # 代码使用 6.x API（NotificationMinimumSeverity 等），5.x 会运行时报错；与 pyproject 对齐
 neo4j>=6.3.0
 bcrypt>=5.0.0

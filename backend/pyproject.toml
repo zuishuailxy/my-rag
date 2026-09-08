@@ -34,6 +34,8 @@ dependencies = [
     "email-validator>=2.3.0",
     "redis>=8.1.0",
     "aiosmtplib>=5.1.2",
+    "langchain>=1.4.0",
+    "langchain-deepseek>=1.1.0",
 ]
 
 [tool.uv]

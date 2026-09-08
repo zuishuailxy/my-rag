@@ -8,7 +8,7 @@ RAG 检索 / 对话 / 会话 DTO 与响应（对应 TS dto/rag-search.dto.ts + d
 """
 
 from datetime import datetime
-from typing import List
+from typing import Any, List
 
 from pydantic import BaseModel, Field
 
@@ -108,3 +108,31 @@ class SessionDeleteResponse(BaseModel):
     """删除会话响应（对应 TS remove 返回 { message: '已删除' }）"""
 
     message: str = "已删除"
+
+
+# ---- 流式对话（对应 TS dto/chat-stream.dto.ts；useChat UIMessage 请求体）----
+
+
+class ChatStreamMessagePart(BaseModel):
+    """消息片段（TS: { type?, text? }，额外字段放行由 Pydantic 默认忽略实现）"""
+
+    type: str | None = None
+    text: str | None = None
+
+
+class ChatStreamMessage(BaseModel):
+    """UIMessage（TS: { role?, parts? }）"""
+
+    role: str | None = None
+    parts: List[ChatStreamMessagePart] = Field(default_factory=list)
+
+
+class ChatStreamRequest(BaseModel):
+    """流式对话请求（对应 TS ChatStreamDto；trigger / messageId 任意类型放行）"""
+
+    messages: List[ChatStreamMessage] = Field(..., description="useChat 消息数组")
+    sessionId: str | None = Field(default=None, description="会话 ID，缺省新建")
+    topK: int = Field(default=5, ge=1, le=10, description="召回块数，默认 5")
+    id: str | None = Field(default=None, description="useChat 消息 id，透传不使用")
+    trigger: Any | None = Field(default=None, description="useChat 触发器，放行")
+    messageId: Any | None = Field(default=None, description="useChat 消息 id，放行")
