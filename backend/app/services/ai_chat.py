@@ -20,9 +20,12 @@ from fastapi import HTTPException
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.pipeline.types import ChunkHit
+from app.schemas.auth import AuthUser
+from app.services.chat_session import chat_session_service
 from app.services.retrieval import hybrid_retrieval_service
 
 logger = logging.getLogger("AiChatService")
@@ -51,16 +54,38 @@ class AiChatService:
         # 未配置 API Key 时保持 None，chat() 里抛 503（对齐 TS 构造函数早退 + 503）
         self._llm: ChatOpenAI | None = _build_llm()
 
-    async def chat(self, content: str, top_k: int = 5) -> dict[str, Any]:
-        """对用户问题作答，返回 { answer, sources }"""
+    async def chat(
+        self,
+        db: AsyncSession,
+        content: str,
+        top_k: int = 5,
+        user: AuthUser | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """对用户问题作答，返回 { sessionId, answer, sources }
+
+        有 user 时问答落库（append_turn）：无 sessionId 新建会话，
+        标题仍为默认名时用首问覆盖（对齐 TS chat）。
+        """
         trimmed = content.strip()
         if not trimmed:
-            return {"answer": "请输入问题。", "sources": []}
+            # 空问题不落库，sessionId 原样透传（对齐 TS 早退分支）
+            return {"sessionId": session_id, "answer": "请输入问题。", "sources": []}
 
         hits = await hybrid_retrieval_service.retrieve(trimmed, top_k)
         if not hits:
             logger.log(logging.INFO, "RAG 对话无召回：queryLength=%d，返回无内容提示", len(trimmed))
-            return {"answer": "知识库里没有相关内容。", "sources": []}
+            answer = "知识库里没有相关内容。"
+            sess = (
+                await chat_session_service.append_turn(db, user.user_id, session_id, trimmed, answer, [])
+                if user
+                else None
+            )
+            return {
+                "sessionId": str(sess.id) if sess else session_id,
+                "answer": answer,
+                "sources": [],
+            }
 
         if self._llm is None:
             logger.error(
@@ -92,7 +117,19 @@ class AiChatService:
             len(sources),
             len(answer),
         )
-        return {"answer": answer, "sources": sources}
+        # 问答落库（对齐 TS：user 存在时 append_turn，返回会话 id）
+        sess = (
+            await chat_session_service.append_turn(
+                db, user.user_id, session_id, trimmed, answer, sources
+            )
+            if user
+            else None
+        )
+        return {
+            "sessionId": str(sess.id) if sess else session_id,
+            "answer": answer,
+            "sources": sources,
+        }
 
     # ---- 溯源 ----
 
