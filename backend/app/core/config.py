@@ -187,7 +187,8 @@ class Settings(BaseSettings):
 
     # ---- AI 对话（RAG 问答：混合检索 → LLM 作答；对应 TS AiChatService）----
     # 大模型 DeepSeek，复用上面的 LLM_BASE_URL / LLM_MODEL；逐个可独立覆盖。
-    OPENAI_API_KEY: str | None = None
+    # OPENAI_API_KEY 在上方 API Key fallback 链区声明（EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY），
+    # 此处复用同一字段，勿重复声明（pydantic 第二次赋值会静默覆盖）。
     OPENAI_BASE_URL: str | None = None
     # 模型覆盖：MODEL_NAME → LLM_MODEL（默认 deepseek-v4-flash）
     MODEL_NAME: str | None = None
