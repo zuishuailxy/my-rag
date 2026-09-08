@@ -5,6 +5,7 @@
 未启用 / 未配置 Key / 调用失败时返回 None，由上层降级为 RRF 顺序。
 """
 import logging
+from dataclasses import replace
 
 import httpx
 
@@ -13,8 +14,8 @@ from app.pipeline.types import ChunkHit
 
 logger = logging.getLogger("RerankerService")
 
-# 单挑文本送入 rerank 前的最大长度（超出截断，与 TS toDocument 一致）
-_MAX_DOC_BYTES = 2000
+# 单挑文本送入 rerank 前的最大长度（超出截断；按字符数计，与 TS toDocument 一致）
+_MAX_DOC_CHARS = 2000
 
 
 class RerankerService:
@@ -63,6 +64,7 @@ class RerankerService:
         }
 
         try:
+            # 刻意差异：TS fetch 无显式超时（依赖 Node 默认），Python 侧加 30s 上限防悬挂
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(self.endpoint, headers=headers, json=payload)
                 body = resp.json()
@@ -79,7 +81,8 @@ class RerankerService:
             )
             return None
 
-        results = (body.get("output") or {}).get("results") or []
+        # 对齐 TS：优先 output.results，回退顶层 results（兼容分支）
+        results = (body.get("output") or {}).get("results") or body.get("results") or []
         if not results:
             logger.warning("Rerank 返回空结果，降级为 RRF")
             return None
@@ -89,9 +92,8 @@ class RerankerService:
             index = item["index"]
             if index < 0 or index >= len(candidates):
                 continue
-            hit = candidates[index]
-            hit.score = item["relevance_score"]
-            reranked.append(hit)
+            # 对齐 TS spread 语义：创建带 rerank 分的新对象，不原地改输入的 ChunkHit
+            reranked.append(replace(candidates[index], score=item["relevance_score"]))
 
         logger.info(
             "Rerank 完成：model=%s, in=%d, out=%d",
@@ -106,8 +108,8 @@ class RerankerService:
         """候选块 → 送入 rerank 的纯文本（标题 + 章节标题 + 正文，超长截断）"""
         heading = f"{hit.heading}\n" if hit.heading else ""
         text = f"{hit.documentTitle}\n{heading}{hit.content}".strip()
-        if len(text) > _MAX_DOC_BYTES:
-            text = f"{text[:_MAX_DOC_BYTES]}..."
+        if len(text) > _MAX_DOC_CHARS:
+            text = f"{text[:_MAX_DOC_CHARS]}..."
         return text
 
 
