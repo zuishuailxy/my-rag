@@ -2,7 +2,15 @@
 
 - POST /api/v1/search：关键词检索已发布文档（ES kh_document），返回命中词高亮
 - POST /api/v1/search/hybrid：chunk 级混合检索（ES kh_chunk 关键词 + PG doc_chunk 向量，RRF 融合）
+   ⚠️ Python 独有端点：TS search.controller.ts 只有 `@Post() /search` 一个端点；chunk 级
+   混合检索在 TS 侧属 AiController 的 `POST /rag/search`（本项目同样保留，见 api/v1/ai.py）。
+   两者共用 `hybrid_retrieval_service.retrieve`，此处保留是为方案 B 提供 search 域入口。
 均需 `search` 权限。
+
+状态码刻意差异：TS 各 controller 用 `@Post()`（NestJS 对 POST 默认 **201**），本项目
+**查询类 POST 统一返回 200**（/search、/search/hybrid、/rag/search、/ai/chat）—— 查询语义
+下 200 更贴切；写操作仍显式 201（auth / users / role / document / ai sessions）。
+前端封装的 post 只判 2xx，无契约影响。
 """
 from fastapi import Depends
 from typing import Annotated

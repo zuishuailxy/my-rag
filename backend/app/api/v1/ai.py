@@ -6,6 +6,9 @@
 - GET /api/v1/ai/sessions/{id}/messages：会话消息列表
 - PATCH|DELETE /api/v1/ai/sessions/{id}：改名 / 删除
 均需 `search` 权限（对齐 TS 类级 @RequirePermission(PermissionCode.search)）。
+
+状态码刻意差异：/rag/search 与 /ai/chat 是查询类 POST，本项目统一返回 200（TS 的
+`@Post()` 为 NestJS 默认 201）；口径与理由见 api/v1/search.py 模块注释。
 """
 from typing import Annotated, Any, cast
 
