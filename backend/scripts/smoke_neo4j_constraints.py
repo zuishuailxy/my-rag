@@ -121,12 +121,22 @@ async def main() -> None:
             "MATCH (e:KnowledgeEntity {name: $name}) DETACH DELETE e",
             name=TEST_ENTITY_NAME,
         )).consume()
+        # 只断言「本次测试写入的节点」已清干净，不断言全库为空 ——
+        # 这是共享的开发库，真实建图数据（以及其它冒烟）本就会留节点；
+        # 旧写法 `nodes == 0` 只在空库上成立，任何存量数据都会让它假红。
+        residue = await _scalar(
+            session,
+            "MATCH (n) WHERE (n:KnowledgeDocument AND n.id = $doc) "
+            "   OR (n:KnowledgeEntity AND n.name = $ent) RETURN count(n)",
+            doc=TEST_DOC_ID,
+            ent=TEST_ENTITY_NAME,
+        )
         nodes = await _scalar(session, "MATCH (n) RETURN count(n)")
         rels = await _scalar(session, "MATCH ()-[r]->() RETURN count(r)")
     await svc.close()
 
-    assert nodes == 0 and rels == 0, f"清理未净：nodes={nodes}, rels={rels}"
-    print(f"6) 清理 → OK（nodes={nodes}, rels={rels}）")
+    assert residue == 0, f"清理未净：本次测试残留 {residue} 个节点"
+    print(f"6) 清理 → OK（本次测试残留=0；库内总量 nodes={nodes}, rels={rels}）")
     print("\n全部通过：Neo4j 约束创建幂等、并发 MERGE 无重复、写入通道正常")
 
 

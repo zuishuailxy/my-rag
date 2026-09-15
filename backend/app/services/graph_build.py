@@ -33,6 +33,11 @@ from neo4j import (
 )
 from neo4j.exceptions import TransientError
 
+from app.common.document_access import (
+    DocumentAccessScope,
+    neo4j_access_params,
+    neo4j_document_access_where,
+)
 from app.core.config import settings
 from app.pipeline.types import ExtractionResult, PipelineDocument, to_iso_date
 from app.services.chunker import chunking_service
@@ -57,6 +62,21 @@ WRITE_MAX_ATTEMPTS = 3
 def _now_iso() -> str:
     """当前时间 ISO-8601 字符串（对应 TS new Date().toISOString()）"""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _opt_str(value: Any) -> str | None:
+    """bigint / int / str / None → 字符串 / None
+
+    Neo4j 侧把 authorId / teamId 统一存成**字符串**：雪花 ID 超过 JS Number 安全整数
+    范围，且 KG 查询参数来自 DocumentAccessScope（user_id / team_ids 本就是字符串），
+    两侧类型必须一致，否则 `d.teamId IN $accessTeamIds` 会静默不命中 ——
+    表现为「团队可见的文档检索不到」，且不报错。空串按 None 处理（等价于未设置）。
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return str(value)
 
 
 class GraphBuildService:
@@ -164,16 +184,25 @@ class GraphBuildService:
                 // 以文档业务 id 为唯一键：存在则命中，不存在则创建
                 MERGE (d:KnowledgeDocument {id: $id})
                 // 每次重建都刷新可变元数据；createdAt 仅首次写入
+                // authorId / teamId / isPublic 是查询侧可见性判定的依据
+                //（见 common/document_access.neo4j_document_access_where）：
+                // 缺任一项，该文档在 KG 里除管理员/审核员外全图不可见
                 SET d.title = $title, d.summary = $summary, d.categoryId = $categoryId,
-                    d.authorId = $authorId, d.status = $status, d.updatedAt = $now,
+                    d.authorId = $authorId, d.teamId = $teamId, d.isPublic = $isPublic,
+                    d.status = $status, d.tags = $tags, d.updatedAt = $now,
                     d.createdAt = coalesce(d.createdAt, $now)
                 """,
                 id=doc.id,
                 title=doc.title,
                 summary=doc.summary or "",
                 categoryId=doc.category_id,
-                authorId=doc.author_id,
+                authorId=_opt_str(doc.author_id),
+                teamId=_opt_str(doc.team_id),
+                # TS `isPublic: doc.isPublic ?? false`
+                isPublic=bool(doc.is_public),
                 status=doc.status,
+                # TS `tags: doc.tags ?? ''`（overview 的文档→标签边按逗号拆）
+                tags=doc.tags or "",
                 now=_now_iso(),
             )
 
@@ -186,6 +215,9 @@ class GraphBuildService:
                 author_id=doc.author_id,
                 team_id=doc.team_id,
                 doc_status=doc.status,
+                # 可见性字段冗余进 chunk（与 indexing.reindex_document 同口径；
+                # 图谱侧 chunk 节点本身不带可见性，判定一律回溯所属文档节点）
+                is_public=bool(doc.is_public),
                 publish_time=to_iso_date(doc.publish_time),
             )
 
@@ -250,6 +282,51 @@ class GraphBuildService:
                 await self.build_for_document(doc)
             except Exception as err:
                 logger.error("KG 构建失败：documentId=%s, %s", doc.id, err)
+
+    async def update_visibility(
+        self,
+        document_id: str | int,
+        is_public: bool,
+        team_id: str | int | None,
+        author_id: str | int | None,
+    ) -> None:
+        """已发布文档只改公开 / 团队 / 作者时，就地刷文档节点属性（对应 TS updateVisibility）
+
+        与 es_index / search_index 的同名方法同口径（签名一致，document.py 三处并列调用）：
+        免去重新抽实体建图，只改可见性字段。
+
+        为什么必须同步：查询侧四个方法都按 neo4j_document_access_where 过滤文档节点，
+        文档由公开转私有后若不同步，未授权用户在 /graph/nodes、/graph/search、
+        /graph/edges、/graph/overview 仍能看到该文档及其提及的实体。
+
+        Neo4j 不可用或写入失败只告警，不抛错（对齐 TS，不阻断文档保存）。
+        """
+        if self._driver is None:
+            logger.warning(
+                "跳过图谱可见性更新（Neo4j 不可用）：documentId=%s", document_id
+            )
+            return
+        try:
+            async with self._driver.session() as session:
+                await self._run_write(session,
+                    """
+                    MATCH (d:KnowledgeDocument {id: $id})
+                    SET d.isPublic = $isPublic, d.teamId = $teamId, d.authorId = $authorId,
+                        d.updatedAt = $now
+                    """,
+                    # 节点 id 建图时写的是 str(entity.id)，此处同口径转字符串
+                    id=str(document_id),
+                    isPublic=bool(is_public),
+                    teamId=_opt_str(team_id),
+                    authorId=_opt_str(author_id),
+                    now=_now_iso(),
+                )
+        except Exception as err:  # noqa: BLE001
+            logger.warning(
+                "图谱可见性更新失败：documentId=%s, %s", document_id, err
+            )
+            return
+        logger.info("图谱可见性已更新：documentId=%s", document_id)
 
     async def delete_for_document(self, document_id: str) -> None:
         """删除文档及其 chunk；再清理「已无人提及」的孤儿实体，避免图膨胀"""
@@ -340,9 +417,17 @@ class GraphBuildService:
         return count
 
     async def list_nodes(
-        self, type: str | None = None, limit: int = 200
+        self,
+        type: str | None = None,
+        limit: int = 200,
+        scope: DocumentAccessScope | None = None,
     ) -> list[dict[str, Any]]:
-        """查询知识实体节点（对应 TS listNodes）。Neo4j 不可用时返回 []。"""
+        """查询知识实体节点（对应 TS listNodes）。Neo4j 不可用时返回 []。
+
+        可见性：实体只要被「当前用户可见的某篇文档」的某个块提及过即可见；
+        scope=None 表示不过滤（对齐 TS `scope?`，见 neo4j_access_params 的注释），
+        API 端点必须传 access_from_user(user)。
+        """
         if self._driver is None:
             logger.warning("跳过图谱节点查询（Neo4j 不可用）")
             return []
@@ -350,15 +435,23 @@ class GraphBuildService:
         async with self._driver.session() as session:
             try:
                 result = await session.run(
-                    """
+                    f"""
                     MATCH (e:KnowledgeEntity)
-                    WHERE $type IS NULL OR $type = '' OR e.type = $type
-                    RETURN e.name AS id, e.name AS name, e.type AS type,
+                    WHERE ($type IS NULL OR $type = '' OR e.type = $type)
+                      AND (
+                        $unrestricted OR EXISTS {{
+                          MATCH (d:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                                -[:MENTIONS]->(e)
+                          WHERE {neo4j_document_access_where('d')}
+                        }}
+                      )
+                    RETURN DISTINCT e.name AS id, e.name AS name, e.type AS type,
                            e.description AS description
                     LIMIT $limit
                     """,
                     type=type,
                     limit=cap,
+                    **neo4j_access_params(scope),
                 )
                 records = await result.data()
             except Exception as err:
@@ -374,8 +467,15 @@ class GraphBuildService:
             for row in records
         ]
 
-    async def list_edges(self, limit: int = 500) -> list[dict[str, Any]]:
-        """查询实体间 RELATED_TO 边（对应 TS listEdges）。Neo4j 不可用时返回 []。"""
+    async def list_edges(
+        self, limit: int = 500, scope: DocumentAccessScope | None = None
+    ) -> list[dict[str, Any]]:
+        """查询实体间 RELATED_TO 边（对应 TS listEdges）。Neo4j 不可用时返回 []。
+
+        可见性：边的两端实体各自都要「被当前用户可见的某篇文档提及」；
+        只遮挡一端会让画布出现指向不可见实体的悬空边。
+        scope=None 表示不过滤（对齐 TS `scope?`）。
+        """
         if self._driver is None:
             logger.warning("跳过图谱边查询（Neo4j 不可用）")
             return []
@@ -383,13 +483,26 @@ class GraphBuildService:
         async with self._driver.session() as session:
             try:
                 result = await session.run(
-                    """
+                    f"""
                     MATCH (a:KnowledgeEntity)-[r:RELATED_TO]->(b:KnowledgeEntity)
+                    WHERE $unrestricted OR (
+                      EXISTS {{
+                        MATCH (d1:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                              -[:MENTIONS]->(a)
+                        WHERE {neo4j_document_access_where('d1')}
+                      }}
+                      AND EXISTS {{
+                        MATCH (d2:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                              -[:MENTIONS]->(b)
+                        WHERE {neo4j_document_access_where('d2')}
+                      }}
+                    )
                     RETURN a.name AS source, b.name AS target,
                            r.relation AS relation, r.weight AS weight
                     LIMIT $limit
                     """,
                     limit=cap,
+                    **neo4j_access_params(scope),
                 )
                 records = await result.data()
             except Exception as err:
@@ -405,10 +518,18 @@ class GraphBuildService:
             for row in records
         ]
 
-    async def search_graph(self, keyword: str, limit: int = 50) -> list[dict[str, Any]]:
+    async def search_graph(
+        self,
+        keyword: str,
+        limit: int = 50,
+        scope: DocumentAccessScope | None = None,
+    ) -> list[dict[str, Any]]:
         """图谱关键词检索：匹配实体名/描述、文档标题/摘要、块标题/正文。
 
         对应 TS searchGraph。Neo4j 不可用或关键词为空时返回 []。
+
+        可见性：按命中节点的 label 分别回溯所属文档 —— 文档节点自身判定；块节点回溯
+        HAS_CHUNK 的文档；实体节点回溯「提及它的块所属文档」。scope=None 表示不过滤。
         """
         if self._driver is None:
             logger.warning("跳过图谱检索（Neo4j 不可用）")
@@ -420,14 +541,29 @@ class GraphBuildService:
         async with self._driver.session() as session:
             try:
                 result = await session.run(
-                    """
+                    f"""
                     MATCH (n)
-                    WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($kw)
-                       OR toLower(coalesce(n.title, '')) CONTAINS toLower($kw)
-                       OR toLower(coalesce(n.heading, '')) CONTAINS toLower($kw)
-                       OR toLower(coalesce(n.description, '')) CONTAINS toLower($kw)
-                       OR toLower(coalesce(n.summary, '')) CONTAINS toLower($kw)
-                       OR toLower(coalesce(n.content, '')) CONTAINS toLower($kw)
+                    WHERE (
+                         toLower(coalesce(n.name, '')) CONTAINS toLower($kw)
+                      OR toLower(coalesce(n.title, '')) CONTAINS toLower($kw)
+                      OR toLower(coalesce(n.heading, '')) CONTAINS toLower($kw)
+                      OR toLower(coalesce(n.description, '')) CONTAINS toLower($kw)
+                      OR toLower(coalesce(n.summary, '')) CONTAINS toLower($kw)
+                      OR toLower(coalesce(n.content, '')) CONTAINS toLower($kw)
+                    )
+                    AND (
+                      $unrestricted
+                      OR (n:KnowledgeDocument AND {neo4j_document_access_where('n')})
+                      OR (n:DocumentChunk AND EXISTS {{
+                        MATCH (d:KnowledgeDocument)-[:HAS_CHUNK]->(n)
+                        WHERE {neo4j_document_access_where('d')}
+                      }})
+                      OR (n:KnowledgeEntity AND EXISTS {{
+                        MATCH (d:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                              -[:MENTIONS]->(n)
+                        WHERE {neo4j_document_access_where('d')}
+                      }})
+                    )
                     RETURN labels(n)[0] AS label,
                            coalesce(n.name, n.title, n.heading, n.id, n.chunkId) AS name,
                            coalesce(n.id, n.chunkId, n.name) AS id,
@@ -446,6 +582,7 @@ class GraphBuildService:
                     """,
                     kw=kw,
                     limit=cap,
+                    **neo4j_access_params(scope),
                 )
                 records = await result.data()
             except Exception as err:
@@ -474,12 +611,18 @@ class GraphBuildService:
         from_time: str | None = None,
         to_time: str | None = None,
         doc_limit: int | None = None,
+        scope: DocumentAccessScope | None = None,
     ) -> dict[str, Any]:
         """全景图：文档 + 被提及实体 + 标签 + 统计（对应 TS getOverview）。
 
         不含 chunk（块太碎，不适合画布）。文档→实体为「提及」，
         实体→实体为 RELATED_TO 上的 relation，文档→标签为「标注」。
         Neo4j 不可用或查询失败时返回空结构（不抛错）。
+
+        可见性：**全部口径都按「当前用户可见的文档」计算** —— 文档数 / 实体数 /
+        RELATED_TO 边数 / 提及次数、type 分布、Top 实体、最近文档、主查询、关键词
+        补充查询，逐条 Cypher 都带 neo4j_document_access_where。scope=None 表示
+        不过滤（对齐 TS `scope?`），API 端点必须传 access_from_user(user)。
 
         刻意差异：参数名 from_time/to_time —— from 是 Python 保留字；
         HTTP 查询参数仍叫 from/to（API 层用 alias 对齐 TS）。
@@ -511,25 +654,44 @@ class GraphBuildService:
         date_to = (to_time or "").strip() or None
         # 默认 24，夹取 1..80（对齐 TS Math.min(Math.max(params.docLimit ?? 24, 1), 80)）
         limit = min(max(doc_limit if doc_limit is not None else 24, 1), 80)
+        # 可见性参数（$unrestricted / $accessUserId / $accessTeamIds）
+        vis = neo4j_access_params(scope)
 
         try:
             async with self._driver.session() as session:
-                # 全库统计：文档数、实体数、RELATED_TO 边数、MENTIONS 提及次数
-                # （分段 WITH 避免笛卡尔积）
+                # 统计口径：文档数、实体数、RELATED_TO 边数、MENTIONS 提及次数
+                # **均按当前用户可见的文档计算**（分段 WITH 避免笛卡尔积）
                 stats_records = await (
                     await session.run(
-                        """
+                        f"""
                         OPTIONAL MATCH (d:KnowledgeDocument)
+                        WHERE {neo4j_document_access_where('d')}
                         WITH count(d) AS documentCount
-                        OPTIONAL MATCH (e:KnowledgeEntity)
-                        WITH documentCount, count(e) AS entityCount
-                        OPTIONAL MATCH ()-[rel:RELATED_TO]->()
+                        OPTIONAL MATCH (d2:KnowledgeDocument)-[:HAS_CHUNK]
+                            ->(:DocumentChunk)-[:MENTIONS]->(e:KnowledgeEntity)
+                        WHERE {neo4j_document_access_where('d2')}
+                        WITH documentCount, count(DISTINCT e) AS entityCount
+                        OPTIONAL MATCH (a:KnowledgeEntity)-[rel:RELATED_TO]->(b:KnowledgeEntity)
+                        WHERE $unrestricted OR (
+                          EXISTS {{
+                            MATCH (d3:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                                  -[:MENTIONS]->(a)
+                            WHERE {neo4j_document_access_where('d3')}
+                          }}
+                          AND EXISTS {{
+                            MATCH (d4:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                                  -[:MENTIONS]->(b)
+                            WHERE {neo4j_document_access_where('d4')}
+                          }}
+                        )
                         WITH documentCount, entityCount, count(rel) AS relatedCount
-                        OPTIONAL MATCH (:KnowledgeDocument)-[:HAS_CHUNK]
+                        OPTIONAL MATCH (d5:KnowledgeDocument)-[:HAS_CHUNK]
                             ->(:DocumentChunk)-[:MENTIONS]->(e0:KnowledgeEntity)
+                        WHERE {neo4j_document_access_where('d5')}
                         RETURN documentCount, entityCount, relatedCount,
                                count(e0) AS mentionCount
-                        """
+                        """,
+                        **vis,
                     )
                 ).data()
                 stats_row = stats_records[0] if stats_records else {}
@@ -538,15 +700,18 @@ class GraphBuildService:
                 related_count = int(_to_number(stats_row.get("relatedCount"), 0))
                 mention_count = int(_to_number(stats_row.get("mentionCount"), 0))
 
-                # 按实体 type 分组计数，供前端筛选
+                # 按实体 type 分组计数，供前端筛选（只统计可见文档提及的实体）
                 type_rows = await (
                     await session.run(
-                        """
-                        MATCH (e:KnowledgeEntity)
-                        WHERE e.type IS NOT NULL AND e.type <> ''
-                        RETURN e.type AS type, count(*) AS count
+                        f"""
+                        MATCH (d:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                              -[:MENTIONS]->(e:KnowledgeEntity)
+                        WHERE {neo4j_document_access_where('d')}
+                          AND e.type IS NOT NULL AND e.type <> ''
+                        RETURN e.type AS type, count(DISTINCT e) AS count
                         ORDER BY count DESC
-                        """
+                        """,
+                        **vis,
                     )
                 ).data()
                 entity_types = [
@@ -557,15 +722,18 @@ class GraphBuildService:
                     for row in type_rows
                 ]
 
-                # 被文档块 MENTIONS 最多的 5 个实体（degree = 提及次数）
+                # 被文档块 MENTIONS 最多的 5 个实体（degree = 提及次数，限可见文档）
                 top_rows = await (
                     await session.run(
-                        """
+                        f"""
                         MATCH (e:KnowledgeEntity)<-[:MENTIONS]-(:DocumentChunk)
+                              <-[:HAS_CHUNK]-(d:KnowledgeDocument)
+                        WHERE {neo4j_document_access_where('d')}
                         RETURN e.name AS name, e.type AS type, count(*) AS degree
                         ORDER BY degree DESC
                         LIMIT 5
-                        """
+                        """,
+                        **vis,
                     )
                 ).data()
                 top_entities = [
@@ -577,15 +745,17 @@ class GraphBuildService:
                     for row in top_rows
                 ]
 
-                # 最近更新的 8 篇文档（不受 keyword / 时间 / 类型过滤）
+                # 最近更新的 8 篇文档（不受 keyword / 时间 / 类型过滤，但受可见性约束）
                 recent_rows = await (
                     await session.run(
-                        """
+                        f"""
                         MATCH (d:KnowledgeDocument)
+                        WHERE {neo4j_document_access_where('d')}
                         RETURN d.id AS id, d.title AS name, d.updatedAt AS updatedAt
                         ORDER BY d.updatedAt DESC
                         LIMIT 8
-                        """
+                        """,
+                        **vis,
                     )
                 ).data()
                 recent_nodes = [
@@ -599,19 +769,21 @@ class GraphBuildService:
                 ]
 
                 # 主查询：按标题/摘要/标签 + 时间筛文档，LIMIT 后挂上 MENTIONS 实体
-                #（可按 entityType 再筛）
+                #（可按 entityType 再筛）；可见性条件与上面各统计口径同一条
                 main_params: dict[str, Any] = {
                     "kw": kw,
                     "entityType": etype,
                     "from": date_from,
                     "to": date_to,
                     "docLimit": limit,
+                    **vis,
                 }
                 main_records = await (
                     await session.run(
-                        """
+                        f"""
                         MATCH (d:KnowledgeDocument)
-                        WHERE ($kw = '' OR toLower(coalesce(d.title, '')) CONTAINS toLower($kw)
+                        WHERE {neo4j_document_access_where('d')}
+                          AND ($kw = '' OR toLower(coalesce(d.title, '')) CONTAINS toLower($kw)
                               OR toLower(coalesce(d.summary, '')) CONTAINS toLower($kw)
                               OR toLower(coalesce(d.tags, '')) CONTAINS toLower($kw))
                           AND ($from IS NULL OR d.updatedAt >= $from)
@@ -622,9 +794,9 @@ class GraphBuildService:
                         WHERE $entityType IS NULL OR e.type = $entityType
                         RETURN d.id AS docId, d.title AS docTitle, d.summary AS summary,
                                d.tags AS tags, d.updatedAt AS updatedAt,
-                               collect(DISTINCT CASE WHEN e IS NULL THEN NULL ELSE {
+                               collect(DISTINCT CASE WHEN e IS NULL THEN NULL ELSE {{
                                  name: e.name, type: e.type, description: e.description
-                               } END) AS entities
+                               }} END) AS entities
                         """,
                         main_params,
                     )
@@ -639,15 +811,17 @@ class GraphBuildService:
                         "from": date_from,
                         "to": date_to,
                         "docLimit": limit,
+                        **vis,
                     }
                     extra_records = await (
                         await session.run(
-                            """
+                            f"""
                             MATCH (e:KnowledgeEntity)
                               <-[:MENTIONS]-(:DocumentChunk)
                               <-[:HAS_CHUNK]-(d:KnowledgeDocument)
-                            WHERE toLower(coalesce(e.name, '')) CONTAINS toLower($kw)
-                               OR toLower(coalesce(e.description, '')) CONTAINS toLower($kw)
+                            WHERE {neo4j_document_access_where('d')}
+                              AND (toLower(coalesce(e.name, '')) CONTAINS toLower($kw)
+                               OR toLower(coalesce(e.description, '')) CONTAINS toLower($kw))
                             WITH DISTINCT d
                             WHERE ($from IS NULL OR d.updatedAt >= $from)
                               AND ($to IS NULL OR d.updatedAt <= $to)
@@ -657,9 +831,9 @@ class GraphBuildService:
                             RETURN d.id AS docId, d.title AS docTitle,
                                    d.summary AS summary, d.tags AS tags,
                                    d.updatedAt AS updatedAt,
-                                   collect(DISTINCT CASE WHEN e2 IS NULL THEN NULL ELSE {
+                                   collect(DISTINCT CASE WHEN e2 IS NULL THEN NULL ELSE {{
                                      name: e2.name, type: e2.type, description: e2.description
-                                   } END) AS entities
+                                   }} END) AS entities
                             LIMIT $docLimit
                             """,
                             extra_params,

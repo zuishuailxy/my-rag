@@ -8,25 +8,32 @@
 
 ADMIN / REVIEWER 视为不受限（unrestricted），不加任何过滤。
 
-本模块只做「纯函数」判定与 ES 过滤条件构造，不查库、不依赖 ORM 会话：
+本模块只做「纯函数」判定与查询条件构造，不查库、不依赖 ORM 会话 / Neo4j driver：
   - access_from_user：AuthUser → DocumentAccessScope（检索链路入口）
   - can_read_document：单篇文档判权（详情接口等复用）
   - es_visibility_filter：ES filter 子句（只筛不打分，kh_chunk / kh_document 共用）
   - wrap_es_query：把相关性查询放 must、可见性放 filter
+  - neo4j_access_params / neo4j_document_access_where：KG（Neo4j）查询侧可见性
+    参数与 Cypher 片段，供 services/graph_build.py 的四个查询方法拼接
 
 两种 ES 索引的字段名不同，由调用方选常量：
   - kh_chunk（块级，snake_case）：CHUNK_VISIBILITY_FIELDS —— services/search.py 关键词通道
   - kh_document（文档级，camelCase）：DOC_VISIBILITY_FIELDS —— services/search_index.py 全文检索
 
+Neo4j 侧字段名与 TS 一致（文档节点属性是 camelCase：authorId / isPublic / teamId），
+由 neo4j_document_access_where 内的字符串字面量固定，不走 ES 那套常量表。
+
 刻意差异（相对 TS）：
   - 本项目向量在 PG doc_chunk（TS 在 ES dense_vector），故向量通道的可见性用
     JOIN kh_document 在 SQL 侧过滤，见 services/search.py 的 _vector_recall；
     本模块负责 ES 侧的 filter（kh_chunk 关键词通道 + kh_document 全文检索）。
-  - TS 的 neo4jAccessParams / neo4jDocumentAccessWhere（KG 查询侧可见性）本次未移植，
-    待 KG 查询侧单独一轮实现，见检索可见性任务的后续计划。
+  - KG 侧的可见性（TS neo4jAccessParams / neo4jDocumentAccessWhere）已补齐：
+    写入侧文档节点落 authorId / teamId / isPublic（services/graph_build.py），
+    查询侧四个方法逐条 Cypher 都带 neo4j_document_access_where，本模块提供两个纯函数。
 """
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.common.roles import RoleCode
 from app.models.document_status import DocumentStatus
@@ -40,6 +47,8 @@ __all__ = [
     "can_read_document",
     "empty_scope",
     "es_visibility_filter",
+    "neo4j_access_params",
+    "neo4j_document_access_where",
     "wrap_es_query",
 ]
 
@@ -158,3 +167,46 @@ def wrap_es_query(
     if not visibility_filter:
         return query
     return {"bool": {"must": [query], "filter": [visibility_filter]}}
+
+
+# ------------------------------------------------------------------ Neo4j（KG）
+
+
+def neo4j_access_params(scope: DocumentAccessScope | None) -> dict[str, Any]:
+    """Neo4j 查询参数（对应 TS neo4jAccessParams）
+
+    返回 Cypher 里要用的三个参数（名字与 TS 完全一致，Cypher 片段里直接引用）：
+      - $unrestricted：True 时可见性条件短路（管理员 / 审核员）
+      - $accessUserId：当前用户 ID（空串匹配不到任何 authorId）
+      - $accessTeamIds：所在团队 ID 列表（空列表时 IN 恒不命中）
+
+    ⚠️ scope 为 None 时 unrestricted=True —— 即「**不传 scope = 不过滤**」，
+    这是刻意对齐 TS 的 `unrestricted: !scope || scope.unrestricted`，
+    与 es_visibility_filter / search_documents(scope=None) 的 None 语义保持一致。
+    因此生产链路（api/v1/graph.py 四个端点）**必须**传 access_from_user(user)，
+    否则等于放开全部可见性；脚本 / 内部调用若确需全库视图才可省略。
+    """
+    if scope is None:
+        return {"unrestricted": True, "accessUserId": "", "accessTeamIds": []}
+    return {
+        "unrestricted": scope.unrestricted,
+        "accessUserId": scope.user_id,
+        "accessTeamIds": list(scope.team_ids),
+    }
+
+
+def neo4j_document_access_where(alias: str = "d") -> str:
+    """Cypher 片段：别名 alias 的文档节点是否对当前用户可见（对应 TS neo4jDocumentAccessWhere）
+
+    四个条件与 ES 侧 es_visibility_filter 同口径（作者 / 公开 / 团队 + 不受限短路）：
+        ($unrestricted OR {alias}.authorId = $accessUserId
+         OR {alias}.isPublic = true OR {alias}.teamId IN $accessTeamIds)
+
+    调用方必须把 neo4j_access_params(scope) 一并作为查询参数传入，否则 $unrestricted
+    等占位符无值会直接报错（Neo4j 缺参会抛，不会静默放行）。
+    文档节点属性名沿用 TS 的 camelCase（authorId / isPublic / teamId）。
+    """
+    return (
+        f"($unrestricted OR {alias}.authorId = $accessUserId "
+        f"OR {alias}.isPublic = true OR {alias}.teamId IN $accessTeamIds)"
+    )

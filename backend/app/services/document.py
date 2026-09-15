@@ -34,6 +34,7 @@ from app.schemas.document import (
 from app.services.document_review import document_review_service
 from app.services.es_index import es_chunk_index_service
 from app.services.file_parser import file_parser_service
+from app.services.graph_build import graph_build_service
 from app.services.pipeline_publisher import pipeline_publisher
 from app.services.rustfs import rustfs_service
 from app.services.search_index import search_index_service
@@ -711,13 +712,15 @@ class DocumentService:
         - Published → 非 Published：清索引
         - 仍为 Published 且正文变了：免审模式重建索引；需审核模式等再次发布 / 审核通过
         - 仍为 Published、正文没变但可见性变了（is_public / team_id / author_id）：
-          就地更新 chunk（kh_chunk）与文档级（kh_document）两处可见性字段，
-          不必重新分块 / 重新嵌入 / 重新拉全文
-          （对应 TS VectorIndexService.updateVisibility 的调用场景）。
+          就地更新三处索引的可见性字段 —— chunk（ES kh_chunk）、文档级
+          （ES kh_document）、图谱文档节点（Neo4j KnowledgeDocument），
+          不必重新分块 / 重新嵌入 / 重新拉全文 / 重新抽实体建图
+          （对应 TS PipelineOrchestrator.updateVisibility 的三路 Promise.all）。
 
-        为什么必须处理可见性变更：检索可见性靠 ES 上的 is_public/team_id/author_id
-        过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索或
-        文档级全文检索（POST /search）命中其内容 / 标题摘要。
+        为什么必须处理可见性变更：检索可见性靠索引上的 is_public/team_id/author_id
+        过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索、
+        文档级全文检索（POST /search）或图谱四个端点（/graph/*）命中其内容 /
+        标题摘要 / 提及实体。
         （PG 向量侧按 JOIN kh_document 实时取，不受此影响，但仍一并更新保持两侧一致。）
         """
         was_published = old_status == DocumentStatus.PUBLISHED
@@ -733,12 +736,20 @@ class DocumentService:
             return
 
         if is_published and visibility_changed:
-            # 两个 ES 索引的字段风格不同（chunk 用 snake_case、document 用 camelCase），
-            # 各自有 update_visibility 实现；都失败只记日志，不阻断文档更新
+            # 三套索引的字段风格不同（chunk 用 snake_case、document 用 camelCase、
+            # Neo4j 文档节点用 authorId/isPublic/teamId），各自有 update_visibility
+            # 实现；任一失败只记日志，不阻断文档更新。
+            #
+            # 刻意差异：TS 由 PipelineOrchestrator.updateVisibility 统一 Promise.all
+            # 三处调用，本项目沿用「document.py 直接调具体服务」的既有结构（编排器
+            # 只负责 MQ 消费侧的建索引），此处顺序 await 三处，语义等价。
             await es_chunk_index_service.update_visibility(
                 doc.id, doc.is_public, doc.team_id, doc.author_id
             )
             await search_index_service.update_visibility(
+                doc.id, doc.is_public, doc.team_id, doc.author_id
+            )
+            await graph_build_service.update_visibility(
                 doc.id, doc.is_public, doc.team_id, doc.author_id
             )
 
