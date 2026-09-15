@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.bigint import parse_bigint, require_bigint
+from app.common.document_access import DocumentAccessScope, can_read_document
 from app.common.snowflake import next_snowflake_id
 from app.db.mongo import get_document_content_collection
 from app.models.document import DocumentEntity, DocumentStatus
@@ -225,16 +226,67 @@ class DocumentService:
 
     # -------------------------------------------------------------- find_all
 
-    async def find_all(self, session: AsyncSession, query: DocumentQuery) -> dict:
+    async def find_all(
+        self,
+        session: AsyncSession,
+        query: DocumentQuery,
+        scope: DocumentAccessScope | None = None,
+    ) -> dict:
         """分页查询文档列表（仅元数据，不含正文）
 
         支持按标题模糊、分类 / 团队 / 作者 / 状态筛选；默认排除已软删记录。
+
+        可见性（对应 TS findAll 的 `const scope = accessFromUser(user)` 分支）：
+        普通用户只能看到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」：
+          - 不受限（ADMIN / REVIEWER）：不加任何可见性条件，与原先行为一致
+          - 有团队：author_id = 我
+                    OR (status = 已发布 AND (is_public = true OR team_id ∈ 我的团队))
+          - 无团队：author_id = 我 OR (status = 已发布 AND is_public = true)
+        「自己写的」分支**不限制 status** —— 自己的草稿 / 待审 / 已归档都要能在列表里
+        看到（对齐 TS）；他人的未发布文档一律不可见。
+
+        ⚠️ scope=None 表示**不加可见性过滤**（与 search_documents(scope=None) /
+        hybrid_search(scope=None) / KG 查询侧 scope=None 同一约定）。因此生产链路
+        （api/v1/document.py 的 GET /documents）**必须**传 access_from_user(user)，
+        漏传即等于把全库文档列表暴露给任何登录用户；脚本 / 内部调用才可省略。
         """
         page = query.page
         page_size = query.page_size
 
         # 显式标注 ColumnElement[bool]：is_()/ilike()/== 等返回类型不同，统一用公共父类
         conditions: list[ColumnElement[bool]] = [DocumentEntity.deleted.is_(False)]
+
+        # —— 可见性过滤（必须排在用户筛选条件之前，两者是 AND 关系）——
+        if scope is not None and not scope.unrestricted:
+            # JWT 里的 userId / teamIds 一定是合法雪花 ID；这里仍用宽松解析，
+            # 非法值只影响「自己 / 团队」分支的命中（不抛 400，因为不是客户端输入）
+            me = parse_bigint(scope.user_id)
+            team_ids = [
+                pk
+                for pk in (parse_bigint(team_id) for team_id in scope.team_ids)
+                if pk is not None
+            ]
+            # 公开 ∪ 所在团队；无团队时退化为只判公开（对齐 TS 的 if/else 两分支）
+            visible_to_others = (
+                or_(
+                    DocumentEntity.is_public.is_(True),
+                    DocumentEntity.team_id.in_(team_ids),
+                )
+                if team_ids
+                else DocumentEntity.is_public.is_(True)
+            )
+            conditions.append(
+                or_(
+                    # 自己的文档：不限状态；userId 非法（None）时该分支恒假
+                    DocumentEntity.author_id == me if me is not None else false(),
+                    # 他人的文档：必须已发布，且公开或属于我的团队
+                    and_(
+                        DocumentEntity.status == DocumentStatus.PUBLISHED,
+                        visible_to_others,
+                    ),
+                )
+            )
+
         if query.title:
             conditions.append(DocumentEntity.title.ilike(f"%{query.title}%"))
         # 用真值判断（与 title 一致、也与 TS 的 `if (categoryId)` 一致）：
@@ -278,10 +330,24 @@ class DocumentService:
     # --------------------------------------------------------------- find_one
 
     async def find_one(
-        self, session: AsyncSession, doc_id: str, with_content: bool = True
+        self,
+        session: AsyncSession,
+        doc_id: str,
+        with_content: bool = True,
+        scope: DocumentAccessScope | None = None,
     ) -> dict:
-        """查询文档详情（默认附带 Mongo 正文）"""
+        """查询文档详情（默认附带 Mongo 正文）
+
+        可见性：scope 非空时按 can_read_document 判权，读不到抛 403「无权查看该文档」
+        （对应 TS `findOne(id, true, user)` 里的 `if (user && !canReadDocument(...))`）。
+
+        scope=None 表示不判权 —— 与 TS 的 `user?: AuthUser` 可选签名一致，仅供脚本 /
+        内部调用；HTTP 端点（GET /documents/{id}）**必须**传 access_from_user(user)，
+        否则列表过滤形同虚设（拿到 id 就能直读他人未发布文档）。
+        """
         entity = await self._get_active(session, doc_id)
+        if scope is not None and not can_read_document(entity, scope):
+            raise HTTPException(status_code=403, detail="无权查看该文档")
         if not with_content:
             return document_to_dict(entity)
         return {

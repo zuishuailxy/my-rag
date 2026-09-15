@@ -44,6 +44,12 @@
   create / upload-parse 回填 authorId、createBy；update 回填 updateBy；
   approve / reject 取审核人 userId 与 `realName ?? username`。
   审核人**不从请求体取**（TS ReviewDecisionDto 只有 reviewComment）。
+
+可见性（权限码之外的「看得到哪些文档」，对应 TS document-access.ts）：
+- GET /documents     普通用户只看「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」
+- GET /documents/{id} 同上判权，读不到抛 403
+两者都传 access_from_user(current_user)；ADMIN / REVIEWER 不受限。
+⚠️ 服务层的 scope=None 表示不过滤，端点漏传即等于放开可见性。
 """
 
 from fastapi import Depends, File, Form, HTTPException, Query, UploadFile
@@ -52,6 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth_route import auth_router, roles
 from app.api.deps import get_current_user
 from app.api.permission_guard import require_permission
+from app.common.document_access import access_from_user
 from app.common.roles import RoleCode
 from app.db.session import get_db_session
 from app.schemas.auth import AuthUser
@@ -240,10 +247,16 @@ async def find_all_documents(
     page_size: int = Query(
         default=20, ge=1, le=100, alias="pageSize", description="每页条数"
     ),
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentListResponse:
-    """按标题模糊 / 分类 / 团队 / 作者 / 状态筛选，created_at 倒序分页"""
+    """按标题模糊 / 分类 / 团队 / 作者 / 状态筛选，created_at 倒序分页
+
+    普通用户只看得到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」
+    （对应 TS `findAll(query, user)` 里的 accessFromUser 分支）；
+    ADMIN / REVIEWER 不受限。可见性条件与上方筛选条件是 AND 关系。
+    """
     query = DocumentQuery(
         title=title,
         category_id=category_id,
@@ -253,7 +266,9 @@ async def find_all_documents(
         page=page,
         page_size=page_size,
     )
-    return DocumentListResponse.model_validate(await service.find_all(session, query))
+    return DocumentListResponse.model_validate(
+        await service.find_all(session, query, access_from_user(current_user))
+    )
 
 
 @router.post(
@@ -455,11 +470,18 @@ async def reject_review(
 )
 async def find_one_document(
     doc_id: str,
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    """查询文档详情，附带 Mongo 正文"""
-    return DocumentResponse.model_validate(await service.find_one(session, doc_id))
+    """查询文档详情，附带 Mongo 正文
+
+    读不到（他人未发布 / 非公开且非本团队）抛 403「无权查看该文档」
+    （对应 TS `findOne(id, true, user)` 的 canReadDocument 检查）。
+    """
+    return DocumentResponse.model_validate(
+        await service.find_one(session, doc_id, scope=access_from_user(current_user))
+    )
 
 
 @router.patch(
