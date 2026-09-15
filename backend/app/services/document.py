@@ -15,7 +15,11 @@ from sqlalchemy import ColumnElement, and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.bigint import parse_bigint, require_bigint
-from app.common.document_access import DocumentAccessScope, can_read_document
+from app.common.document_access import (
+    DocumentAccessScope,
+    can_read_document,
+    can_write_document,
+)
 from app.common.snowflake import next_snowflake_id
 from app.db.mongo import get_document_content_collection
 from app.models.document import DocumentEntity, DocumentStatus
@@ -109,21 +113,21 @@ class DocumentService:
         self,
         session: AsyncSession,
         dto: DocumentCreate,
-        actor: AuthUser | None = None,
+        actor: AuthUser,
     ) -> dict:
         """创建文档：生成雪花 ID → 写 Mongo 正文（拿 ObjectId）→ 写 Postgres 元数据
 
-        actor 为当前登录用户（TS `create(dto, user)` 的 @CurrentUser()）：
+        actor 为当前登录用户（TS `create(dto, user)` 的 @CurrentUser()，**必传**）：
 
-        - authorId / createBy：DTO 未显式传时回退为 actor.userId（TS `?? actor?.userId`）
-        - updateBy：恒为 actor.userId，不跟随 createBy。TS 原文写的是
-          `updateBy: dto.createBy ?? actor?.userId`（已确认为笔误，正确写法是
-          `dto.updateBy ?? actor?.userId`）；而 CreateDocumentDto 并没有 updateBy 字段
-          （TS 里写 dto.updateBy 编译不过，这大概正是原作者顺手取 createBy 的原因），
-          该表达式退化为 `actor?.userId`，故此处不新增可写的 updateBy 字段，
-          避免客户端在创建时就伪造「最后修改人」。
-          副作用（刻意为之）：导入场景显式传 createBy=原作者时，updateBy 记的是
-          实际执行导入的操作者，而不是被复制成原作者。
+        authorId / createBy / updateBy 三者**恒为 actor.userId**，一律不读 DTO
+        （TS 原文：`authorId: actor.userId` / `createBy: actor.userId` /
+        `updateBy: actor.userId`）。CreateDocumentDto 里虽有 authorId / createBy 字段，
+        但服务层忽略 → 客户端无法在创建时伪造作者、创建人或「最后修改人」。
+        ⚠️ 刻意差异说明：TS 的 updateBy 那行原文写作 `dto.createBy ?? actor?.userId`，
+        经核对为笔误（CreateDocumentDto 无 updateBy 字段，写 `dto.updateBy` 编译不过），
+        实际效果等价 `actor.userId`，此处按效果对齐。
+        副作用（刻意为之）：导入场景显式传 createBy=原作者时，createBy / updateBy
+        记的都是实际执行导入的操作者，不会被复制成原作者。
 
         Postgres 写入失败时回滚删除已写入的 Mongo 正文，避免脏数据。
         """
@@ -160,10 +164,11 @@ class DocumentService:
         # DTO 未传 authorId / createBy 时回退当前登录用户（TS `?? actor?.userId`）。
         # update_by 单独取 actor（见 docstring：TS `dto.createBy ?? actor?.userId` 是笔误，
         # 已确认应为 `dto.updateBy ?? actor?.userId`，而 CreateDocumentDto 无 updateBy）。
-        actor_id = actor.user_id if actor is not None else None
-        create_by = require_bigint(
-            dto.create_by if dto.create_by is not None else actor_id, "createBy"
-        )
+        actor_id = actor.user_id
+        # createBy / updateBy 均恒取当前登录用户（TS `createBy: actor.userId` /
+        # `updateBy: actor.userId`，两者都不读 DTO）—— 不读 dto.createBy，
+        # 否则客户端可在创建时伪造「创建人」。
+        create_by = require_bigint(actor_id, "createBy")
         update_by = require_bigint(actor_id, "updateBy")
         category_id = require_bigint(dto.category_id, "categoryId")
         team_id = require_bigint(dto.team_id, "teamId")
@@ -362,7 +367,7 @@ class DocumentService:
         session: AsyncSession,
         doc_id: str,
         dto: DocumentUpdate,
-        actor: AuthUser | None = None,
+        actor: AuthUser,
     ) -> dict:
         """更新文档
 
@@ -373,14 +378,20 @@ class DocumentService:
         - PATCH 不允许随意改 status；仅兼容 Published→Draft
         - 提交后按状态变化同步 RAG / Search / KG
 
-        actor 为当前登录用户（TS `update(id, dto, user)`）：DTO 未传 updateBy 时
-        回退为 actor.userId（TS `else if (actor?.userId) doc.updateBy = actor.userId`）。
+        actor 为当前登录用户（TS `update(id, dto, user)`）：`updateBy` 恒记 actor.userId、
+        **不读 dto.updateBy**；`author_id` **不可改**（TS 同样不读 dto.authorId）。
+        两者都为了让客户端无法伪造归属 / 审计人（DTO 字段仍在，服务层忽略）。
+
+        写权：ADMIN 或作者本人，否则 403「无权修改该文档」
+        （对应 TS `this.assertWritable(doc, actor)`，位置在取到实体之后、状态校验之前）。
         """
         entity = await self._get_active(session, doc_id)
+        self._assert_writable(entity, actor)
         coll = get_document_content_collection()
         old_status = _as_status(entity.status)
-        # 可见性变更检测用（is_public / team_id / author_id 任一变化 → 已发布文档需同步 chunk 可见性）
-        old_visibility = (entity.is_public, entity.team_id, entity.author_id)
+        # 可见性变更检测用（TS 只比 isPublic / teamId —— **不含作者**：
+        # PATCH 已不允许改 author_id，故无需把作者纳入比较）
+        old_visibility = (entity.is_public, entity.team_id)
 
         # —— 状态与编辑权限（待审核中不可改标题 / 正文）——
         if old_status == DocumentStatus.PENDING_REVIEW:
@@ -396,8 +407,10 @@ class DocumentService:
         # 空串保持「清空该字段」语义（与改动前一致）。
         new_category_id = require_bigint(dto.category_id, "categoryId")
         new_team_id = require_bigint(dto.team_id, "teamId")
-        new_author_id = require_bigint(dto.author_id, "authorId")
-        new_update_by = require_bigint(dto.update_by, "updateBy")
+        # ⚠️ 刻意差异：TS 的 UpdateDocumentDto 经 PartialType 带 authorId、另手动加 updateBy，
+        # 但 `update` **两个都不读**（恒 `doc.updateBy = actor.userId`）。此处同样不读 ——
+        # 否则客户端可借 PATCH 改文档归属、伪造「最后修改人」。DTO 字段保留（与 TS 结构一致），
+        # 只是服务层忽略。
 
         # PATCH 不允许随意改 status；仅兼容 Published→Draft，其余走专用接口
         if dto.status is not None and dto.status != old_status:
@@ -458,8 +471,6 @@ class DocumentService:
             entity.category_id = new_category_id
         if dto.team_id is not None:
             entity.team_id = new_team_id
-        if dto.author_id is not None:
-            entity.author_id = new_author_id
         if dto.cover_image is not None:
             entity.cover_image = dto.cover_image
         if dto.tags is not None:
@@ -468,11 +479,8 @@ class DocumentService:
             entity.remark = dto.remark
         if dto.is_public is not None:
             entity.is_public = dto.is_public
-        if dto.update_by is not None:
-            entity.update_by = new_update_by
-        elif actor is not None and actor.user_id:
-            # DTO 未传 updateBy → 记当前登录用户（TS `else if (actor?.userId)`）
-            entity.update_by = require_bigint(actor.user_id, "updateBy")
+        # 无条件记当前登录用户（TS `doc.updateBy = actor.userId`，不读 dto.updateBy）
+        entity.update_by = require_bigint(actor.user_id, "updateBy")
 
         await session.commit()
         await session.refresh(entity)
@@ -492,29 +500,29 @@ class DocumentService:
             _as_status(entity.status),
             content_changed,
             final_content,
-            visibility_changed=old_visibility
-            != (entity.is_public, entity.team_id, entity.author_id),
+            visibility_changed=old_visibility != (entity.is_public, entity.team_id),
         )
 
         return {**document_to_dict(entity), "content": final_content}
 
     # ----------------------------------------------------------------- remove
 
-    async def remove(
-        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
-    ) -> dict:
+    async def remove(self, session: AsyncSession, doc_id: str, actor: AuthUser) -> dict:
         """软删除文档：Postgres、Mongo 两侧都将 deleted 置为 true（不物理删正文），
-        并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）"""
+        并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）
+
+        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        """
         entity = await self._get_active(session, doc_id)
+        self._assert_writable(entity, actor)
 
         if _as_status(entity.status) == DocumentStatus.PUBLISHED:
             # 仅已发布需要清索引；草稿 / 待审 / 归档删除时不投递 unpublish
             await self._safe_unpublish(doc_id)
 
         entity.deleted = True
-        if actor is not None and actor.user_id:
-            # TS remove：`doc.updateBy = actor.userId;`
-            entity.update_by = require_bigint(actor.user_id, "updateBy")
+        # TS remove：`doc.updateBy = actor.userId;`（actor 必传，无 ?. 可选链）
+        entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await get_document_content_collection().update_one(
             {"_id": ObjectId(entity.content_id)},
@@ -531,7 +539,7 @@ class DocumentService:
         filename: str,
         content_type: str | None,
         meta: UploadParseDto,
-        actor: AuthUser | None = None,
+        actor: AuthUser,
     ) -> dict:
         """上传并解析文件 → 创建草稿文档
 
@@ -611,12 +619,13 @@ class DocumentService:
                 content=parsed_content,
                 category_id=meta.category_id,
                 team_id=meta.team_id,
-                author_id=meta.author_id,
                 tags=meta.tags,
                 remark=meta.remark,
-                create_by=meta.create_by,
                 is_public=meta.is_public,
                 status=DocumentStatus.DRAFT,
+                # 刻意不传 meta.authorId / meta.createBy：TS 的 uploadAndCreateDocument
+                # 也没传这两个（CreateDocumentDto 有此字段但 create 一律忽略），
+                # 作者 / 创建人恒取当前登录用户。
             ),
             actor,
         )
@@ -660,17 +669,18 @@ class DocumentService:
 
     # --------------------------------------------------------------- publish
 
-    async def publish(
-        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
-    ) -> dict:
+    async def publish(self, session: AsyncSession, doc_id: str, actor: AuthUser) -> dict:
         """发布文档
 
         - 需审核：Draft / Published → PendingReview（不建索引）
         - 免审：Draft / Published / Archived → Published + 建索引
+
+        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
         """
         logger.info("发布文档：documentId=%s", doc_id)
 
         entity = await self._get_active(session, doc_id)
+        self._assert_writable(entity, actor)
         status = _as_status(entity.status)
 
         if not can_publish_from(status):
@@ -685,7 +695,11 @@ class DocumentService:
         ):
             # 草稿或已发布：进入待审，不建索引；
             # 来自 Published 时 submit_for_review 内部会清旧索引
-            saved = await document_review_service.submit_for_review(session, doc_id)
+            # actor 透传（TS `this.reviewService.submitForReview(id, actor)`）：
+            # 写权已由本方法开头的 _assert_writable 拦过，此处再判一次无害且保真
+            saved = await document_review_service.submit_for_review(
+                session, doc_id, actor
+            )
             content = await self._get_content(saved.content_id)
             return {**document_to_dict(saved), "content": content}
 
@@ -721,18 +735,21 @@ class DocumentService:
     # ---------------------------------------------------------------- archive
 
     async def archive(
-        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+        self, session: AsyncSession, doc_id: str, actor: AuthUser
     ) -> dict:
-        """归档：Published → Archived，清索引"""
+        """归档：Published → Archived，清索引
+
+        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        """
         entity = await self._get_active(session, doc_id)
+        self._assert_writable(entity, actor)
 
         if not can_archive(_as_status(entity.status)):
             raise HTTPException(status_code=400, detail="只有已发布文档可以归档")
 
         entity.status = DocumentStatus.ARCHIVED
-        if actor is not None and actor.user_id:
-            # TS archive：`doc.updateBy = actor.userId;`
-            entity.update_by = require_bigint(actor.user_id, "updateBy")
+        # TS archive：`doc.updateBy = actor.userId;`（actor 必传）
+        entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
         await self._safe_unpublish(doc_id)
@@ -743,18 +760,21 @@ class DocumentService:
     # ------------------------------------------------------------ save as draft
 
     async def save_as_draft(
-        self, session: AsyncSession, doc_id: str, actor: AuthUser | None = None
+        self, session: AsyncSession, doc_id: str, actor: AuthUser
     ) -> dict:
-        """已发布 → 草稿（保存草稿），清索引"""
+        """已发布 → 草稿（保存草稿），清索引
+
+        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        """
         entity = await self._get_active(session, doc_id)
+        self._assert_writable(entity, actor)
 
         if _as_status(entity.status) != DocumentStatus.PUBLISHED:
             raise HTTPException(status_code=400, detail="只有已发布文档可以保存为草稿")
 
         entity.status = DocumentStatus.DRAFT
-        if actor is not None and actor.user_id:
-            # TS saveAsDraft：`doc.updateBy = actor.userId;`
-            entity.update_by = require_bigint(actor.user_id, "updateBy")
+        # TS saveAsDraft：`doc.updateBy = actor.userId;`（actor 必传）
+        entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
         await self._safe_unpublish(doc_id)
@@ -854,6 +874,22 @@ class DocumentService:
         if entity is None:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
         return entity
+
+    @staticmethod
+    def _assert_writable(doc: DocumentEntity, actor: AuthUser) -> None:
+        """写权校验：只有 ADMIN 或作者本人可改（对应 TS DocumentService.assertWritable）
+
+        权限码（require_permission("document:edit")）只回答「能不能用这类接口」，
+        不回答「能不能动**这一篇**」。缺了本校验，任何持 document:edit / document:delete
+        的角色（种子里的 ROLE_USER 就同时持有两者）都能改删他人文档。
+
+        REVIEWER 不在白名单：审核员走 reviews/tasks 的 approve / reject 处置他人文档，
+        不走 update / publish / archive / save-draft / remove。
+
+        越权抛 403「无权修改该文档」（TS ForbiddenException 同款文案 + 状态码）。
+        """
+        if not can_write_document(doc, actor):
+            raise HTTPException(status_code=403, detail="无权修改该文档")
 
     async def _get_content(self, content_id: str) -> str:
         """按 content_id 拉取未删除的正文（缺失或无效 ObjectId 时返回空串）"""

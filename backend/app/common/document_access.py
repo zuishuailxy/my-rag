@@ -10,7 +10,9 @@ ADMIN / REVIEWER 视为不受限（unrestricted），不加任何过滤。
 
 本模块只做「纯函数」判定与查询条件构造，不查库、不依赖 ORM 会话 / Neo4j driver：
   - access_from_user：AuthUser → DocumentAccessScope（检索链路入口）
-  - can_read_document：单篇文档判权（详情接口等复用）
+  - can_read_document：单篇文档**读权**判定（详情接口等复用）
+  - can_write_document：单篇文档**写权**判定（ADMIN 或作者本人；services/document.py
+    的 _assert_writable 复用）。与读侧不同：REVIEWER **不在**写权白名单里
   - es_visibility_filter：ES filter 子句（只筛不打分，kh_chunk / kh_document 共用）
   - wrap_es_query：把相关性查询放 must、可见性放 filter
   - neo4j_access_params / neo4j_document_access_where：KG（Neo4j）查询侧可见性
@@ -45,6 +47,7 @@ __all__ = [
     "DocumentAccessScope",
     "access_from_user",
     "can_read_document",
+    "can_write_document",
     "empty_scope",
     "es_visibility_filter",
     "neo4j_access_params",
@@ -113,6 +116,28 @@ def can_read_document(
         return True
     team_id = getattr(doc, "team_id", None)
     return team_id is not None and str(team_id) in scope.team_ids
+
+
+def can_write_document(doc: object, user: AuthUser) -> bool:
+    """单篇文档是否可写（对应 TS canWriteDocument）
+
+    **只有 ADMIN 或作者本人**可写 —— 这是与读侧（can_read_document）的关键区别：
+    读侧 ADMIN / REVIEWER 都不受限，写侧 REVIEWER **不算**，因为审核员通过审核接口
+    （approve / reject）处置他人文档，不需要、也不应该获得通用改写权。
+
+    入参是 AuthUser（与 TS `canWriteDocument(doc, user: AuthUser)` 同签名），
+    不是 DocumentAccessScope —— 此处要判的是「是不是 ADMIN」，而 scope 只有
+    `unrestricted`（ADMIN 与 REVIEWER 合并后的标志位），分辨不出 ADMIN。
+
+    判定顺序与 TS 一致：ADMIN → 作者本人（authorId 真值判断 + 字符串比较）。
+    """
+    if RoleCode.ADMIN in (user.roles or []):
+        return True
+    author_id = getattr(doc, "author_id", None)
+    if not author_id:
+        return False
+    # 雪花 ID：实体侧是 int，AuthUser 侧是 str，统一转字符串比较
+    return str(author_id) == user.user_id
 
 
 # kh_chunk 的可见性字段名（snake_case；TS ES_CHUNK_VISIBILITY_FIELDS）

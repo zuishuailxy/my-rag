@@ -17,12 +17,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.bigint import parse_bigint, require_bigint
+from app.common.document_access import can_write_document
 from app.common.snowflake import next_snowflake_id
 from app.core.config import settings
 from app.db.mongo import get_document_content_collection
 from app.models.document import DocumentEntity
 from app.models.document_review import DocumentReview, ReviewResult
 from app.models.document_status import DocumentStatus, can_submit_review
+from app.schemas.auth import AuthUser
 from app.schemas.document_review import (
     ReviewTaskItem,
     ReviewTaskListResponse,
@@ -62,15 +64,28 @@ class DocumentReviewService:
     # ------------------------------------------------------------- 提交审核
 
     async def submit_for_review(
-        self, session: AsyncSession, document_id: str
+        self,
+        session: AsyncSession,
+        document_id: str,
+        actor: AuthUser | None = None,
     ) -> DocumentEntity:
         """
         提交审核：Draft / Published → PendingReview
 
         若来自 Published，先清索引（审核期间不可检索）。
         同一文档已有待审记录时抛 400。
+
+        actor 为当前登录用户（TS `submitForReview(documentId, actor?)` —— **可选**参数，
+        与 update / remove 那批必传 actor 的写路径不同）：传了才做写权校验，
+        非 ADMIN 且非作者本人 → 403「无权提交该文档审核」；缺省则跳过，
+        与 TS `if (actor && !canWriteDocument(doc, actor))` 的短路语义一致。
+        故 HTTP 端点必须传 current_user，否则这条写路径等于不设防。
         """
         doc = await self._find_document_or_throw(session, document_id)
+
+        # 写权校验排在状态校验之前（TS 同序：canWriteDocument → canSubmitReview）
+        if actor is not None and not can_write_document(doc, actor):
+            raise HTTPException(status_code=403, detail="无权提交该文档审核")
 
         if not can_submit_review(_as_status(doc.status)):
             raise HTTPException(
@@ -93,6 +108,9 @@ class DocumentReviewService:
         await session.flush()  # 对应 TS em.save(review)
 
         doc.status = DocumentStatus.PENDING_REVIEW
+        if actor is not None and actor.user_id:
+            # TS `if (actor?.userId) doc.updateBy = actor.userId;`
+            doc.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(doc)
 

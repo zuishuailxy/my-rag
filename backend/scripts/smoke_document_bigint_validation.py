@@ -10,7 +10,9 @@ bigint ID 字段校验冒烟测试（HTTP 层）
 - 超 int64 数字串 → 400（PG BIGINT 上限，旧实现能过校验但会在 commit 时炸）
 - 合法值 → 正常生效；空串 → 保持原语义（请求体清空字段 / 查询参数不筛选）
 - 校验前置：PATCH 同时带正文与非法 ID 时，Mongo 正文不得被改动（version 不递增）
-- POST 非法 createBy 不得留下 Mongo 孤儿正文
+- POST 非法 teamId 不得留下 Mongo 孤儿正文
+- createBy / authorId / updateBy **不参与** bigint 校验：服务层一律忽略 DTO 的这三个字段
+  （作者 / 创建人 / 最后修改人恒取 JWT 用户），传非法值既不 400 也不改变落库值
 - 审核接口的审核人取自 JWT：请求体里夹带 reviewerId 一律被忽略（Pydantic extra=ignore），
   落库的 reviewerId 是当前登录用户，伪造不了
 
@@ -105,6 +107,8 @@ async def main() -> None:
             )
             show("1) POST /documents（合法 ID）", r)
             ok &= r.status_code == 201 and r.json()["categoryId"] == "1001"
+            # 请求体里的 createBy=9001 被忽略：创建人恒取 JWT 用户
+            ok &= r.json()["createBy"] == SEED_ADMIN_ID
             doc_id = r.json()["id"]
             content_oid = ObjectId(r.json()["contentId"])
             base_version = await mongo_version(content_oid)
@@ -120,22 +124,28 @@ async def main() -> None:
             show("3) PATCH teamId=abc", r)
             ok &= r.status_code == 400 and "teamId" in r.json()["detail"]
 
-            # 4) updateBy 浮点串 → 400（int() 也不接受）
+            # 4) updateBy / authorId **已不参与校验**：服务层忽略 DTO 的这两个字段
+            #    （updateBy 恒取 JWT 操作者；authorId 不可改）→ 传非法值既不 400，
+            #    也不改变落库值。这是与 TS 对齐后的刻意行为。
             r = await client.patch(f"{BASE}/{doc_id}", json={"updateBy": "12.5"})
-            show("4) PATCH updateBy=12.5", r)
-            ok &= r.status_code == 400 and "updateBy" in r.json()["detail"]
+            show("4) PATCH updateBy=12.5（DTO 字段已忽略）", r)
+            ok &= r.status_code == 200 and r.json()["updateBy"] == SEED_ADMIN_ID
 
-            # 5) authorId 超 int64 → 400（旧实现能过 int()，但 commit 时 PG 报错）
             r = await client.patch(f"{BASE}/{doc_id}", json={"authorId": OVER_INT64})
-            show("5) PATCH authorId 超 int64", r)
-            ok &= r.status_code == 400 and "authorId" in r.json()["detail"]
+            show("   PATCH authorId 超 int64（DTO 字段已忽略）", r)
+            ok &= r.status_code == 200 and r.json()["authorId"] == SEED_ADMIN_ID
+
+            # 5) categoryId 超 int64 → 400（旧实现能过 int()，但 commit 时 PG 报错）
+            r = await client.patch(f"{BASE}/{doc_id}", json={"categoryId": OVER_INT64})
+            show("5) PATCH categoryId 超 int64", r)
+            ok &= r.status_code == 400 and "categoryId" in r.json()["detail"]
 
             # 6) 校验前置：带正文 + 非法 ID → 400，且 Mongo 正文不得被改
             r = await client.patch(
                 f"{BASE}/{doc_id}",
-                json={"content": "不该被写入的新正文", "authorId": "bad"},
+                json={"content": "不该被写入的新正文", "categoryId": "bad"},
             )
-            show("6) PATCH content + 非法 authorId", r)
+            show("6) PATCH content + 非法 categoryId", r)
             ok &= r.status_code == 400
             ok &= await mongo_version(content_oid) == base_version
             r = await client.get(f"{BASE}/{doc_id}")
@@ -155,14 +165,15 @@ async def main() -> None:
             show("8) PATCH categoryId=空串（清空）", r)
             ok &= r.status_code == 200 and r.json()["categoryId"] is None
 
-            # 9) POST 非法 createBy → 400，且不留 Mongo 孤儿正文
+            # 9) POST 非法 teamId → 400，且不留 Mongo 孤儿正文
+            #    （createBy / authorId 已不参与校验：服务层忽略 DTO 的这两个字段）
             before = await get_document_content_collection().count_documents({})
             r = await client.post(
                 BASE,
-                json={"title": "不该建成", "content": "正文", "createBy": "string"},
+                json={"title": "不该建成", "content": "正文", "teamId": "string"},
             )
-            show("9) POST createBy=string", r)
-            ok &= r.status_code == 400 and "createBy" in r.json()["detail"]
+            show("9) POST teamId=string", r)
+            ok &= r.status_code == 400 and "teamId" in r.json()["detail"]
             after = await get_document_content_collection().count_documents({})
             ok &= before == after
             print(f"   → Mongo 正文数 {before} → {after}，无孤儿 ✅")

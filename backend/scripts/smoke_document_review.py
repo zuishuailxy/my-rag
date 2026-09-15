@@ -8,13 +8,18 @@
     cd backend && .venv/bin/python scripts/smoke_document_review.py
 
 测试会真实写入数据，结束时物理清理，不留脏数据。
+
+注：submit_for_review 的 actor 是**可选**参数（对应 TS `submitForReview(id, actor?)`，
+与 update / remove 那批必传 actor 的写路径不同）：传了才做写权校验（ADMIN 或作者本人），
+缺省跳过 —— 与 TS `if (actor && !canWriteDocument(doc, actor))` 的短路语义一致。
+第 11 段覆盖该分支。
 """
 import asyncio
 import logging
 
 from bson import ObjectId
 from fastapi import HTTPException
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from smoke_auth import SEED_REVIEWER_ID, SEED_REVIEWER_USERNAME
 
 from app.db.mongo import close_mongo_client, get_document_content_collection
@@ -22,10 +27,21 @@ from app.db.session import async_session_factory
 from app.mq.rabbitmq import rabbitmq_service
 from app.models.document import DocumentEntity, DocumentStatus
 from app.models.document_review import DocumentReview, ReviewResult
+from app.schemas.auth import AuthUser
 from app.schemas.document import DocumentCreate
 from app.schemas.document_review import ReviewTaskQuery
 from app.services.document import DocumentService
 from app.services.document_review import document_review_service as svc
+
+# —— 写权相关身份（kh_document.author_id 无外键，可用任意雪花式 ID）——
+# 文档作者：写权白名单里的「本人」
+AUTHOR = AuthUser(user_id="9201", username="smoke-author", roles=["ROLE_USER"])
+# 管理员：写权不受限（can_write_document 先判 ADMIN）
+ADMIN_USER = AuthUser(user_id="9202", username="smoke-admin", roles=["ROLE_ADMIN"])
+# 审核员：读侧不受限，但**写权白名单里没有 REVIEWER**
+REVIEWER = AuthUser(user_id="9203", username="smoke-reviewer", roles=["ROLE_REVIEWER"])
+# 完全无关的普通用户：对他人文档一律 403
+OTHER = AuthUser(user_id="9204", username="smoke-other", roles=["ROLE_USER"])
 
 
 async def main() -> None:
@@ -43,6 +59,8 @@ async def main() -> None:
 
     doc_id: str | None = None
     content_oid: ObjectId | None = None
+    # 第 11 段额外建出的文档（物理清理用）
+    extra_docs: list[tuple[str, ObjectId]] = []
     try:
         async with async_session_factory() as session:
             # 0) 开关默认开启
@@ -57,6 +75,7 @@ async def main() -> None:
                     content="审核流程验证正文",
                     status=DocumentStatus.DRAFT,
                 ),
+                AUTHOR,
             )
             doc_id = created["id"]
             content_oid = ObjectId(created["contentId"])
@@ -185,16 +204,91 @@ async def main() -> None:
                 assert e.status_code == 404, e.status_code
                 print("10) 不存在的文档 → 404 OK:", e.detail)
 
+            # 11) 写权校验（对应 TS submitForReview 内的 canWriteDocument；actor 可选）
+            #     新建一篇 author=AUTHOR 的草稿，逐个身份尝试提审
+            w_created = await DocumentService().create(
+                session,
+                DocumentCreate(
+                    title="审核冒烟-写权文档",
+                    content="写权校验用正文",
+                    status=DocumentStatus.DRAFT,
+                ),
+                AUTHOR,
+            )
+            w_doc_id = w_created["id"]
+            extra_docs.append((w_doc_id, ObjectId(w_created["contentId"])))
+
+            # 11a) 无关普通用户 → 403，且零副作用（状态仍 Draft、无待审流水）
+            try:
+                await svc.submit_for_review(session, w_doc_id, OTHER)
+                raise AssertionError("越权提审未被拦截")
+            except HTTPException as e:
+                assert e.status_code == 403, e.status_code
+                print("11a) 无关用户提审 → 403 OK:", e.detail)
+            assert (await svc.get_current_review(session, w_doc_id)) is None
+            # 直查 PG 复核：越权请求零副作用（状态仍 Draft，未落审核流水）
+            w_row = await session.scalar(
+                select(DocumentEntity).where(DocumentEntity.id == int(w_doc_id))
+            )
+            assert w_row is not None and int(w_row.status) == int(DocumentStatus.DRAFT)
+
+            # 11b) 审核员 → 403（REVIEWER 读侧不受限，但写权白名单只有 ADMIN / 作者）
+            try:
+                await svc.submit_for_review(session, w_doc_id, REVIEWER)
+                raise AssertionError("审核员越权提审未被拦截")
+            except HTTPException as e:
+                assert e.status_code == 403, e.status_code
+                print("11b) 审核员提审 → 403 OK:", e.detail)
+
+            # 11c) 作者本人 → 放行，且 updateBy 记实际操作者（TS `actor?.userId`）
+            w_doc = await svc.submit_for_review(session, w_doc_id, AUTHOR)
+            assert int(w_doc.status) == int(DocumentStatus.PENDING_REVIEW)
+            assert w_doc.update_by == int(AUTHOR.user_id)
+            print(
+                "11c) 作者本人提审 → PendingReview，updateBy =", w_doc.update_by,
+                "（期望", int(AUTHOR.user_id), "）",
+            )
+
+            # 11d) 驳回复位后，ADMIN 提审 → 放行（写权不受归属限制）
+            w_cur = await svc.get_current_review(session, w_doc_id)
+            assert w_cur is not None
+            await svc.reject_review(
+                session, w_cur.id, "写权用例复位", SEED_REVIEWER_ID, SEED_REVIEWER_USERNAME
+            )
+            w_doc = await svc.submit_for_review(session, w_doc_id, ADMIN_USER)
+            assert int(w_doc.status) == int(DocumentStatus.PENDING_REVIEW)
+            assert w_doc.update_by == int(ADMIN_USER.user_id)
+            print("11d) ADMIN 提审 → PendingReview OK，updateBy =", w_doc.update_by)
+
+            # 11e) actor=None → 跳过校验（TS `if (actor && ...)` 短路语义），仍可提审
+            w_cur = await svc.get_current_review(session, w_doc_id)
+            assert w_cur is not None
+            await svc.reject_review(
+                session, w_cur.id, "写权用例复位", SEED_REVIEWER_ID, SEED_REVIEWER_USERNAME
+            )
+            w_doc = await svc.submit_for_review(session, w_doc_id)
+            assert int(w_doc.status) == int(DocumentStatus.PENDING_REVIEW)
+            print("11e) actor=None 提审 → 跳过写权校验 OK")
+
         print("\n文档审核冒烟测试全部通过 ✅")
     finally:
+        targets: list[tuple[int, ObjectId | None]] = []
         if doc_id is not None:
+            targets.append((int(doc_id), content_oid))
+        targets.extend((int(i), o) for i, o in extra_docs)
+        if targets:
             async with async_session_factory() as session:
-                pk = int(doc_id)
-                await session.execute(delete(DocumentReview).where(DocumentReview.document_id == pk))
-                await session.execute(delete(DocumentEntity).where(DocumentEntity.id == pk))
+                for pk, _ in targets:
+                    await session.execute(
+                        delete(DocumentReview).where(DocumentReview.document_id == pk)
+                    )
+                    await session.execute(
+                        delete(DocumentEntity).where(DocumentEntity.id == pk)
+                    )
                 await session.commit()
-        if content_oid is not None:
-            await get_document_content_collection().delete_one({"_id": content_oid})
+            for _, oid in targets:
+                if oid is not None:
+                    await get_document_content_collection().delete_one({"_id": oid})
         await close_mongo_client()
         await rabbitmq_service.close()
 

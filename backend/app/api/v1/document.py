@@ -179,7 +179,8 @@ async def create_document(
 ) -> DocumentResponse:
     """创建文档：写 Mongo 正文 + Postgres 元数据
 
-    authorId / createBy 未显式传时取当前登录用户（TS `?? actor?.userId`）。
+    authorId / createBy / updateBy 一律取当前登录用户（TS 三个字段都写 `actor.userId`）；
+    请求体即使带 authorId / createBy 也会被服务层忽略 —— 无法伪造作者 / 创建人。
     """
     return DocumentResponse.model_validate(
         await service.create(session, dto, current_user)
@@ -355,14 +356,19 @@ async def save_document_as_draft(
 )
 async def submit_review(
     doc_id: str,
+    current_user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     service: DocumentReviewService = Depends(get_document_review_service),
 ) -> DocumentResponse:
     """单独提交审核（也可由 publish 在需审核时内部调用）
 
     草稿 / 已发布 → 待审核；来自已发布时会先清索引，审核期间不可检索。
+    写权校验在服务层（非 ADMIN 且非作者本人 → 403，TS submitForReview 同款），
+    故必须传 current_user —— 漏传等于这条写路径不设防。
     """
-    return _doc_response(await service.submit_for_review(session, doc_id))
+    return _doc_response(
+        await service.submit_for_review(session, doc_id, current_user)
+    )
 
 
 @router.get(

@@ -10,6 +10,10 @@ after_publish / after_unpublish 的**调用次数**，与 MQ 是否可达无关�
     cd backend && .venv/bin/python scripts/smoke_document_publish.py
 
 测试会真实写入数据，结束时物理清理，不留脏数据。
+
+注：update / publish / archive / save_as_draft / remove 的 actor 为必传参数（对应 TS
+`actor: AuthUser`），服务层做写权校验（ADMIN 或作者本人）。本脚本统一用 AUTHOR 调用，
+并在 D 段覆盖越权 403 与 ADMIN / 作者放行的分支。
 """
 import asyncio
 import logging
@@ -24,10 +28,21 @@ from app.db.session import async_session_factory
 from app.models.document import DocumentEntity, DocumentStatus
 from app.models.document_review import DocumentReview
 from app.mq.rabbitmq import rabbitmq_service
+from app.schemas.auth import AuthUser
 from app.schemas.document import DocumentCreate, DocumentUpdate
 from app.services.document import DocumentService
 from app.services.document_review import document_review_service
 from app.services.pipeline_publisher import pipeline_publisher
+
+# —— 写权相关身份（kh_document.author_id 无外键，可用任意雪花式 ID）——
+# 文档作者 / 后续 writer
+AUTHOR = AuthUser(user_id="9101", username="smoke-author", roles=["ROLE_USER"])
+# 管理员：写权不受限
+ADMIN_USER = AuthUser(user_id="9102", username="smoke-admin", roles=["ROLE_ADMIN"])
+# 审核员：读侧不受限，但**写权白名单里没有 REVIEWER**
+REVIEWER = AuthUser(user_id="9103", username="smoke-reviewer", roles=["ROLE_REVIEWER"])
+# 完全无关的普通用户：对他人文档一律 403
+OTHER = AuthUser(user_id="9104", username="smoke-other", roles=["ROLE_USER"])
 
 # after_publish / after_unpublish 调用记录（spy 包一层，仍然真实投递）
 PUBLISHED: list[str] = []
@@ -63,6 +78,18 @@ async def _aexpect_400(awaitable, label: str, detail_contains: str) -> None:
     raise AssertionError(f"{label} 未被拦截")
 
 
+async def _aexpect_403(awaitable, label: str) -> None:
+    """断言 awaitable 抛出 403「无权修改该文档」（写权校验，对应 TS ForbiddenException）"""
+    try:
+        await awaitable
+    except HTTPException as e:
+        assert e.status_code == 403, f"{label}: 期望 403，实际 {e.status_code}"
+        assert str(e.detail) == "无权修改该文档", f"{label}: detail={e.detail}"
+        print(f"   ✓ {label} → 403：{e.detail}")
+        return
+    raise AssertionError(f"{label} 未被拦截（写权校验缺失）")
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s"
@@ -93,6 +120,7 @@ async def main() -> None:
                     DocumentCreate(
                         title="冒烟-归档态", content="正文", status=DocumentStatus.ARCHIVED
                     ),
+                    AUTHOR,
                 ),
                 "A1 create(Archived)",
                 "创建文档仅允许草稿或已发布状态",
@@ -107,6 +135,7 @@ async def main() -> None:
                         content="正文",
                         status=DocumentStatus.PUBLISHED,
                     ),
+                    AUTHOR,
                 ),
                 "A2 create(Published)",
                 "开启审核时请先创建草稿",
@@ -120,6 +149,7 @@ async def main() -> None:
                     content="发布流程验证正文",
                     status=DocumentStatus.DRAFT,
                 ),
+                AUTHOR,
             )
             doc_id = doc["id"]
             created_ids.append(doc_id)
@@ -129,37 +159,43 @@ async def main() -> None:
 
             # A4) publish（需审）→ PendingReview，不建索引
             before = len(PUBLISHED)
-            res = await svc.publish(session, doc_id)
+            res = await svc.publish(session, doc_id, AUTHOR)
             print(f"A4) publish → status={res['status']}（期望 3 PendingReview）")
             assert res["status"] == int(DocumentStatus.PENDING_REVIEW)
             assert len(PUBLISHED) == before, "需审提审不应建索引"
 
             # A5) 审核中再 publish → 400
             await _aexpect_400(
-                svc.publish(session, doc_id), "A5 publish(审核中)", "文档审核中，请等待审核结果"
+                svc.publish(session, doc_id, AUTHOR),
+                "A5 publish(审核中)",
+                "文档审核中，请等待审核结果",
             )
 
             # A6/A7) 审核中不可改正文 / 标题
             await _aexpect_400(
-                svc.update(session, doc_id, DocumentUpdate(content="改稿")),
+                svc.update(session, doc_id, DocumentUpdate(content="改稿"), AUTHOR),
                 "A6 update(改正文)",
                 "审核中的文档不可编辑",
             )
             await _aexpect_400(
-                svc.update(session, doc_id, DocumentUpdate(title="改标题")),
+                svc.update(session, doc_id, DocumentUpdate(title="改标题"), AUTHOR),
                 "A7 update(改标题)",
                 "审核中的文档不可编辑",
             )
 
             # A8) 审核中允许改元数据（remark）
-            res = await svc.update(session, doc_id, DocumentUpdate(remark="审核中备注"))
+            res = await svc.update(
+                session, doc_id, DocumentUpdate(remark="审核中备注"), AUTHOR
+            )
             print(f"A8) update(remark): remark={res['remark']} status={res['status']}")
             assert res["remark"] == "审核中备注"
             assert res["status"] == int(DocumentStatus.PENDING_REVIEW)
 
             # A9) PATCH 不允许 PendingReview→Draft
             await _aexpect_400(
-                svc.update(session, doc_id, DocumentUpdate(status=DocumentStatus.DRAFT)),
+                svc.update(
+                    session, doc_id, DocumentUpdate(status=DocumentStatus.DRAFT), AUTHOR
+                ),
                 "A9 update(status=Draft)",
                 "请使用 publish / archive / save-draft / 审核接口变更文档状态",
             )
@@ -181,7 +217,7 @@ async def main() -> None:
             # A11) Published→Draft（PATCH 唯一允许的状态变更）→ 清索引
             before = len(UNPUBLISHED)
             res = await svc.update(
-                session, doc_id, DocumentUpdate(status=DocumentStatus.DRAFT)
+                session, doc_id, DocumentUpdate(status=DocumentStatus.DRAFT), AUTHOR
             )
             print(f"A11) update( Published→Draft ): status={res['status']}（期望 0）")
             assert res["status"] == int(DocumentStatus.DRAFT)
@@ -190,7 +226,10 @@ async def main() -> None:
             # A12) Draft→Published 不允许走 PATCH
             await _aexpect_400(
                 svc.update(
-                    session, doc_id, DocumentUpdate(status=DocumentStatus.PUBLISHED)
+                    session,
+                    doc_id,
+                    DocumentUpdate(status=DocumentStatus.PUBLISHED),
+                    AUTHOR,
                 ),
                 "A12 update(status=Published)",
                 "请使用 publish / archive / save-draft / 审核接口变更文档状态",
@@ -210,6 +249,7 @@ async def main() -> None:
                     content="免审模式正文",
                     status=DocumentStatus.PUBLISHED,
                 ),
+                AUTHOR,
             )
             doc2_id = doc2["id"]
             created_ids.append(doc2_id)
@@ -225,47 +265,49 @@ async def main() -> None:
             # B2) 已发布改正文 → 免审重建索引
             before = len(PUBLISHED)
             res = await svc.update(
-                session, doc2_id, DocumentUpdate(content="免审模式改稿后正文")
+                session, doc2_id, DocumentUpdate(content="免审模式改稿后正文"), AUTHOR
             )
             print(f"B2) update(改正文): status={res['status']} content={res['content'][:8]}")
             assert len(PUBLISHED) == before + 1, "免审模式下改稿应重建索引"
 
             # B3) publish（已发布）→ 仍 Published + 重建
             before = len(PUBLISHED)
-            res = await svc.publish(session, doc2_id)
+            res = await svc.publish(session, doc2_id, AUTHOR)
             print(f"B3) publish(已发布): status={res['status']}")
             assert res["status"] == int(DocumentStatus.PUBLISHED)
             assert len(PUBLISHED) == before + 1
 
             # B4) 归档 → Archived + 清索引
             before = len(UNPUBLISHED)
-            res = await svc.archive(session, doc2_id)
+            res = await svc.archive(session, doc2_id, AUTHOR)
             print(f"B4) archive: status={res['status']}（期望 2 Archived）")
             assert res["status"] == int(DocumentStatus.ARCHIVED)
             assert len(UNPUBLISHED) == before + 1
 
             # B5) 非已发布归档 → 400
             await _aexpect_400(
-                svc.archive(session, doc2_id), "B5 archive(非已发布)", "只有已发布文档可以归档"
+                svc.archive(session, doc2_id, AUTHOR),
+                "B5 archive(非已发布)",
+                "只有已发布文档可以归档",
             )
 
             # B6) Archived 可重新上架
             before = len(PUBLISHED)
-            res = await svc.publish(session, doc2_id)
+            res = await svc.publish(session, doc2_id, AUTHOR)
             print(f"B6) publish(已归档): status={res['status']}（期望 1 Published）")
             assert res["status"] == int(DocumentStatus.PUBLISHED)
             assert len(PUBLISHED) == before + 1
 
             # B7) 保存草稿 → Draft + 清索引
             before = len(UNPUBLISHED)
-            res = await svc.save_as_draft(session, doc2_id)
+            res = await svc.save_as_draft(session, doc2_id, AUTHOR)
             print(f"B7) save_as_draft: status={res['status']}（期望 0 Draft）")
             assert res["status"] == int(DocumentStatus.DRAFT)
             assert len(UNPUBLISHED) == before + 1
 
             # B8) 非已发布保存草稿 → 400
             await _aexpect_400(
-                svc.save_as_draft(session, doc2_id),
+                svc.save_as_draft(session, doc2_id, AUTHOR),
                 "B8 save_as_draft(非已发布)",
                 "只有已发布文档可以保存为草稿",
             )
@@ -275,7 +317,7 @@ async def main() -> None:
 
             # C1) 草稿删除：不投递 unpublish
             before = len(UNPUBLISHED)
-            removed = await svc.remove(session, doc_id)
+            removed = await svc.remove(session, doc_id, AUTHOR)
             print(f"C1) remove(Draft): {removed}")
             assert removed["deleted"] is True
             assert len(UNPUBLISHED) == before, "草稿删除不应清索引"
@@ -289,12 +331,75 @@ async def main() -> None:
                     content="删除验证正文",
                     status=DocumentStatus.PUBLISHED,
                 ),
+                AUTHOR,
             )
             created_ids.append(doc3["id"])
             content_oids.append(ObjectId(doc3["contentId"]))
-            await svc.remove(session, doc3["id"])
+            await svc.remove(session, doc3["id"], AUTHOR)
             print(f"C2) remove(Published): unpublish 投递 = {len(UNPUBLISHED) - before}")
             assert len(UNPUBLISHED) == before + 1, "已发布删除应清索引"
+
+            # ============ D. 写权（canWriteDocument：ADMIN 或作者本人）============
+            print("\n=== D. 写权校验 ===")
+            guard = await svc.create(
+                session,
+                DocumentCreate(
+                    title="冒烟-写权",
+                    content="写权校验正文",
+                    status=DocumentStatus.DRAFT,
+                ),
+                AUTHOR,
+            )
+            guard_id = guard["id"]
+            created_ids.append(guard_id)
+            content_oids.append(ObjectId(guard["contentId"]))
+            print(f"D0) create(Draft): authorId={guard['authorId']}（期望 {AUTHOR.user_id}）")
+            assert guard["authorId"] == AUTHOR.user_id
+
+            # D1~D5) 他人（普通用户）对五条写路径一律 403。
+            # 关键：D3 / D4 目标是**草稿**，本会先撞「只有已发布可以归档 / 保存草稿」
+            # 那条 400 —— 拿到 403 才证明写权校验排在状态校验之前（与 TS 同位）。
+            await _aexpect_403(
+                svc.update(session, guard_id, DocumentUpdate(remark="越权"), OTHER),
+                "D1 update(他人)",
+            )
+            await _aexpect_403(
+                svc.publish(session, guard_id, OTHER), "D2 publish(他人)"
+            )
+            await _aexpect_403(
+                svc.archive(session, guard_id, OTHER), "D3 archive(他人, 草稿)"
+            )
+            await _aexpect_403(
+                svc.save_as_draft(session, guard_id, OTHER), "D4 save_as_draft(他人, 草稿)"
+            )
+            await _aexpect_403(
+                svc.remove(session, guard_id, OTHER), "D5 remove(他人)"
+            )
+
+            # D6) REVIEWER 不在写权白名单（读侧不受限，写侧受限）
+            await _aexpect_403(
+                svc.update(session, guard_id, DocumentUpdate(remark="审核员越权"), REVIEWER),
+                "D6 update(REVIEWER)",
+            )
+
+            # D7) 作者本人 + ADMIN 均可写
+            res = await svc.update(
+                session, guard_id, DocumentUpdate(remark="作者改"), AUTHOR
+            )
+            assert res["remark"] == "作者改"
+            res = await svc.update(
+                session, guard_id, DocumentUpdate(remark="管理员改"), ADMIN_USER
+            )
+            assert res["remark"] == "管理员改"
+            assert res["updateBy"] == ADMIN_USER.user_id, res["updateBy"]
+            print("   ✓ D7 作者本人 / ADMIN 均可写（updateBy 记实际操作者）")
+
+            # D8) 越权尝试必须**零副作用**：文档仍为草稿、remark 仍是管理员改的值
+            after = await svc.find_one(session, guard_id)
+            assert after["status"] == int(DocumentStatus.DRAFT)
+            assert after["remark"] == "管理员改"
+            assert after["deleted"] is False
+            print("   ✓ D8 越权请求无副作用（状态 / remark / 删除位均未变）")
 
         print(
             f"\n投递统计：after_publish × {len(PUBLISHED)}，"
