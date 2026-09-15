@@ -17,6 +17,12 @@ from typing import Any
 
 from elasticsearch import NotFoundError
 
+from app.common.document_access import (
+    DOC_VISIBILITY_FIELDS,
+    DocumentAccessScope,
+    empty_scope,
+    es_visibility_filter,
+)
 from app.db.es import es_service
 
 logger = logging.getLogger("SearchIndexService")
@@ -44,6 +50,9 @@ DOCUMENT_MAPPINGS: dict[str, Any] = {
         "isPublic": {"type": "boolean"},
         "categoryId": {"type": "keyword"},
         "authorId": {"type": "keyword"},
+        # 可见性过滤用（公开 ∪ 本人 ∪ 所在团队）；必须显式 keyword，
+        # 否则动态映射会把它建成 text，`terms` 查询语义会不对（对齐 TS mapping）
+        "teamId": {"type": "keyword"},
         "viewCount": {"type": "integer"},
         "likeCount": {"type": "integer"},
         "commentCount": {"type": "integer"},
@@ -65,6 +74,86 @@ class SearchIndexService:
             settings_body=DOCUMENT_INDEX_SETTINGS,
             mappings=DOCUMENT_MAPPINGS,
         )
+
+    async def ensure_visibility_mapping(self) -> bool:
+        """给已有 kh_document 索引补可见性字段（增量、幂等；对齐 chunk 侧同名方法）
+
+        为什么需要：ensure_es_index 只在索引不存在时建 mapping，早于本次可见性改造
+        创建的索引没有 teamId。若放任 ES 动态映射，先写入的字符串会被建成 text，
+        而可见性过滤用 `terms` 直查该字段 —— text 按分词后的词项匹配，
+        与 keyword 精确匹配语义不同，会让团队可见性静默失效。故显式 put_mapping。
+
+        ES 不可用 / 失败只记日志返回 False，不阻断启动。
+        """
+        if not es_service.is_available or es_service.client is None:
+            logger.warning("跳过 kh_document 可见性 mapping 更新（ES 不可用）")
+            return False
+        try:
+            await es_service.client.indices.put_mapping(
+                index=DOCUMENT_INDEX,
+                properties={
+                    "isPublic": {"type": "boolean"},
+                    "authorId": {"type": "keyword"},
+                    "teamId": {"type": "keyword"},
+                },
+            )
+            return True
+        except Exception as err:  # noqa: BLE001 —— 索引不存在等情形均降级
+            logger.warning("kh_document 可见性 mapping 更新失败：%s", err)
+            return False
+
+    async def update_visibility(
+        self,
+        document_id: str | int,
+        is_public: bool,
+        team_id: str | int | None,
+        author_id: str | int | None,
+    ) -> bool:
+        """已发布文档只改公开 / 团队 / 作者时，就地改 kh_document 的可见性字段
+
+        chunk 侧 es_chunk_index_service.update_visibility 的文档级版本：文档由公开转
+        私有后若不同步，未授权用户仍能通过 POST /search 搜到该文档的标题与摘要。
+        按 _id（= 文档 ID）update_by_query 就地改，免去从 PG 重拉全文重灌。
+
+        与 chunk 侧一致：空值写空串（便于 term 查询），ES 不可用/失败返回 False 不抛错。
+        """
+        if not es_service.is_available or es_service.client is None:
+            logger.warning(
+                "跳过文档可见性更新（ES 不可用）：documentId=%s", document_id
+            )
+            return False
+        try:
+            resp = await es_service.client.update_by_query(
+                index=DOCUMENT_INDEX,
+                # _id 即文档 ID（index_document 以 doc_id 作 _id），只改这一条
+                query={"ids": {"values": [str(document_id)]}},
+                script={
+                    "source": (
+                        "ctx._source.isPublic = params.isPublic; "
+                        "ctx._source.teamId = params.teamId; "
+                        "ctx._source.authorId = params.authorId;"
+                    ),
+                    "params": {
+                        "isPublic": bool(is_public),
+                        "teamId": "" if team_id is None else str(team_id),
+                        "authorId": "" if author_id is None else str(author_id),
+                    },
+                },
+                refresh=True,
+            )
+            logger.info(
+                "文档可见性已更新：documentId=%s, updated=%s",
+                document_id,
+                resp.get("updated", 0),
+            )
+            return True
+        except Exception as err:  # noqa: BLE001
+            if "index_not_found" in str(err):
+                return True
+            logger.warning(
+                "文档可见性更新失败：documentId=%s, %s", document_id, err
+            )
+            return False
 
     async def index_document(self, doc: Mapping[str, Any]) -> None:
         """Upsert 一篇文档的搜索记录（id 相同则整条覆盖）
@@ -113,12 +202,20 @@ class SearchIndexService:
         page_size: int = 10,
         category_id: str | None = None,
         author_id: str | None = None,
+        scope: DocumentAccessScope | None = None,
     ) -> dict[str, Any]:
         """关键词全文检索（对应 TS SearchIndexService.searchDocuments）
 
         命中 kh_document 的 title / summary / content（IK 分词）；支持按分类 / 作者过滤，
         返回关键词高亮片段（ES 默认 <em> 包裹）。ES 不可用时返回空分页（不抛错）。
+
+        可见性（对齐 chunk 检索）：公开 ∪ 本人 ∪ 所在团队，命中任一可读；
+        ADMIN / REVIEWER 的 scope.unrestricted 时不加过滤。scope 缺省按
+        empty_scope 兜底（只能看公开），**不会**退化成不过滤。
         """
+        # 可见性字段取 DOC_VISIBILITY_FIELDS（camelCase），与 TS ES_DOC_VISIBILITY_FIELDS 对应。
+        # 字段缺失或未回填的历史记录会因 term 不命中而对外不可见（偏保守，不泄露）。
+        scope = scope or empty_scope()
         # TS: Math.min(params.pageSize ?? 10, 50) —— schema 已限 50，这里双保险
         page_size = min(page_size, 50)
         from_ = (page - 1) * page_size
@@ -128,9 +225,17 @@ class SearchIndexService:
             logger.warning("跳过搜索查询（ES 不可用）")
             return {"items": [], "total": 0, "page": page, "pageSize": page_size}
 
+        # 刻意差异（TS searchDocuments 无此行）：先确保索引存在再搜。ensure_index 幂等，
+        # 代价仅一次 HEAD/GET；好处是首个空库上搜索不会因 index_not_found 被 catch 吞成
+        # 「搜索查询失败」告警。行为等价（都返回空分页），无副作用。
         await self.ensure_es_index()
 
         filters: list[dict[str, Any]] = []
+        # 可见性子句放 filter 上下文（只筛不参与打分，避免权限条件扰动 BM25 排序）。
+        # 子句内部是 bool.should（公开 / 本人 / 团队 三选一），与下方分类 / 作者过滤是 AND 关系。
+        visibility = es_visibility_filter(scope, DOC_VISIBILITY_FIELDS)
+        if visibility is not None:
+            filters.append(visibility)
         if category_id:
             filters.append({"term": {"categoryId": category_id}})
         if author_id:
@@ -190,6 +295,11 @@ class SearchIndexService:
                     "categoryId": src.get("categoryId"),
                     "tags": src.get("tags"),
                     "authorId": src.get("authorId"),
+                    # 可见性字段一并回传（对齐 TS `teamId: src.teamId ?? null` /
+                    # `isPublic: src.isPublic ?? null`）：前端据此展示「公开 / 团队 / 私有」
+                    # 标签，也是排查「为什么这条我能搜到」的依据
+                    "teamId": src.get("teamId"),
+                    "isPublic": src.get("isPublic"),
                     "status": src.get("status"),
                     "publishTime": src.get("publishTime"),
                     "score": 0 if _score is None else _score,

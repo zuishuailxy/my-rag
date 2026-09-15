@@ -32,9 +32,11 @@ from app.schemas.document import (
     UploadParseDto,
 )
 from app.services.document_review import document_review_service
+from app.services.es_index import es_chunk_index_service
 from app.services.file_parser import file_parser_service
 from app.services.pipeline_publisher import pipeline_publisher
 from app.services.rustfs import rustfs_service
+from app.services.search_index import search_index_service
 from app.utils.markdown import (
     decode_upload_filename,
     get_extension,
@@ -310,6 +312,8 @@ class DocumentService:
         entity = await self._get_active(session, doc_id)
         coll = get_document_content_collection()
         old_status = _as_status(entity.status)
+        # 可见性变更检测用（is_public / team_id / author_id 任一变化 → 已发布文档需同步 chunk 可见性）
+        old_visibility = (entity.is_public, entity.team_id, entity.author_id)
 
         # —— 状态与编辑权限（待审核中不可改标题 / 正文）——
         if old_status == DocumentStatus.PENDING_REVIEW:
@@ -421,6 +425,8 @@ class DocumentService:
             _as_status(entity.status),
             content_changed,
             final_content,
+            visibility_changed=old_visibility
+            != (entity.is_public, entity.team_id, entity.author_id),
         )
 
         return {**document_to_dict(entity), "content": final_content}
@@ -698,11 +704,21 @@ class DocumentService:
         new_status: DocumentStatus,
         content_changed: bool,
         content: str,
+        visibility_changed: bool = False,
     ) -> None:
         """更新后根据状态变化同步索引
 
         - Published → 非 Published：清索引
         - 仍为 Published 且正文变了：免审模式重建索引；需审核模式等再次发布 / 审核通过
+        - 仍为 Published、正文没变但可见性变了（is_public / team_id / author_id）：
+          就地更新 chunk（kh_chunk）与文档级（kh_document）两处可见性字段，
+          不必重新分块 / 重新嵌入 / 重新拉全文
+          （对应 TS VectorIndexService.updateVisibility 的调用场景）。
+
+        为什么必须处理可见性变更：检索可见性靠 ES 上的 is_public/team_id/author_id
+        过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索或
+        文档级全文检索（POST /search）命中其内容 / 标题摘要。
+        （PG 向量侧按 JOIN kh_document 实时取，不受此影响，但仍一并更新保持两侧一致。）
         """
         was_published = old_status == DocumentStatus.PUBLISHED
         is_published = new_status == DocumentStatus.PUBLISHED
@@ -714,6 +730,17 @@ class DocumentService:
         if is_published and content_changed:
             if not document_review_service.is_require_approval():
                 await self._safe_publish(doc)
+            return
+
+        if is_published and visibility_changed:
+            # 两个 ES 索引的字段风格不同（chunk 用 snake_case、document 用 camelCase），
+            # 各自有 update_visibility 实现；都失败只记日志，不阻断文档更新
+            await es_chunk_index_service.update_visibility(
+                doc.id, doc.is_public, doc.team_id, doc.author_id
+            )
+            await search_index_service.update_visibility(
+                doc.id, doc.is_public, doc.team_id, doc.author_id
+            )
 
     async def _safe_publish(self, doc: DocumentEntity) -> None:
         """投递 MQ：RAG 分块向量 + 全文搜索 + KG 建图（失败不回滚文档状态）

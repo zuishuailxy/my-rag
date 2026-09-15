@@ -78,9 +78,14 @@ def _message_vo(m: AiMessage) -> MessageResponse:
     "/search",
     dependencies=[Depends(require_permission("search"))],
 )
-async def rag_search(dto: RagSearchRequest) -> list[HybridChunkItem]:
-    """RAG 混合检索：只召回不生成回答，返回 kh_chunk 命中详情"""
-    items = await hybrid_retrieval_service.retrieve(dto.query.strip(), top_k=dto.topK)
+async def rag_search(dto: RagSearchRequest, user: _USER) -> list[HybridChunkItem]:
+    """RAG 混合检索：只召回不生成回答，返回 kh_chunk 命中详情
+
+    传当前用户计算可见性范围（对应 TS search(dto, @CurrentUser() user)）。
+    """
+    items = await hybrid_retrieval_service.retrieve(
+        dto.query.strip(), top_k=dto.topK, user=user
+    )
     return [HybridChunkItem(**item) for item in items]
 
 

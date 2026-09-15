@@ -11,7 +11,7 @@
 import logging
 
 from app.db.session import async_session_factory
-from app.pipeline.types import PipelineDocument, SearchDocumentData, to_iso_date
+from app.pipeline.types import PipelineDocument, to_search_index_doc
 from app.services.graph_build import graph_build_service
 from app.services.indexing import (
     VectorIndexService,
@@ -98,9 +98,7 @@ class PipelineOrchestrator:
             return
 
         try:
-            await search_index_service.index_document(
-                self._to_search_index_doc(doc)
-            )
+            await search_index_service.index_document(to_search_index_doc(doc))
         except Exception as err:
             logger.error("搜索索引失败：documentId=%s, %s", document_id, err)
 
@@ -138,29 +136,8 @@ class PipelineOrchestrator:
         async with async_session_factory() as session:
             return await load_all_published_documents(session)
 
-    def _to_search_index_doc(self, doc: PipelineDocument) -> SearchDocumentData:
-        """Postgres 元数据 + Mongo 全文 → ES kh_document 文档
-
-        对应 TS toSearchIndexDoc；content 取全文（不再截断 1000 字），
-        字段名保持 camelCase 与 TS 侧写入的数据同构（已有索引可平滑复用）。
-        """
-        return SearchDocumentData(
-            id=doc.id,
-            title=doc.title,
-            summary=doc.summary,
-            content=doc.content or "",
-            categoryId=doc.category_id,
-            tags=doc.tags,
-            status=doc.status,
-            isPublic=doc.is_public,
-            viewCount=doc.view_count,
-            likeCount=doc.like_count,
-            commentCount=doc.comment_count,
-            authorId=doc.author_id,
-            publishTime=to_iso_date(doc.publish_time),
-            createdAt=to_iso_date(doc.created_at),
-            updatedAt=to_iso_date(doc.updated_at),
-        )
+    # 字段映射已提到 app/pipeline/types.py 的 to_search_index_doc（脚本与编排器共用一份，
+    # 避免回填脚本另写一套导致字段漂移）。
 
     async def _load_documents_by_ids(self, ids: list[str]) -> list[PipelineDocument]:
         """按 ID 列表加载 Postgres 元数据 + Mongo 正文 → 管线统一快照"""

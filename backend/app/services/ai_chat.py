@@ -72,7 +72,8 @@ class AiChatService:
             # 空问题不落库，sessionId 原样透传（对齐 TS 早退分支）
             return {"sessionId": session_id, "answer": "请输入问题。", "sources": []}
 
-        hits = await hybrid_retrieval_service.retrieve(trimmed, top_k)
+        # 传 user 计算可见性范围（对应 TS `retrieve(trimmed, topK, user)`）
+        hits = await hybrid_retrieval_service.retrieve(trimmed, top_k, user)
         if not hits:
             logger.log(logging.INFO, "RAG 对话无召回：queryLength=%d，返回无内容提示", len(trimmed))
             answer = "知识库里没有相关内容。"

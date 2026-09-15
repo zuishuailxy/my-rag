@@ -57,6 +57,7 @@ class ChunkingService:
         author_id: str | None = None,
         team_id: str | None = None,
         doc_status: int | None = None,
+        is_public: bool | None = None,
         publish_time: str | None = None,
     ) -> list[DocumentChunk]:
         """将一篇文档正文切成可索引的 DocumentChunk 列表；内容为空返回 []"""
@@ -97,6 +98,7 @@ class ChunkingService:
                     author_id=author_id,
                     team_id=team_id,
                     doc_status=doc_status,
+                    is_public=bool(is_public),
                     publish_time=publish_time,
                 )
             )

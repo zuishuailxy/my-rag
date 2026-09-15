@@ -44,6 +44,7 @@ from app.schemas.user import (
 )
 
 from app.services.permission import permission_service
+from app.services.team import team_service
 
 # bcrypt 工作因子（TS bcryptjs.hash(password, 10) 的 10）
 BCRYPT_ROUNDS = 10
@@ -105,12 +106,17 @@ class UserService:
         return list((await session.scalars(stmt)).all())
 
     def to_auth_user(
-        self, user: User, roles: list[str], permissions: list[str]
+        self,
+        user: User,
+        roles: list[str],
+        permissions: list[str],
+        team_ids: list[str] | None = None,
     ) -> AuthUser:
-        """实体 + 角色编码 + 权限码 → AuthUser（对应 TS toAuthUser；不查库、不异步）
+        """实体 + 角色编码 + 权限码 + 团队 ID → AuthUser（对应 TS toAuthUser；不查库、不异步）
 
-        permissions 由调用方查好传入（TS 同构：buildAuthUser / validateCredentials
-        先调 permissionService.getUserPermissionCodes 再传入）。
+        permissions / team_ids 由调用方查好传入（TS 同构：buildAuthUser / validateCredentials
+        先调 permissionService.getUserPermissionCodes 与团队成员查询再传入）。
+        team_ids 用于文档检索可见性（对应 TS AuthUser.teamIds）。
         """
         return AuthUser(
             user_id=str(user.id),
@@ -120,13 +126,15 @@ class UserService:
             avatar=user.avatar,
             roles=roles,
             permissions=permissions,
+            team_ids=team_ids or [],
         )
 
     async def build_auth_user(self, session: AsyncSession, user_id: str) -> AuthUser:
         """按 ID 组装当前登录用户（对应 TS buildAuthUser；JWT 校验后的依赖用）
 
         与 TS 一致：status 校验后依次查角色码 + 合并权限码（PermissionService
-        getUserPermissionCodes），登录 / refresh / me / 每请求鉴权注入都走这里。
+        getUserPermissionCodes）+ 所在团队（文档可见性用），登录 / refresh / me /
+        每请求鉴权注入都走这里。
         """
         user = await self.find_by_id_or_throw(session, user_id)
         if user.status != USER_STATUS_ENABLED:
@@ -135,7 +143,8 @@ class UserService:
         permissions = await permission_service.get_user_permission_codes(
             session, user_id
         )
-        return self.to_auth_user(user, roles, permissions)
+        team_ids = await team_service.list_user_team_ids(session, user_id)
+        return self.to_auth_user(user, roles, permissions, team_ids)
 
     # ---------------------------------------------------------------- auth
 
@@ -168,7 +177,8 @@ class UserService:
         permissions = await permission_service.get_user_permission_codes(
             session, str(user.id)
         )
-        return self.to_auth_user(user, roles, permissions)
+        team_ids = await team_service.list_user_team_ids(session, str(user.id))
+        return self.to_auth_user(user, roles, permissions, team_ids)
 
     # ---------------------------------------------------------------- write
 

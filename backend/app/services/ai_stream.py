@@ -325,7 +325,7 @@ class AiStreamService:
 
         hits: list[ChunkHit] = []
         try:
-            rows = await hybrid_retrieval_service.retrieve(question, top_k)
+            rows = await hybrid_retrieval_service.retrieve(question, top_k, user)
             hits = [ChunkHit.from_row(row) for row in rows]
         except Exception as exc:  # noqa: BLE001 —— 检索失败不阻断作答（对齐 TS catch）
             logger.warning("RAG 检索失败：%s", exc)

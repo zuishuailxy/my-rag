@@ -143,6 +143,8 @@ async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:
         author_id=doc.author_id,
         team_id=doc.team_id,
         doc_status=doc.status,
+        # 可见性字段冗余进 chunk，供 ES kh_chunk 可见性过滤（对齐 TS isPublic）
+        is_public=bool(doc.is_public),
         publish_time=to_iso_date(doc.publish_time),
     )
     if not chunks:

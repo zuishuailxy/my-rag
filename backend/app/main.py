@@ -67,6 +67,16 @@ async def lifespan(app: FastAPI):
     await _init_database_with_retry()
     # ES：健康检查，不可用只降级不阻断启动（索引写入时跳过）
     await es_service.start()
+    # kh_chunk 可见性字段补齐（对应 TS VectorIndexService.ensureVisibilityMapping）：
+    # 老索引 mapping 没有 is_public，检索可见性过滤依赖该字段，启动时增量补上
+    from app.services.es_index import es_chunk_index_service
+
+    await es_chunk_index_service.ensure_visibility_mapping()
+    # kh_document 同理（对应 TS SearchIndexService 侧）：老索引 mapping 没有 teamId，
+    # 而文档级全文检索的可见性过滤用 `terms teamId` —— 若靠动态映射建成 text 会静默失效
+    from app.services.search_index import search_index_service
+
+    await search_index_service.ensure_visibility_mapping()
     # Neo4j：连通性验证，不可用只降级不阻断启动（KG 写入时跳过）
     await graph_build_service.start()
     # Redis：验证码等短时存储；连接失败只告警不阻断启动（后续命令自动重连）

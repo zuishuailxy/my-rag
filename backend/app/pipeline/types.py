@@ -28,6 +28,9 @@ class DocumentChunk:
     author_id: str | None = None
     team_id: str | None = None
     doc_status: int | None = None
+    # 是否公开（冗余自 kh_document，供 ES kh_chunk 可见性过滤用；
+    # 对应 TS DocumentChunk.isPublic → ES is_public）
+    is_public: bool = False
     publish_time: str | None = None
     # 向量；分块阶段为空，EmbeddingService 填充后写入
     embedding: list[float] | None = None
@@ -110,6 +113,8 @@ class SearchDocumentData(TypedDict, total=False):
     isPublic: bool | None
     categoryId: str | None
     authorId: str | None
+    # 可见性过滤用（公开 ∪ 本人 ∪ 所在团队）；对齐 TS ES_DOC_VISIBILITY_FIELDS
+    teamId: str | None
     # 计数
     viewCount: int | None
     likeCount: int | None
@@ -160,3 +165,31 @@ def to_iso_date(value: datetime | str | None) -> str | None:
         return datetime.fromisoformat(value).isoformat()
     except ValueError:
         return None
+
+
+def to_search_index_doc(doc: PipelineDocument) -> SearchDocumentData:
+    """管线快照 → ES kh_document 记录（对应 TS PipelineOrchestrator.toSearchIndexDoc）
+
+    放在此处而非编排器内，是为了让全量回填脚本（scripts/reindex_all_chunks.py）
+    复用同一份字段映射，杜绝两处漂移（此前只在编排器内，脚本无法调用）。
+    content 取全文（不截断 1000 字），写入时由 SearchIndexService 补 indexedAt。
+    """
+    return SearchDocumentData(
+        id=doc.id,
+        title=doc.title,
+        summary=doc.summary,
+        content=doc.content or "",
+        categoryId=doc.category_id,
+        tags=doc.tags,
+        status=doc.status,
+        isPublic=doc.is_public,
+        viewCount=doc.view_count,
+        likeCount=doc.like_count,
+        commentCount=doc.comment_count,
+        authorId=doc.author_id,
+        # 可见性过滤用：团队 ID / 作者 / 公开三选一，供 /search 过滤
+        teamId=doc.team_id,
+        publishTime=to_iso_date(doc.publish_time),
+        createdAt=to_iso_date(doc.created_at),
+        updatedAt=to_iso_date(doc.updated_at),
+    )

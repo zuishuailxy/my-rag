@@ -39,6 +39,10 @@ DOC_B_ID = "smoke-search-B"
 CAT_A = "smoke-cat-A"
 CAT_B = "smoke-cat-B"
 
+# 冒烟用团队 ID（snowflake 形态的字符串，仅作 ES 回传断言，不参与可见性过滤：
+# 本脚本用 admin（unrestricted）调用，可见性子句不会生效）
+SMOKE_TEAM_ID = "3000000000000000001"
+
 DOC_A = {
     "id": DOC_A_ID,
     "title": f"{KEYWORD} 文档A标题",
@@ -46,9 +50,12 @@ DOC_A = {
     "content": f"正文包含 {KEYWORD} 用于验证关键词高亮返回。",
     "categoryId": CAT_A,
     "authorId": "1000000000000000001",
-    "tags": ["smoke"],
+    "tags": "smoke",
     "status": 1,
     "isPublic": True,
+    # 仅用于验证 vs 可见性字段回传（对齐 TS item.teamId）；本脚本直写 ES，
+    # DOC_A 带团队、DOC_B 不带，覆盖「有值 / 缺字段」两种情况
+    "teamId": SMOKE_TEAM_ID,
     "viewCount": 0,
     "likeCount": 0,
     "commentCount": 0,
@@ -60,7 +67,7 @@ DOC_B = {
     "content": f"另一篇正文同样包含 {KEYWORD} 关键词。",
     "categoryId": CAT_B,
     "authorId": "1000000000000000002",
-    "tags": ["smoke"],
+    "tags": "smoke",
     "status": 1,
     "isPublic": True,
     "viewCount": 0,
@@ -183,6 +190,23 @@ async def main() -> None:
             and "score" in first
             and first.get("highlight") is not None,
             f"title={first.get('title')!r}, score={first.get('score')!r}, highlight={first.get('highlight') is not None}",
+        )
+
+        # 4.2) 可见性字段回传（对齐 TS item.isPublic / item.teamId）：
+        #      DOC_A 带 teamId、DOC_B 无该字段 → 分别断言「有值」与「None」
+        by_id = {it["id"]: it for it in items}
+        a_item = by_id.get(str(DOC_A_ID), {})
+        b_item = by_id.get(str(DOC_B_ID), {})
+        check(
+            "可见性字段 isPublic",
+            a_item.get("isPublic") is True and b_item.get("isPublic") is True,
+            f"A.isPublic={a_item.get('isPublic')!r}, B.isPublic={b_item.get('isPublic')!r}",
+        )
+        check(
+            "可见性字段 teamId",
+            a_item.get("teamId") == SMOKE_TEAM_ID and b_item.get("teamId") in (None, ""),
+            f"A.teamId={a_item.get('teamId')!r}（期望 {SMOKE_TEAM_ID}）, "
+            f"B.teamId={b_item.get('teamId')!r}（期望 None，字段缺失）",
         )
 
         # 4.5) ES 层验证：列表查询 _source 已排除 content 全文（对齐 TS _source.excludes）

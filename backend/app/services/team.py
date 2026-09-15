@@ -283,6 +283,29 @@ class TeamService:
 
     # ---------------- 内部辅助 ----------------
 
+    async def list_user_team_ids(self, session: AsyncSession, user_id: str) -> list[str]:
+        """用户所属团队 ID（含担任负责人的团队）——文档检索可见性用
+
+        对应 TS AuthUser.teamIds 的语义（「所在团队（含担任负责人的团队）」）：
+        kh_team_member 里的成员关系 ∪ kh_team.leader_id 指向本人的团队。
+        只按 bigint 数字列比较（user_id 非法或不存在时返回空列表，不抛错——
+        鉴权链路不应因团队成员数据异常而整体失败）。
+        """
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            return []
+        member_rows = await session.execute(
+            select(TeamMember.team_id).where(TeamMember.user_id == uid)
+        )
+        leader_rows = await session.execute(
+            select(Team.id).where(Team.leader_id == uid)
+        )
+        # 去重（兼任负责人且同时在成员表时只保留一个）
+        ids: set[int] = {r for (r,) in member_rows.all() if r is not None}
+        ids.update(r for (r,) in leader_rows.all() if r is not None)
+        return [str(i) for i in sorted(ids)]
+
     @staticmethod
     def _to_dict(team: Team) -> dict:
         """实体 → 字典（bigint 转字符串；camelCase 由响应模型别名处理）"""

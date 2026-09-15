@@ -41,6 +41,8 @@ CHUNK_MAPPINGS: dict = {
         "category_id": {"type": "keyword"},
         "author_id": {"type": "keyword"},
         "team_id": {"type": "keyword"},
+        # 可见性字段（检索过滤用；对齐 TS kh_chunk 的 is_public）
+        "is_public": {"type": "boolean"},
         "doc_status": {"type": "integer"},
         "publish_time": {"type": "date"},
         "indexed_at": {"type": "date"},
@@ -100,6 +102,81 @@ class EsChunkIndexService:
             logger.warning("ES chunk 删除失败：documentId=%s, %s", document_id, message)
             return False
 
+    async def ensure_visibility_mapping(self) -> bool:
+        """给已有索引补可见性字段（对应 TS ensureVisibilityMapping）
+
+        老 mapping 没有 is_public（本项目早期只写了 author_id / team_id），
+        put_mapping 是增量安全的：已有字段不变，只新增缺失字段。
+        ES 不可用 / 失败只记日志返回 False，不阻断发布链路。
+        """
+        if not es_service.is_available or es_service.client is None:
+            return False
+        try:
+            await es_service.client.indices.put_mapping(
+                index=CHUNK_INDEX,
+                properties={
+                    "is_public": {"type": "boolean"},
+                    "author_id": {"type": "keyword"},
+                    "team_id": {"type": "keyword"},
+                },
+            )
+            return True
+        except Exception as err:  # noqa: BLE001 —— 索引不存在等情形均降级
+            logger.warning("kh_chunk 可见性 mapping 更新失败：%s", err)
+            return False
+
+    async def update_visibility(
+        self,
+        document_id: str | int,
+        is_public: bool,
+        team_id: str | int | None,
+        author_id: str | int | None,
+    ) -> bool:
+        """已发布文档只改公开/团队/作者时，批量改 chunk 可见性（对应 TS updateVisibility）
+
+        免去重新分块 + 重新嵌入，直接用 update_by_query 就地改三个可见性字段。
+        与 PG 侧无关：PG 向量通道按 JOIN kh_document 实时取可见性，无需同步。
+        ES 不可用返回 False（调用方降级，不抛错）。
+        """
+        if not es_service.is_available or es_service.client is None:
+            logger.warning(
+                "跳过 chunk 可见性更新（ES 不可用）：documentId=%s", document_id
+            )
+            return False
+        try:
+            resp = await es_service.client.update_by_query(
+                index=CHUNK_INDEX,
+                query={"term": {"document_id": str(document_id)}},
+                script={
+                    "source": (
+                        "ctx._source.is_public = params.is_public; "
+                        "ctx._source.team_id = params.team_id; "
+                        "ctx._source.author_id = params.author_id;"
+                    ),
+                    "params": {
+                        "is_public": bool(is_public),
+                        # ES 里空值统一写空串（与 _doc_map 的 `or ""` 一致，便于 term 查询）
+                        "team_id": "" if team_id is None else str(team_id),
+                        "author_id": "" if author_id is None else str(author_id),
+                    },
+                },
+                refresh=True,
+            )
+            logger.info(
+                "chunk 可见性已更新：documentId=%s, updated=%s",
+                document_id,
+                resp.get("updated", 0),
+            )
+            return True
+        except Exception as err:  # noqa: BLE001
+            message = str(err)
+            if "index_not_found" in message:
+                return True
+            logger.warning(
+                "chunk 可见性更新失败：documentId=%s, %s", document_id, message
+            )
+            return False
+
     @staticmethod
     def _doc_map(chunk: DocumentChunk) -> dict:
         """DocumentChunk → ES 文档（仅关键词侧字段，无 embedding——向量在 PG）"""
@@ -114,6 +191,7 @@ class EsChunkIndexService:
             "category_id": chunk.category_id or "",
             "author_id": chunk.author_id or "",
             "team_id": chunk.team_id or "",
+            "is_public": bool(chunk.is_public),
             "doc_status": chunk.doc_status,
             "publish_time": chunk.publish_time,
             "indexed_at": datetime.now(timezone.utc).isoformat(),

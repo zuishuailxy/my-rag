@@ -10,8 +10,10 @@ chunk 级混合检索编排（对应 TS HybridRetrievalService：embed → searc
 """
 import logging
 
+from app.common.document_access import access_from_user, empty_scope
 from app.core.config import settings
 from app.pipeline.types import ChunkHit
+from app.schemas.auth import AuthUser
 from app.services.reranker import reranker_service
 from app.services.search import hybrid_search
 
@@ -32,16 +34,26 @@ class HybridRetrievalService:
         self._rrf_c = rrf_c
         self._min_score = settings.RAG_MIN_SCORE if min_score is None else min_score
 
-    async def retrieve(self, query: str, top_k: int = 5) -> list[dict]:
-        """对 query 执行混合检索，返回 topK 条按相关性排序的 chunk 详情"""
+    async def retrieve(
+        self, query: str, top_k: int = 5, user: AuthUser | None = None
+    ) -> list[dict]:
+        """对 query 执行混合检索，返回 topK 条按相关性排序的 chunk 详情
+
+        user 用于计算可见性范围（对应 TS retrieve(query, topK, user)）：
+        不传时退化为「只能看到公开内容」（empty_scope），不会变成不过滤。
+        """
         query = query.strip()
         if not query:
             return []
+
+        # 可见性范围：有登录用户按其角色/团队算，无用户则仅公开（对齐 TS 兜底 scope）
+        scope = access_from_user(user) if user is not None else empty_scope()
 
         fused = await hybrid_search(
             query,
             top_k=self._hybrid_top_k,
             rrf_c=self._rrf_c,
+            scope=scope,
         )
         if not fused:
             logger.log(logging.INFO, "混合检索无结果：queryLength=%d", len(query))

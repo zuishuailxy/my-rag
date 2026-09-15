@@ -25,7 +25,8 @@ class SearchHitItem(BaseModel):
     """单条命中（ES kh_document 文档原文 + 关键词高亮片段，对齐 TS searchDocuments 返回）
 
     仅保留 TS 实际返回的字段：id / title / summary / categoryId / tags / authorId /
-    status / publishTime / score / highlight。列表不回传 content 全文（_source 已排除）。
+    teamId / isPublic / status / publishTime / score / highlight。列表不回传 content
+    全文（_source 已排除）。
     """
 
     id: str | None = None
@@ -35,6 +36,10 @@ class SearchHitItem(BaseModel):
     # 与 PostgreSQL / Elasticsearch 中的逗号分隔字符串保持一致
     tags: str | None = None
     authorId: str | None = None
+    # 可见性字段（对齐 TS searchDocuments 返回）：teamId 为空串表示不属任何团队，
+    # isPublic 为 None 表示索引里缺该字段（历史数据未回填），都按「非公开」理解
+    teamId: str | None = None
+    isPublic: bool | None = None
     status: int | None = None
     publishTime: str | None = None
     # 相关性得分（hit._score）；TS 用 `hit._score ?? 0`

@@ -143,6 +143,9 @@ class AuthUser(BaseModel):
     # TS AuthUser 必填 permissions，此处默认空列表——守卫层 require_permission
     # 每次实时查库判定，不依赖本快照，字段主要用于登录/me 响应透出）
     permissions: list[str] = Field(default_factory=list)
+    # 所在团队 ID 列表（含担任负责人的团队），用于文档检索可见性过滤
+    # （对应 TS AuthUser.teamIds）；由 build_auth_user 查 kh_team_member ∪ kh_team.leader_id 注入
+    team_ids: list[str] = Field(default_factory=list)
 
 
 class LoginResult(BaseModel):
