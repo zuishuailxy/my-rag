@@ -1,12 +1,14 @@
 """团队模块 E2E 冒烟（对应 TS TeamController / TeamService）
 
-覆盖 TeamController 已接线端点（POST / PUT / DELETE / page / tree / :id /
-members 三件套）：
-  401 匿名 → 403 普通用户 → 创建（默认值 / 全字段 / 同码不查重 201）→
-  page（keyword / status / pageSize）→ tree（嵌套 / rootOnly）→
+覆盖 TeamController 已接线端点（POST / PUT / DELETE / page / mine / tree /
+:id / members 三件套）：
+  401 匿名 → 403 普通用户 → **/mine 仅需登录（非 ADMIN 也 200）** →
+  **/tree 收紧为 ADMIN（匿名 401 / USER 403）** → 创建（默认值 / 全字段 /
+  同码不查重 201）→ page（keyword / status / pageSize）→ tree（嵌套 / rootOnly）→
   详情 memberCount → 404（不存在 / 非法 id）→ 父不能是自己 400 →
   部分更新 → members 添加（幂等 / 404 / 空数组）→ 成员列表 →
-  members 移除 → 有子团队 400 → 删除叶子（成员硬删）→ 重复删 404。
+  members 移除 → 有子团队 400 → 删除叶子（成员硬删）→ 重复删 404 →
+  tree 排除已删 → **/mine 排除已软删团队**（listAccessibleTeamIds 的 deleted 过滤）。
 
 种子团队只读（kh_team 2 行 / kh_team_member 3 行为 init.sql 预置）；
 临时团队 + 临时成员关联结束硬删（先子表后主表），断言 kh_team 回到 2 行。
@@ -39,6 +41,7 @@ API = settings.API_V1_PREFIX
 RUN_TAG = f"{int(time.time())}{secrets.token_hex(3)}"
 # 种子团队：8000000000000000001 技术中心（根）/ 8000000000000000002 后端开发组（其子）
 SEED_ROOT_TEAM_ID = "8000000000000000001"
+SEED_BACKEND_TEAM_ID = "8000000000000000002"
 
 _results: list[str] = []
 CREATED_TEAM_IDS: list[str] = []
@@ -50,9 +53,14 @@ def check(step: object, ok: bool, detail: str) -> None:
 
 
 async def cleanup() -> None:
-    """硬删临时团队（先 kh_team_member 子表，再 kh_team 主表），并核对种子行数"""
-    if CREATED_TEAM_IDS:
-        ids = [int(i) for i in CREATED_TEAM_IDS]
+    """硬删临时团队（先 kh_team_member 子表，再 kh_team 主表），并核对种子行仍在
+
+    ⚠️ 断言口径：只验「本次创建的临时团队已清空 + 种子行完好」，**不断言 kh_team 全局
+    行数**——库里有 2026-09-03 手工测试留下的团队（前端开发组 ×2 + 一条 xiao 的成员
+    关联），全局计数既脆弱又会误报（对齐项目约定：断言不依赖总行数这类脆弱前提）。
+    """
+    ids = [int(i) for i in CREATED_TEAM_IDS]
+    if ids:
         async with async_session_factory() as session:
             await session.execute(
                 text("DELETE FROM kh_team_member WHERE team_id = ANY(:ids)"), {"ids": ids}
@@ -62,25 +70,52 @@ async def cleanup() -> None:
             )
             await session.commit()
             print(f"🧹 已删除临时团队 {len(CREATED_TEAM_IDS)} 个（含成员关联）")
+    seed_team_ids = [int(i) for i in (SEED_ROOT_TEAM_ID, SEED_BACKEND_TEAM_ID)]
+    seed_member_ids = [9000000000000000001, 9000000000000000002, 9000000000000000003]
     async with async_session_factory() as session:
-        n_team = (await session.execute(text("SELECT count(*) FROM kh_team"))).scalar_one()
-        n_member = (
-            await session.execute(text("SELECT count(*) FROM kh_team_member"))
+        left = (
+            await session.execute(
+                text("SELECT count(*) FROM kh_team WHERE id = ANY(:ids)"), {"ids": ids}
+            )
+        ).scalar_one() if ids else 0
+        n_seed_team = (
+            await session.execute(
+                text("SELECT count(*) FROM kh_team WHERE id = ANY(:ids)"),
+                {"ids": seed_team_ids},
+            )
         ).scalar_one()
-        ok = n_team == 2 and n_member == 3
-        check("清理", ok, f"种子还原 → kh_team={n_team}（应 2）kh_team_member={n_member}（应 3）")
+        n_seed_member = (
+            await session.execute(
+                text("SELECT count(*) FROM kh_team_member WHERE id = ANY(:ids)"),
+                {"ids": seed_member_ids},
+            )
+        ).scalar_one()
+        check(
+            "清理",
+            left == 0 and n_seed_team == 2 and n_seed_member == 3,
+            f"临时团队残留 {left}（应 0）；种子 kh_team={n_seed_team}/2 "
+            f"kh_team_member={n_seed_member}/3",
+        )
 
 
 async def main() -> None:
     user_headers = bearer_headers(SEED_USER_ID, "user")
     AUTH = bearer_headers()
 
-    # 1. 未登录 401
+    # 1. 未登录 401（/page 与 /tree 都是 ADMIN 限定；/mine 仅需登录）
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://smoke"
     ) as anon:
         r = await anon.get(f"{API}/teams/page")
+        r_mine = await anon.get(f"{API}/teams/mine")
+        r_tree = await anon.get(f"{API}/teams/tree")
     check(1, r.status_code == 401, f"无 token GET /teams/page → {r.status_code}")
+    check(1.1, r_mine.status_code == 401, f"无 token GET /teams/mine → {r_mine.status_code}")
+    check(
+        1.2,
+        r_tree.status_code == 401,
+        f"无 token GET /teams/tree → {r_tree.status_code}（已按 TS 收紧，原为公开）",
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -90,6 +125,34 @@ async def main() -> None:
         # 2. 普通用户 403（@roles(ADMIN)）
         r = await client.get(f"{API}/teams/page", headers=user_headers)
         check(2, r.status_code == 403, f"USER 角色 GET /teams/page → {r.status_code}")
+
+        # 2.1 /tree 同样 ADMIN 限定（TS @Roles(ADMIN) + @RequirePermission('system:team')）
+        r = await client.get(f"{API}/teams/tree", headers=user_headers)
+        check(
+            2.1,
+            r.status_code == 403,
+            f"USER 角色 GET /teams/tree → {r.status_code}（TS 是 ADMIN 端点）",
+        )
+
+        # 2.2 /mine 登录即可：TS 该端点没有 @Roles / @RequirePermission
+        r = await client.get(f"{API}/teams/mine", headers=user_headers)
+        mine_user = [t["id"] for t in r.json()] if r.status_code == 200 else []
+        # 种子：user 只在「后端开发组」成员表里（技术中心的成员是 admin）
+        check(
+            2.2,
+            r.status_code == 200 and mine_user == [SEED_BACKEND_TEAM_ID],
+            f"USER GET /teams/mine → {r.status_code} 团队={mine_user}（登录即可，非 ADMIN）",
+        )
+
+        # 2.3 /mine 对 admin 走「负责人」分支（两行种子团队 leader_id 都是 admin）
+        r = await client.get(f"{API}/teams/mine")
+        mine_admin = {t["id"] for t in r.json()} if r.status_code == 200 else set()
+        check(
+            2.3,
+            r.status_code == 200
+            and {SEED_ROOT_TEAM_ID, SEED_BACKEND_TEAM_ID} <= mine_admin,
+            f"ADMIN GET /teams/mine → {r.status_code} 含两个种子团队（成员 ∪ 负责人）",
+        )
 
         # 3. 最小字段创建 → 201 + 默认值（parentId '0' / sort 0 / status 1）
         r = await client.post(f"{API}/teams", json={"teamName": f"冒烟团队{RUN_TAG}"})
@@ -294,6 +357,43 @@ async def main() -> None:
             for c in n.get("children", [])
         )
         check(24, gone, "tree 不再含已删团队")
+
+        # 25. /mine 的软删过滤（对齐 TS listAccessibleTeamIds 第 3 步）
+        #     新建临时团队 + 把 user 加进去 → 应出现在 user 的 /mine
+        r = await client.post(
+            f"{API}/teams", json={"teamName": f"冒烟mine团队{RUN_TAG}"}
+        )
+        mine_team_id = r.json().get("id") if r.status_code == 201 else None
+        if mine_team_id:
+            CREATED_TEAM_IDS.append(mine_team_id)
+        r2 = (
+            await client.post(
+                f"{API}/teams/{mine_team_id}/members", json=[SEED_USER_ID]
+            )
+            if mine_team_id
+            else None
+        )
+        r3 = await client.get(f"{API}/teams/mine", headers=user_headers)
+        ids_before = [t["id"] for t in r3.json()] if r3.status_code == 200 else []
+        check(
+            25,
+            r.status_code == 201
+            and r2 is not None
+            and r2.status_code == 201
+            and mine_team_id in ids_before,
+            f"/mine 含刚加入的团队（user 可见 {len(ids_before)} 个）",
+        )
+
+        # 26. 软删该团队后再查 /mine → 必须消失
+        #     ⚠️ 这正是不加 deleted 过滤的后果：已删团队会继续授予文档可见性
+        r = await client.delete(f"{API}/teams/{mine_team_id}")
+        r2 = await client.get(f"{API}/teams/mine", headers=user_headers)
+        ids_after = [t["id"] for t in r2.json()] if r2.status_code == 200 else []
+        check(
+            26,
+            r.status_code == 200 and mine_team_id not in ids_after,
+            f"软删团队不再出现在 /mine（删前 {len(ids_before)} → 删后 {len(ids_after)}）",
+        )
 
 
 if __name__ == "__main__":

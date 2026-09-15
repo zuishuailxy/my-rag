@@ -10,6 +10,8 @@
   - create 默认值：parentId 缺省 '0'（根）、sort 0、status 1、其余可空字段 None；
     **不校验 leaderId / parentId 是否存在**（TS create 同样不查，悬空引用如实保留）。
   - update：parentId 传自身 ID → 400「父团队不能是自己」；其余字段未传不改动。
+    刻意优于 TS：parentId 传非法雪花串时 Python 抛 400「父团队 ID 非法」，TS 会
+    直接写进 bigint 列撞 PG 22003 → 500（同 bigint.py 的既有硬化口径）。
   - delete：有未删子团队 → 400「存在子团队，无法删除」；软删 team 后**硬删**成员关联
     （TS memberRepo.delete 同款）。TS 是 save + delete 两步各自生效，Python 合并为
     单事务提交（语义一致，原子性更强，刻意差异）。
@@ -22,6 +24,10 @@
   - removeMembers：In(userIds) 批量删；空数组时 TS TypeORM In([]) 不删任何行，
     SQLAlchemy in_([]) 同样生成恒假条件，行为一致。
   - listMembers：inner join 未删用户，返回 userId / memberRole / username / realName。
+  - listAccessibleTeamIds → list_user_team_ids：成员表 ∪ 负责人，**再按 kh_team.deleted=false
+    过滤**（TS 是两步：先并集，再 `find({id: In(ids), deleted: false})`）；同一结果既喂
+    AuthUser.teamIds（文档可见性）又喂 listMine。
+  - listMine：登录即可的「我的团队」列表，按 sort ASC / created_at ASC 排序。
 """
 
 from fastapi import HTTPException
@@ -286,8 +292,11 @@ class TeamService:
     async def list_user_team_ids(self, session: AsyncSession, user_id: str) -> list[str]:
         """用户所属团队 ID（含担任负责人的团队）——文档检索可见性用
 
-        对应 TS AuthUser.teamIds 的语义（「所在团队（含担任负责人的团队）」）：
-        kh_team_member 里的成员关系 ∪ kh_team.leader_id 指向本人的团队。
+        对应 TS `listAccessibleTeamIds(userId)`：
+          1) kh_team_member 里的成员关系 ∪ kh_team.leader_id 指向本人的团队（去重）
+          2) **再按 kh_team.deleted = false 过滤**（TS 第 3 步 `find({ id: In(ids),
+             deleted: false })`）——成员记录可能仍指向已软删团队，不过滤会让
+             「已删团队」继续授予文档可见性（TS 不会）。
         只按 bigint 数字列比较（user_id 非法或不存在时返回空列表，不抛错——
         鉴权链路不应因团队成员数据异常而整体失败）。
         """
@@ -299,12 +308,34 @@ class TeamService:
             select(TeamMember.team_id).where(TeamMember.user_id == uid)
         )
         leader_rows = await session.execute(
-            select(Team.id).where(Team.leader_id == uid)
+            select(Team.id).where(Team.leader_id == uid, Team.deleted == False)  # noqa: E712
         )
         # 去重（兼任负责人且同时在成员表时只保留一个）
         ids: set[int] = {r for (r,) in member_rows.all() if r is not None}
         ids.update(r for (r,) in leader_rows.all() if r is not None)
-        return [str(i) for i in sorted(ids)]
+        if not ids:
+            return []
+        # TS 第 3 步：成员记录可能指向已软删团队，这里统一过滤（保真，勿省）
+        alive = await session.scalars(
+            select(Team.id).where(Team.id.in_(ids), Team.deleted == False)  # noqa: E712
+        )
+        return [str(i) for i in sorted(alive.all())]
+
+    async def list_mine(self, session: AsyncSession, user_id: str) -> list[Team]:
+        """当前用户所在团队（含担任负责人的），对应 TS `listMine(userId)`
+
+        先取可访问团队 ID（`list_user_team_ids`，与 AuthUser.teamIds 同源），
+        再无 ID 时短路返回空列表、有则按 sort ASC / created_at ASC 排序查实体。
+        """
+        ids = await self.list_user_team_ids(session, user_id)
+        if not ids:
+            return []
+        teams = await session.scalars(
+            select(Team)
+            .where(Team.id.in_([int(i) for i in ids]), Team.deleted == False)  # noqa: E712
+            .order_by(Team.sort.asc(), Team.created_at.asc())
+        )
+        return list(teams.all())
 
     @staticmethod
     def _to_dict(team: Team) -> dict:

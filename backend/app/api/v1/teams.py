@@ -4,12 +4,16 @@
   - 类级 @Roles(ADMIN) → 每个端点 @roles(RoleCode.ADMIN)
   - 方法级 @RequirePermission(code) → dependencies=[Depends(require_permission(code))]
 
-例外：GET /tree 在 TS 标了 @Public()（类级 @Roles 对它的实际约束取决于 TS RolesGuard
-对 public 的处理）。Python auth_route 的组合语义是 @public + @roles 时以 @roles 为准
-（仍需登录），与 @Public 的显式意图相悖，故此处只标 @public 完全公开——若 TS 侧
-tree 实际需要管理员，再补 @roles(ADMIN)。
+唯一例外：GET /mine 在 TS 里**没有** @Roles / @RequirePermission（注释「当前用户所在
+团队（含担任负责人的），登录即可」）→ Python 只靠 auth_router 的默认登录拦截，
+不加 @roles(ADMIN)、也不挂 system:team。
 
-路由顺序：/page、/tree 是字面量段，必须注册在 /{team_id} 动态段之前。
+⚠️ 2026-09-15 订正：早期版本此处写「TS 的 /tree 标了 @Public()」，故 Python 只标
+@public()。对照 TS 最新源码，/tree **是** @Roles(RoleCode.ADMIN) +
+@RequirePermission('system:team')，且整个 controller 未 import Public 装饰器
+（不存在被 @Public 放开的端点）→ 已按 TS 收紧为 ADMIN + system:team。
+
+路由顺序：/page、/mine、/tree 是字面量段，必须注册在 /{team_id} 动态段之前。
 
 状态码：POST create / addMembers → 201（NestJS @Post 默认 201）；其余 200。
 """
@@ -19,11 +23,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth_route import auth_router, public, roles
+from app.api.auth_route import auth_router, roles
+from app.api.deps import get_current_user
 from app.api.permission_guard import require_permission
 from app.common.roles import RoleCode
 from app.db.session import get_db_session
 from app.models.team import Team
+from app.schemas.auth import AuthUser
 from app.schemas.team import (
     CreateTeamRequest,
     QueryTeamRequest,
@@ -39,6 +45,8 @@ from app.services.team import team_service
 router = auth_router()
 
 _DB = Annotated[AsyncSession, Depends(get_db_session)]
+
+_CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
 
 _TEAM_PERM = [Depends(require_permission("system:team"))]
 
@@ -99,13 +107,35 @@ async def page_teams(
     )
 
 
-@router.get("/tree", response_model=list[TeamTreeResponse])
-@public()
+@router.get("/mine", response_model=list[TeamResponse])
+async def list_my_teams(
+    session: _DB,
+    current_user: _CurrentUser,
+) -> list[TeamResponse]:
+    """当前用户所在团队（含担任负责人的），登录即可
+
+    对应 TS `GET /teams/mine` → `teamService.listMine(user.userId)`：**不挂**
+    @roles(ADMIN) 与 system:team（TS 上该端点同样没有这两个装饰器），
+    只靠 auth_router 的默认登录拦截。结果按 sort ASC / created_at ASC 排序。
+    """
+    teams = await team_service.list_mine(session, current_user.user_id)
+    return [_vo(t) for t in teams]
+
+
+@router.get(
+    "/tree",
+    response_model=list[TeamTreeResponse],
+    dependencies=_TEAM_PERM,
+)
+@roles(RoleCode.ADMIN)
 async def team_tree(
     session: _DB,
     root_only: Annotated[str | None, Query(alias="rootOnly")] = None,
 ) -> list[TeamTreeResponse]:
-    """团队树（公开接口，对应 TS @Public；rootOnly=true 只返回根节点）"""
+    """团队树（ADMIN + system:team，对应 TS @Roles(ADMIN) + @RequirePermission('system:team')）
+
+    rootOnly=true 只返回根节点。
+    """
     nodes = await team_service.get_tree(session, root_only == "true")
     # rootOnly 节点无 children 键 → 响应模型补默认空数组（TS 不带键，语义一致的刻意差异）
     return [TeamTreeResponse(**node) for node in nodes]
