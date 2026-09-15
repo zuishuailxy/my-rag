@@ -36,6 +36,7 @@ SEED_REVIEWER_ID = 1000000000000000002
 SEED_USER_ID = 1000000000000000003
 SEED_ROLE_ADMIN_ID = 2000000000000000001
 SEED_ROLE_REVIEWER_ID = 2000000000000000002
+SEED_ROLE_USER_ID = 2000000000000000003
 
 step = 0
 
@@ -72,12 +73,24 @@ async def main() -> None:
         # ---------- 2) 种子角色可读 ----------
         step += 1
         print(f"{step}) 种子角色经 ORM 可读")
+        # 只断言 3 个种子角色按固定 ID 存在、编码正确、status=1，**不断言总数与顺序** ——
+        # 库里可能有手工建的测试角色（如 2026-09-03 的 ROLE_TEST「测试」），
+        # 总计数和「按 id 排序后正好是三个」都是脆弱前提（与第 3 步同一口径）。
         roles = (await session.execute(select(Role).order_by(Role.id))).scalars().all()
-        assert len(roles) == 3, f"预置角色应为 3 个，实际 {len(roles)}"
-        codes = [r.role_code for r in roles]
-        assert codes == ["ROLE_ADMIN", "ROLE_REVIEWER", "ROLE_USER"], codes
-        assert all(r.status == 1 for r in roles)
-        ok(f"角色编码：{codes}")
+        by_id = {r.id: r for r in roles}
+        seed_roles = {
+            SEED_ROLE_ADMIN_ID: "ROLE_ADMIN",
+            SEED_ROLE_REVIEWER_ID: "ROLE_REVIEWER",
+            SEED_ROLE_USER_ID: "ROLE_USER",
+        }
+        missing = [rid for rid in seed_roles if rid not in by_id]
+        assert not missing, f"种子角色缺失：{missing}，库里角色共 {len(roles)} 个"
+        for rid, code in seed_roles.items():
+            assert by_id[rid].role_code == code, (
+                f"{rid} 期望 {code}，实际 {by_id[rid].role_code}"
+            )
+            assert by_id[rid].status == 1, f"{code} status 应为 1"
+        ok(f"种子角色：{[by_id[rid].role_code for rid in seed_roles]}")
 
         # ---------- 3) 用户-角色关联可读 ----------
         step += 1
@@ -219,7 +232,17 @@ async def main() -> None:
             ).scalar_one()
             assert u.username == uname, f"种子账号 {uid} 异常：{u.username!r}"
         roles = (await session.execute(select(Role))).scalars().all()
-        assert len(roles) == 3, f"kh_role 应仍为 3 行，实际 {len(roles)}"
+        # 同样不断言 kh_role 总行数：库里有 2026-09-03 手工建的 ROLE_TEST「测试」，
+        # 只校验 3 个种子角色仍在且字段未被冒烟用例改动（破坏性用例都在事务内回滚）
+        role_by_id = {r.id: r for r in roles}
+        for rid, code in (
+            (SEED_ROLE_ADMIN_ID, "ROLE_ADMIN"),
+            (SEED_ROLE_REVIEWER_ID, "ROLE_REVIEWER"),
+            (SEED_ROLE_USER_ID, "ROLE_USER"),
+        ):
+            r = role_by_id.get(rid)
+            assert r is not None, f"种子角色 {rid} 丢失"
+            assert r.role_code == code and r.status == 1, f"种子角色 {code} 被改动：{r.role_code}/{r.status}"
         seed_link_ids = {3000000000000000001, 3000000000000000002, 3000000000000000003, 3000000000000000004}
         links = (await session.execute(select(UserRole))).scalars().all()
         missing = seed_link_ids - {link.id for link in links}

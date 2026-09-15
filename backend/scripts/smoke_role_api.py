@@ -237,7 +237,11 @@ async def main() -> None:
         assert resp.status_code == 403, resp.text
         assert resp.json()["detail"] == "权限不足", resp.text
 
-        # 14) admin 读种子角色(user)的权限 → 200，且含 init.sql 写入的 6 个权限 ID
+        # 14) admin 读种子角色(user)的权限 → 200，且含 8 个权限 ID
+        #     init.sql 预置 6 个（dashboard/document 菜单 + document:list/create + search/profile 菜单），
+        #     ae2f893「文档端点逐接口权限码对齐 + 权限种子补齐」再由
+        #     seed_role_permission_matrix.py 补 document:edit(…013) / document:delete(…014)。
+        #     ⚠️ 该提交当时漏改本断言 → 只要种子矩阵刷过就会误报，2026-09-15 订正。
         resp = await client.get(
             f"{API}/roles/2000000000000000003/permissions", headers=admin_h
         )
@@ -252,6 +256,8 @@ async def main() -> None:
             "4000000000000000012",
             "4000000000000000003",
             "4000000000000000004",
+            "4000000000000000013",
+            "4000000000000000014",
         }, resp.text
 
         # 15) 建一个临时角色用于权限写测试
