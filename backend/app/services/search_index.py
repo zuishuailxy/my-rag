@@ -109,13 +109,18 @@ class SearchIndexService:
         team_id: str | int | None,
         author_id: str | int | None,
     ) -> bool:
-        """已发布文档只改公开 / 团队 / 作者时，就地改 kh_document 的可见性字段
+        """已发布文档只改公开 / 团队 / 作者时，就地补写 kh_document 的可见性字段
 
         chunk 侧 es_chunk_index_service.update_visibility 的文档级版本：文档由公开转
         私有后若不同步，未授权用户仍能通过 POST /search 搜到该文档的标题与摘要。
-        按 _id（= 文档 ID）update_by_query 就地改，免去从 PG 重拉全文重灌。
 
-        与 chunk 侧一致：空值写空串（便于 term 查询），ES 不可用/失败返回 False 不抛错。
+        与 TS search-index.service.ts:updateVisibility 同口径：按 _id（= 文档 ID）
+        **单条 update**，不是 update_by_query —— 差别在「文档不在索引里」时的表现：
+        update 会抛 document_missing_exception → 落到 WARN 分支；update_by_query 则是
+        updated=0 静默返回 True，会把「这篇文档压根没进过索引」这种异常伪装成成功。
+
+        空值统一写空串（与 chunk 侧 / _doc_map 的 `or ""` 一致，便于 term 查询）；
+        ES 不可用或写入失败只记日志返回 False，不抛错（调用方不阻断文档保存）。
         """
         if not es_service.is_available or es_service.client is None:
             logger.warning(
@@ -123,35 +128,26 @@ class SearchIndexService:
             )
             return False
         try:
-            resp = await es_service.client.update_by_query(
+            # _id 即文档 ID（index_document 以 doc_id 作 _id）
+            await es_service.client.update(
                 index=DOCUMENT_INDEX,
-                # _id 即文档 ID（index_document 以 doc_id 作 _id），只改这一条
-                query={"ids": {"values": [str(document_id)]}},
-                script={
-                    "source": (
-                        "ctx._source.isPublic = params.isPublic; "
-                        "ctx._source.teamId = params.teamId; "
-                        "ctx._source.authorId = params.authorId;"
-                    ),
-                    "params": {
-                        "isPublic": bool(is_public),
-                        "teamId": "" if team_id is None else str(team_id),
-                        "authorId": "" if author_id is None else str(author_id),
-                    },
+                id=str(document_id),
+                doc={
+                    "isPublic": bool(is_public),
+                    "teamId": "" if team_id is None else str(team_id),
+                    "authorId": "" if author_id is None else str(author_id),
                 },
                 refresh=True,
             )
-            logger.info(
-                "文档可见性已更新：documentId=%s, updated=%s",
-                document_id,
-                resp.get("updated", 0),
-            )
+            logger.info("文档可见性已更新：documentId=%s", document_id)
             return True
         except Exception as err:  # noqa: BLE001
-            if "index_not_found" in str(err):
+            message = str(err)
+            # 索引不存在 = 没有可更新的文档，视作已同步（与 chunk 侧同一约定）
+            if "index_not_found" in message:
                 return True
             logger.warning(
-                "文档可见性更新失败：documentId=%s, %s", document_id, err
+                "文档可见性更新失败：documentId=%s, %s", document_id, message
             )
             return False
 
