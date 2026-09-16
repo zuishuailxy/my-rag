@@ -6,7 +6,7 @@ import { DefaultChatTransport } from "ai";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { App, Button, Empty, Input, Space, Typography, message } from "antd";
 import { aiApi } from "../api";
-import { ApiError } from "../api/client";
+import { API_BASE, ApiError } from "../api/client";
 import { getAccessToken } from "../auth";
 import {
   ChatMessageParts,
@@ -35,7 +35,9 @@ export default function ChatPage() {
   const transport = useMemo(
     () =>
       new DefaultChatTransport<KhUIMessage>({
-        api: "/api/v1/ai/chat/stream",
+        // 必须走 API_BASE（默认 /api/v1）：vite proxy 对 /api 前缀原样转发、
+        // 不做 rewrite，漏掉 /v1 会被后端当未知路由返回 404。
+        api: `${API_BASE}/ai/chat/stream`,
         headers: () => {
           const token = getAccessToken();
           const headers: Record<string, string> = {};
