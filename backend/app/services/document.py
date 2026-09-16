@@ -499,7 +499,6 @@ class DocumentService:
             old_status,
             _as_status(entity.status),
             content_changed,
-            final_content,
             visibility_changed=old_visibility != (entity.is_public, entity.team_id),
         )
 
@@ -790,18 +789,21 @@ class DocumentService:
         old_status: DocumentStatus,
         new_status: DocumentStatus,
         content_changed: bool,
-        content: str,
         visibility_changed: bool = False,
     ) -> None:
         """更新后根据状态变化同步索引
 
         - Published → 非 Published：清索引
-        - 仍为 Published 且正文变了：免审模式重建索引；需审核模式等再次发布 / 审核通过
-        - 仍为 Published、正文没变但可见性变了（is_public / team_id / author_id）：
+        - 仍为 Published 且正文变了：**免审**时重建索引；**需审**时等再次发布 / 审核通过
+          ⚠️ 该分支只在免审时短路 return —— 需审时不返回，流程继续往下走
+        - 仍为 Published 且可见性变了（is_public / team_id）：
           就地更新三处索引的可见性字段 —— chunk（ES kh_chunk）、文档级
           （ES kh_document）、图谱文档节点（Neo4j KnowledgeDocument），
           不必重新分块 / 重新嵌入 / 重新拉全文 / 重新抽实体建图
           （对应 TS PipelineOrchestrator.updateVisibility 的三路 Promise.all）。
+
+        两个分支可**同时命中**：免审下重建索引本身就带上了新可见性（本分支再刷一次幂等），
+        需审下不重建索引，可见性完全靠本分支兜住 —— 故本分支不得被上面的 return 吞掉。
 
         为什么必须处理可见性变更：检索可见性靠索引上的 is_public/team_id/author_id
         过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索、
@@ -816,9 +818,19 @@ class DocumentService:
             await self._safe_unpublish(doc.id)
             return
 
-        if is_published and content_changed:
-            if not document_review_service.is_require_approval():
-                await self._safe_publish(doc)
+        # ⚠️ 短路条件必须与 TS **完全同形**：TS 把 `!isRequireApproval()` 写在
+        # if 条件**里面**（`isPublished && contentChanged && !isRequireApproval()`），
+        # 所以需审模式下这个分支整体不成立，流程继续往下走可见性同步。
+        # 曾经把 `not is_require_approval()` 挪进 if 体内 —— 那等于「需审也 return」，
+        # 需审模式下可见性变更被整个丢弃（2026-09-16 实测越权：PG 已私有化，
+        # ES kh_chunk / kh_document / Neo4j 三处仍留「公开 + 原团队」旧值，任何用户可搜到）。
+        # 判断的语义是「要不要重建索引」，不是「要不要继续走这个函数」。
+        if (
+            is_published
+            and content_changed
+            and not document_review_service.is_require_approval()
+        ):
+            await self._safe_publish(doc)
             return
 
         if is_published and visibility_changed:
@@ -829,15 +841,23 @@ class DocumentService:
             # 刻意差异：TS 由 PipelineOrchestrator.updateVisibility 统一 Promise.all
             # 三处调用，本项目沿用「document.py 直接调具体服务」的既有结构（编排器
             # 只负责 MQ 消费侧的建索引），此处顺序 await 三处，语义等价。
-            await es_chunk_index_service.update_visibility(
-                doc.id, doc.is_public, doc.team_id, doc.author_id
-            )
-            await search_index_service.update_visibility(
-                doc.id, doc.is_public, doc.team_id, doc.author_id
-            )
-            await graph_build_service.update_visibility(
-                doc.id, doc.is_public, doc.team_id, doc.author_id
-            )
+            # 外层 try 对齐 TS 的 `try { await pipeline.updateVisibility(doc) }
+            # catch { warn }`：三处实现内部都已自行降级（不抛），这里是兜底 ——
+            # 将来某处改成抛错，也不该把整个 PATCH 打成 500。
+            try:
+                await es_chunk_index_service.update_visibility(
+                    doc.id, doc.is_public, doc.team_id, doc.author_id
+                )
+                await search_index_service.update_visibility(
+                    doc.id, doc.is_public, doc.team_id, doc.author_id
+                )
+                await graph_build_service.update_visibility(
+                    doc.id, doc.is_public, doc.team_id, doc.author_id
+                )
+            except Exception as err:  # noqa: BLE001
+                logger.warning(
+                    "可见性同步失败（不影响文档保存）：documentId=%s, %s", doc.id, err
+                )
 
     async def _safe_publish(self, doc: DocumentEntity) -> None:
         """投递 MQ：RAG 分块向量 + 全文搜索 + KG 建图（失败不回滚文档状态）
