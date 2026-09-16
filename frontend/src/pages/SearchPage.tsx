@@ -18,13 +18,17 @@ import {
 import { searchApi } from "../api";
 import { ApiError } from "../api/client";
 import type { SearchHit } from "../types";
-import { DOC_STATUS, formatTime, safeHighlight } from "../utils";
+import {
+  DOC_STATUS,
+  formatTime,
+  safeHighlight,
+  visibilityMeta,
+} from "../utils";
 import { FileTypeIcon } from "../components/FileTypeIcon";
 
 export default function SearchPage() {
   const navigate = useNavigate();
   const [keyword, setKeyword] = useState("");
-  const [authorId, setAuthorId] = useState<string>();
   const [categoryId, setCategoryId] = useState<string>();
   const [status, setStatus] = useState<number | undefined>();
   const [page, setPage] = useState(1);
@@ -47,7 +51,6 @@ export default function SearchPage() {
         keyword: q,
         page: nextPage,
         pageSize,
-        authorId: authorId || undefined,
         categoryId: categoryId || undefined,
       });
       const filtered =
@@ -67,12 +70,15 @@ export default function SearchPage() {
 
   return (
     <div className="kh-page">
+      <p className="kh-access-hint">
+        只会检索你有权限的已发布文档：公开、所在团队，以及自己写的。
+      </p>
       <div className="kh-search-bar">
         <Input
           size="large"
           allowClear
           prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
-          placeholder="输入关键词，检索已发布文档全文"
+          placeholder="输入关键词，检索你有权限的文档"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onPressEnter={() => void runSearch(1)}
@@ -94,13 +100,6 @@ export default function SearchPage() {
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value || undefined)}
         />
-        <Input
-          allowClear
-          style={{ width: 180 }}
-          placeholder="作者 ID"
-          value={authorId}
-          onChange={(e) => setAuthorId(e.target.value || undefined)}
-        />
         <Select
           allowClear
           style={{ width: 160 }}
@@ -116,7 +115,6 @@ export default function SearchPage() {
         />
         <Button
           onClick={() => {
-            setAuthorId(undefined);
             setCategoryId(undefined);
             setStatus(undefined);
           }}
@@ -128,14 +126,14 @@ export default function SearchPage() {
       {elapsed !== null ? (
         <div className="kh-result-meta">
           <span>
-            找到约 {total} 条结果（用时 {elapsed.toFixed(2)} 秒）
+            找到约 {total} 条可见结果（用时 {elapsed.toFixed(2)} 秒）
           </span>
           <span>相关度排序</span>
         </div>
       ) : null}
 
       {!items.length && elapsed !== null ? (
-        <Empty description="没有匹配的已发布文档" />
+        <Empty description="没有匹配的可见文档" />
       ) : null}
 
       {items.map((hit) => {
@@ -147,6 +145,7 @@ export default function SearchPage() {
           "";
         const statusMeta =
           hit.status != null ? DOC_STATUS[hit.status] : undefined;
+        const vis = visibilityMeta(hit);
         return (
           <div className="kh-hit" key={hit.id}>
             <div className="kh-hit-icon">
@@ -175,6 +174,7 @@ export default function SearchPage() {
                 {statusMeta ? (
                   <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
                 ) : null}
+                <Tag color={vis.color}>{vis.label}</Tag>
                 <Space size={4}>
                   {(hit.tags || "")
                     .split(",")

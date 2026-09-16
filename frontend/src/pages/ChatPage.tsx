@@ -229,7 +229,7 @@ export default function ChatPage() {
           知识问答
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          流式回答会展示知识库检索、思考与联网搜索过程，并写入左侧会话。
+          只会检索你有权限的文档（公开、所在团队、自己写的）。流式回答会展示检索、思考与联网搜索过程，并写入左侧会话。
         </Typography.Paragraph>
         <div className="kh-chat-log" ref={logRef} onScroll={onLogScroll}>
           {messages.length === 0 ? (

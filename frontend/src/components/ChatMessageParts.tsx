@@ -245,7 +245,7 @@ function RetrieveCard({
   items: RetrieveHit[];
 }) {
   const count = items.length;
-  const label = count ? "已检索知识库" : "未检索到相关资料";
+  const label = count ? "已检索可见知识库" : "未检索到你有权限的相关资料";
 
   return (
     <details className="kh-web">

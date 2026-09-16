@@ -6,6 +6,7 @@ export interface AuthUser {
   avatar?: string | null;
   roles: string[];
   permissions: string[];
+  teamIds?: string[];
 }
 
 export interface LoginResult {
@@ -50,6 +51,8 @@ export interface SearchHit {
   categoryId?: string | null;
   tags?: string | null;
   authorId?: string | null;
+  teamId?: string | null;
+  isPublic?: boolean | null;
   status?: number | null;
   publishTime?: string | null;
   score: number;
@@ -200,6 +203,10 @@ export interface TeamItem {
   sort?: number;
   status?: number;
   memberCount?: number;
+}
+
+export interface TeamTreeNode extends TeamItem {
+  children?: TeamTreeNode[];
 }
 
 export interface ReviewTask {

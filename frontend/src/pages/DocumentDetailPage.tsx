@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Button,
+  Empty,
   Popconfirm,
   Space,
   Spin,
@@ -15,7 +16,13 @@ import { documentApi } from "../api";
 import { ApiError } from "../api/client";
 import type { DocumentItem } from "../types";
 import { useAuth } from "../auth";
-import { DOC_STATUS, can, formatTime } from "../utils";
+import {
+  DOC_STATUS,
+  can,
+  canWriteDocument,
+  formatTime,
+  visibilityMeta,
+} from "../utils";
 import { FileTypeIcon } from "../components/FileTypeIcon";
 
 export default function DocumentDetailPage() {
@@ -24,13 +31,21 @@ export default function DocumentDetailPage() {
   const user = useAuth();
   const [doc, setDoc] = useState<DocumentItem | null>(null);
   const [loading, setLoading] = useState(true);
+  const [forbidden, setForbidden] = useState(false);
 
   async function load() {
     setLoading(true);
+    setForbidden(false);
     try {
       setDoc(await documentApi.get(id));
     } catch (error) {
-      message.error(error instanceof ApiError ? error.message : "加载失败");
+      setDoc(null);
+      if (error instanceof ApiError && error.status === 403) {
+        setForbidden(true);
+        message.error("无权查看该文档");
+      } else {
+        message.error(error instanceof ApiError ? error.message : "加载失败");
+      }
     } finally {
       setLoading(false);
     }
@@ -40,7 +55,7 @@ export default function DocumentDetailPage() {
     void load();
   }, [id]);
 
-  if (loading || !doc) {
+  if (loading) {
     return (
       <div className="kh-page">
         <Spin />
@@ -48,18 +63,33 @@ export default function DocumentDetailPage() {
     );
   }
 
+  if (!doc) {
+    return (
+      <div className="kh-page">
+        <Empty
+          description={forbidden ? "无权查看该文档" : "文档不存在或已删除"}
+        >
+          <Button onClick={() => navigate("/documents")}>返回列表</Button>
+        </Empty>
+      </div>
+    );
+  }
+
   const status = DOC_STATUS[doc.status];
+  const vis = visibilityMeta(doc);
+  const writable = canWriteDocument(user, doc);
 
   return (
     <div className="kh-page">
       <Space style={{ marginBottom: 12 }} wrap>
         <Button onClick={() => navigate("/documents")}>返回列表</Button>
-        {can(user, "document:edit") ? (
+        {can(user, "document:edit") && writable ? (
           <Button onClick={() => navigate(`/documents/${id}/edit`)}>
             编辑
           </Button>
         ) : null}
         {can(user, "document:edit") &&
+        writable &&
         (doc.status === 0 || doc.status === 2) ? (
           <Button
             type="primary"
@@ -77,7 +107,7 @@ export default function DocumentDetailPage() {
             发布
           </Button>
         ) : null}
-        {can(user, "document:edit") && doc.status === 1 ? (
+        {can(user, "document:edit") && writable && doc.status === 1 ? (
           <>
             <Button
               onClick={async () => {
@@ -109,7 +139,7 @@ export default function DocumentDetailPage() {
             </Button>
           </>
         ) : null}
-        {can(user, "document:delete") ? (
+        {can(user, "document:delete") && writable ? (
           <Popconfirm
             title="确认删除该文档？"
             onConfirm={async () => {
@@ -142,7 +172,7 @@ export default function DocumentDetailPage() {
       </Typography.Title>
       <Space wrap>
         <Tag color={status?.color}>{status?.label}</Tag>
-        <Tag>{doc.isPublic ? "公开" : "非公开"}</Tag>
+        <Tag color={vis.color}>{vis.label}</Tag>
         <span style={{ color: "#8c8c8c" }}>
           更新于 {formatTime(doc.updatedAt)}
         </span>

@@ -136,6 +136,13 @@ body,
   min-height: calc(100vh - 88px);
 }
 
+.kh-access-hint {
+  margin: 0 0 16px;
+  color: #8c8c8c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .kh-search-bar {
   display: flex;
   gap: 12px;

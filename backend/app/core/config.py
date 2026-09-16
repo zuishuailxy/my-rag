@@ -125,7 +125,7 @@ class Settings(BaseSettings):
     # DashScope 百炼 OpenAI 兼容端点
     EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     # 模型 ID 以百炼控制台为准（text-embedding-v3/v4 或 qwen3-embedding-*；写错会 400）
-    EMBEDDING_MODEL: str = "qwen3.7-text-embedding"
+    EMBEDDING_MODEL: str = "qwen3.7-text-embedding-flash"
     EMBEDDING_DIMENSION: int = 1024
     # DashScope text-embedding-v3 单次最多 10 条；超出会 400 InvalidParameter（代码内钳制）
     EMBEDDING_BATCH_SIZE: int = 10
@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     # API Key fallback 链与 TS 一致：RERANK_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     RERANK_API_KEY: str | None = None
     # 模型 ID 以百炼控制台为准（qwen3-rerank 等；写错会 400）
-    RAG_RERANK_MODEL: str = "qwen3-rerank"
+    RAG_RERANK_MODEL: str = "gte-rerank-v2"
     # DashScope 原生（非 OpenAI 兼容）端点前缀，重排走专用 /api/v1/services/rerank/...
     RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com"
 

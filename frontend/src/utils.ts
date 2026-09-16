@@ -1,4 +1,4 @@
-import type { AuthUser } from "./types";
+import type { AuthUser, TeamItem, TeamTreeNode } from "./types";
 
 export const DOC_STATUS: Record<number, { label: string; color: string }> = {
   0: { label: "草稿", color: "default" },
@@ -29,6 +29,40 @@ export function isReviewer(user: AuthUser | null) {
   return Boolean(
     user?.roles.includes("ROLE_ADMIN") || user?.roles.includes("ROLE_REVIEWER"),
   );
+}
+
+/** 作者或管理员可改文档 */
+export function canWriteDocument(
+  user: AuthUser | null,
+  doc: { authorId?: string | null },
+) {
+  if (!user) return false;
+  if (isAdmin(user)) return true;
+  return Boolean(doc.authorId && doc.authorId === user.userId);
+}
+
+export function visibilityMeta(doc: {
+  isPublic?: boolean | null;
+  teamId?: string | null;
+}) {
+  if (doc.isPublic) return { label: "公开", color: "success" as const };
+  if (doc.teamId) return { label: "团队可见", color: "blue" as const };
+  return { label: "仅自己", color: "default" as const };
+}
+
+export function flattenTeams(nodes: TeamTreeNode[] | unknown[]): TeamItem[] {
+  const out: TeamItem[] = [];
+  const walk = (list: unknown[]) => {
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") continue;
+      const node = raw as TeamTreeNode;
+      if (node.id && node.teamName) out.push(node);
+      if (Array.isArray(node.children) && node.children.length)
+        walk(node.children);
+    }
+  };
+  walk(nodes);
+  return out;
 }
 
 export function displayName(user: AuthUser | null) {

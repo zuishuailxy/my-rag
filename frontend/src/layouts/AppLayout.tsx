@@ -16,12 +16,13 @@ import {
   TeamOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Avatar, Badge, Dropdown, Layout, Menu, theme } from "antd";
+import { Avatar, Badge, Dropdown, Layout, Menu, Tag, theme } from "antd";
 import type { MenuProps } from "antd";
-import { authApi } from "../api";
+import { authApi, teamApi } from "../api";
 import { clearAuth, updateUser, useAuth } from "../auth";
 import { can, displayName, isAdmin, isReviewer } from "../utils";
 import { BrandLogo } from "../components/BrandLogo";
+import type { TeamItem } from "../types";
 
 const { Header, Sider, Content } = Layout;
 
@@ -32,6 +33,7 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  const [myTeams, setMyTeams] = useState<TeamItem[]>([]);
   const {
     token: { colorBgContainer },
   } = theme.useToken();
@@ -40,6 +42,10 @@ export default function AppLayout() {
     authApi
       .me()
       .then(updateUser)
+      .catch(() => undefined);
+    teamApi
+      .mine()
+      .then(setMyTeams)
       .catch(() => undefined);
   }, []);
 
@@ -106,7 +112,7 @@ export default function AppLayout() {
   const side = useMemo(() => {
     if (topKey === "/documents") {
       const items: MenuItem[] = [
-        { key: "/documents", icon: <ReadOutlined />, label: "全部文档" },
+        { key: "/documents", icon: <ReadOutlined />, label: "可见文档" },
         {
           key: "/documents/new",
           icon: <FileTextOutlined />,
@@ -221,6 +227,11 @@ export default function AppLayout() {
                 src={user?.avatar || undefined}
               />
               <span>{displayName(user)}</span>
+              {myTeams.slice(0, 2).map((team) => (
+                <Tag key={team.id} style={{ marginInlineEnd: 0 }}>
+                  {team.teamName}
+                </Tag>
+              ))}
             </div>
           </Dropdown>
         </div>

@@ -1,6 +1,8 @@
 import { del, get, patch, post, put, request } from "./client";
 import type {
+  ChatMessage,
   ChatResult,
+  ChatSession,
   ChunkHit,
   DocumentItem,
   GraphEdge,
@@ -14,14 +16,15 @@ import type {
   RoleItem,
   SearchHit,
   TeamItem,
+  TeamTreeNode,
   UserStats,
   UserVO,
-} from "../types.ts";
+} from "../types";
 
 export const authApi = {
   login: (username: string, password: string) =>
     post<LoginResult>("/auth/login", { username, password }),
-  me: () => get<import("../types.ts").AuthUser>("/auth/me"),
+  me: () => get<import("../types").AuthUser>("/auth/me"),
   logout: () => post<{ message: string }>("/auth/logout"),
 };
 
@@ -190,7 +193,8 @@ export const teamApi = {
     }
     return get<PageResult<TeamItem>>(`/teams/page?${params}`);
   },
-  tree: () => get<unknown[]>("/teams/tree"),
+  tree: () => get<TeamTreeNode[]>("/teams/tree"),
+  mine: () => get<TeamItem[]>("/teams/mine"),
   create: (body: Record<string, unknown>) => post<TeamItem>("/teams", body),
   update: (id: string, body: Record<string, unknown>) =>
     put<TeamItem>(`/teams/${id}`, body),

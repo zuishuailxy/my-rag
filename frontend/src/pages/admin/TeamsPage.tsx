@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
-import { Button, Form, Input, Modal, Space, Table, message } from "antd";
-import { teamApi } from "../../api";
+import {
+  Button,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  message,
+} from "antd";
+import { teamApi, userApi } from "../../api";
 import { ApiError } from "../../api/client";
 import type { TeamItem } from "../../types";
 
@@ -19,7 +29,11 @@ export default function TeamsPage() {
   const [open, setOpen] = useState(false);
   const [membersFor, setMembersFor] = useState<TeamItem | null>(null);
   const [members, setMembers] = useState<MemberRow[]>([]);
-  const [memberIds, setMemberIds] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState<string>();
+  const [userOptions, setUserOptions] = useState<
+    { value: string; label: string }[]
+  >([]);
+  const [searching, setSearching] = useState(false);
   const [form] = Form.useForm();
 
   async function load(nextPage = page) {
@@ -34,6 +48,51 @@ export default function TeamsPage() {
       setPage(nextPage);
     } catch (error) {
       message.error(error instanceof ApiError ? error.message : "加载失败");
+    }
+  }
+
+  async function loadMembers(teamId: string) {
+    const rows = (await teamApi.members(teamId)) as MemberRow[];
+    setMembers(rows);
+    setItems((prev) =>
+      prev.map((team) =>
+        team.id === teamId ? { ...team, memberCount: rows.length } : team,
+      ),
+    );
+    return rows;
+  }
+
+  async function searchUsers(query: string) {
+    const kw = query.trim().toLowerCase();
+    if (!kw) {
+      setUserOptions([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await userApi.page({
+        keyword: query.trim(),
+        page: 1,
+        pageSize: 20,
+      });
+      const taken = new Set(members.map((row) => row.userId));
+      setUserOptions(
+        res.items
+          .filter(
+            (user) =>
+              !taken.has(user.id) && user.username.toLowerCase().includes(kw),
+          )
+          .map((user) => ({
+            value: user.id,
+            label: user.realName
+              ? `${user.username}（${user.realName}）`
+              : user.username,
+          })),
+      );
+    } catch (error) {
+      message.error(error instanceof ApiError ? error.message : "搜索用户失败");
+    } finally {
+      setSearching(false);
     }
   }
 
@@ -75,8 +134,10 @@ export default function TeamsPage() {
               <a
                 onClick={async () => {
                   setMembersFor(row);
+                  setSelectedUserId(undefined);
+                  setUserOptions([]);
                   try {
-                    setMembers((await teamApi.members(row.id)) as MemberRow[]);
+                    await loadMembers(row.id);
                   } catch (error) {
                     message.error(
                       error instanceof ApiError
@@ -137,28 +198,33 @@ export default function TeamsPage() {
         footer={null}
         width={640}
       >
-        <Space style={{ marginBottom: 12 }}>
-          <Input
-            placeholder="用户 ID，逗号分隔"
-            value={memberIds}
-            onChange={(e) => setMemberIds(e.target.value)}
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Select
+            showSearch={{
+              filterOption: false,
+              onSearch: (value) => void searchUsers(value),
+            }}
+            allowClear
+            placeholder="按用户名搜索"
+            value={selectedUserId}
+            options={userOptions}
+            loading={searching}
+            onChange={(value) => setSelectedUserId(value)}
             style={{ width: 280 }}
+            notFoundContent={searching ? "搜索中…" : "输入用户名搜索"}
           />
           <Button
             type="primary"
             onClick={async () => {
-              if (!membersFor) return;
-              const ids = memberIds
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
-              if (!ids.length) return;
+              if (!membersFor || !selectedUserId) {
+                message.warning("请先按用户名搜索并选择成员");
+                return;
+              }
               try {
-                await teamApi.addMembers(membersFor.id, ids);
-                setMembers(
-                  (await teamApi.members(membersFor.id)) as MemberRow[],
-                );
-                setMemberIds("");
+                await teamApi.addMembers(membersFor.id, [selectedUserId]);
+                await loadMembers(membersFor.id);
+                setSelectedUserId(undefined);
+                setUserOptions([]);
                 message.success("已添加");
               } catch (error) {
                 message.error(
@@ -175,10 +241,35 @@ export default function TeamsPage() {
           dataSource={members}
           pagination={false}
           columns={[
-            { title: "用户 ID", dataIndex: "userId" },
             { title: "用户名", dataIndex: "username" },
             { title: "姓名", dataIndex: "realName" },
             { title: "角色", dataIndex: "memberRole" },
+            {
+              title: "操作",
+              width: 80,
+              render: (_: unknown, row: MemberRow) => (
+                <Popconfirm
+                  title={`确定将 ${row.username} 移出团队？`}
+                  okText="踢出"
+                  okType="danger"
+                  cancelText="取消"
+                  onConfirm={async () => {
+                    if (!membersFor) return;
+                    try {
+                      await teamApi.removeMembers(membersFor.id, [row.userId]);
+                      await loadMembers(membersFor.id);
+                      message.success("已移出");
+                    } catch (error) {
+                      message.error(
+                        error instanceof ApiError ? error.message : "移出失败",
+                      );
+                    }
+                  }}
+                >
+                  <a style={{ color: "#ff4d4f" }}>踢出</a>
+                </Popconfirm>
+              ),
+            },
           ]}
         />
       </Modal>
