@@ -14,7 +14,11 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
-    echo=settings.DEBUG,
+    # 由 DB_ECHO 单独控制（默认 false）。**刻意不用 settings.DEBUG**：DEBUG 管的是
+    # /docs 开关且默认为 True，用它当开关会让每条 SQL 都进日志；而且 SQLAlchemy 的
+    # echo 一旦为真就绕过 logging 级别判定（见 app/core/config.py 的 DB_ECHO 注释），
+    # 届时靠调 logger 级别或 app/core/logging.py 的降噪名单都压不住。
+    echo=settings.DB_ECHO,
 )
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)

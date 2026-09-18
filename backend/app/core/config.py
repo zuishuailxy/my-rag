@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
+    # ---- 日志 ----
+    # 业务 logger 的输出级别。对应 TS NestJS 的默认输出（那边没有开关，恒 INFO），
+    # 这里加开关是为了排查时不必改代码。**与 DEBUG 刻意解耦**：DEBUG 管的是
+    # /docs 与 /redoc 是否开放，两者职责不同，不该互相牵动。
+    # 取值：DEBUG / INFO / WARNING / ERROR / CRITICAL（大小写不敏感）。
+    # 拼错不报错，回退 INFO —— 日志级别写错不该让服务起不来（见 app/core/logging.py）。
+    LOG_LEVEL: str = "INFO"
+
     # ---- 服务器 ----
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -60,6 +68,16 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = "user"
     POSTGRES_PASSWORD: str = "123456"
     POSTGRES_DB: str = "knowledge_hub"
+    # 是否把每条 SQL 打到日志（对应 SQLAlchemy `create_async_engine(echo=...)`）。
+    # ⚠️ 默认 **False**，且**刻意与 DEBUG 解耦**：DEBUG 管的是 /docs 与 /redoc 是否开放
+    # （默认 True），原先把 echo 挂在 DEBUG 上 ⇒ 开发环境每条 SQL（含会话分页、权限查询）
+    # 都会刷屏，而它并不提供任何不该在日志里出现的信息。
+    # ⚠️ 另一个不直观的点：**日志级别压不住 echo**。SQLAlchemy 的 `InstanceLogger.log()`
+    # 在 echo 为真时直接取 `_echo_map[echo]`（True→INFO）作为判定级别，**完全不读
+    # logging 的 effective level**，再直接调 `logger._log()` 绕过 `Logger.isEnabledFor()`。
+    # 所以无论把 `sqlalchemy` / `sqlalchemy.engine` 调到 WARNING 还是 CRITICAL 都无效
+    # （实测；`app/core/logging.py` 的降噪名单因此不再收录该 logger）—— 要关只能从这里关。
+    DB_ECHO: bool = False
 
     @property
     def DATABASE_URL(self) -> str:

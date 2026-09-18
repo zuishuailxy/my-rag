@@ -14,12 +14,19 @@ from app import models  # noqa: F401  确保所有 ORM 模型注册到 Base.meta
 from app.api.auth_route import auth_router, check_route_classes, public
 from app.api.v1 import api_router
 from app.core.config import settings
+from app.core.logging import setup_logging
 from app.db.es import es_service
 from app.db.mongo import close_mongo_client
 from app.db.redis import redis_service
 from app.db.session import close_db_engine, engine
 from app.models.base import Base
 from app.services.graph_build import graph_build_service
+
+
+# 统一日志初始化：必须早于任何业务 logger 调用。不初始化的话 root 处于
+# 「无 handler + level=WARNING」的默认态，所有 logger.info 会被静默丢弃
+# （FastAPI / uvicorn 都不配置 root）——详见 app/core/logging.py 的模块注释。
+setup_logging()
 
 
 async def _init_database_with_retry() -> None:

@@ -31,7 +31,7 @@ from smoke_auth import SEED_ADMIN_ID, SEED_REVIEWER_ID, SEED_USER_ID, bearer_hea
 logging.basicConfig(
     level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s"
 )
-# engine 以 echo=settings.DEBUG 创建，这里关掉避免 SQL 刷屏淹没断言输出
+# 兜底：DB_ECHO 打开时手动压掉 SQL，避免刷屏淹没断言输出（默认已由 DB_ECHO=false 关闭）
 engine.echo = False
 
 # 裸 app：不挂 lifespan，不连 MQ / ES / Neo4j

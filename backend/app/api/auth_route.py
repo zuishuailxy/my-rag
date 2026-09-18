@@ -222,7 +222,7 @@ def check_route_classes(app: FastAPI) -> None:
             unprotected,
         )
     else:
-        logger.info("[AuthRoute] 鉴权守卫已覆盖全部 APIRoute：count=%d", total)
+        logger.info("鉴权守卫已覆盖全部 APIRoute：count=%d", total)
 
 
 __all__ = [

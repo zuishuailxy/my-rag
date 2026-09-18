@@ -33,7 +33,7 @@ from app.schemas.auth import BCRYPT_MAX_PASSWORD_BYTES
 from app.services.user import _hash_password
 from scripts.smoke_auth import SEED_USER_ID, SEED_USER_USERNAME, bearer_headers
 
-# engine 以 echo=settings.DEBUG 创建，这里关掉避免 SQL 刷屏淹没断言输出
+# 兜底：DB_ECHO 打开时手动压掉 SQL，避免刷屏淹没断言输出（默认已由 DB_ECHO=false 关闭）
 engine.echo = False
 
 BASE = "http://testserver/api/v1"
