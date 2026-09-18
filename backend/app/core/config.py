@@ -184,8 +184,15 @@ class Settings(BaseSettings):
     RAG_HYBRID_TOP_K: int = 20
     # RRF 常数（与 ES RRF 默认一致）：score = Σ 1/(C + rank)
     RAG_RRF_C: int = 60
-    # rerank relevance_score 下限（0–1），低于该值的候选不进入最终结果；<=0 表示不过滤
-    RAG_MIN_SCORE: float = 0.4
+    # rerank relevance_score 下限（0–1），低于该值的候选不进入最终结果；<=0 表示不过滤。
+    # ⚠️ 这个阈值**跟 reranker 模型绑定**，不能照搬 TS 的 0.4：TS 用的 qwen3-rerank
+    # 分档偏高；本项目 .env 用 gte-rerank-v2，实测
+    #   · 真正相关（「私车公用申请表」命中差旅制度）top 分只有 0.13~0.47
+    #   · 不相关 query（「今天天气」）约 0.006，偶发假阳 0.064
+    # 用 0.4 会把**全部**合法命中过滤掉 → AI 回答「召回不到相关资料」，而文档搜索
+    # （ES kh_document，不走 rerank）却能找到。0.1 实测能分开上述两组。
+    # 换回 qwen3-rerank 时请一并把该值调回适配值。
+    RAG_MIN_SCORE: float = 0.1
 
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
     RABBITMQ_ENABLED: bool = True
