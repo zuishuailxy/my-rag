@@ -2,17 +2,29 @@
 应用配置：使用 pydantic-settings 从环境变量加载
 """
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# .env 定位：backend/.env
+# （本文件在 backend/app/core/config.py → parents[2] 即 backend/）
+# ⚠️ 刻意不用相对的 `env_file=".env"`：pydantic-settings 对相对路径是**按 cwd 解析**的，
+# 于是会出现「从仓库根启动 → 整份 .env 不生效、全部悄悄回落默认值、且不报错」——2026-09-18
+# 实测：仓库根启动时 MAIL_USER=''、TAVILY_API_KEY 为空（backend/.env 其实存在且值齐全）。
+# 改成基于 __file__ 的绝对路径后，无论从哪个目录启动都稳定读到 backend/.env。
+# 容器内：Dockerfile WORKDIR=/app 且代码复制到 /app/app/... → 解析为 /app/.env，行为一致。
+# 注：文件不存在时 pydantic-settings 仍按「静默忽略」处理（沿用原行为，不额外报错）。
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
     """应用配置类"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
