@@ -1,7 +1,14 @@
 """AI 流式对话服务（对应 TS ai/ai-stream.service.ts，逐段转写）
 
-链路：会话（touchTitle / 新建）→ 混合检索 → data-* 进度事件 → agent 流式作答
-→ UI Message Stream（AI SDK v6 SSE 协议）→ 落库（appendTurn）。
+链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗口，miss 回填库）→ 追问改写
+（检索改写器）→ 混合检索 ∥ 长期记忆检索 → data-* 进度事件 → agent 流式作答
+→ UI Message Stream（AI SDK v6 SSE 协议）→ 落库（appendTurn + 短期/长期记忆）。
+
+短期记忆（Redis 热窗口）：`load_working_history` 先 `tryLoad`，miss 才查库回填；
+长期记忆（Mem0）：本轮 `search` 出 user/session 两层，拼成 SystemMessage 前置进
+messages；落库尾部 `remember_turn` 异步写回（不 await，对齐 TS 的 fire-and-forget）。
+追问改写（ChatQueryRewriteService）：结合历史把「那谁审批？」改写成独立查询，
+并判定本轮是否需要检索；`need_retrieve=false`（寒暄）时跳过检索直接作答。
 
 🔴 刻意差异一：协议编码器自研（本文件 UiMessageStreamWriter）。
 TS 用 `ai` 包的 createUIMessageStream/pipeUIMessageStreamToResponse，Python 无对应物。
@@ -27,6 +34,7 @@ TS 用 streamMode=["messages", "tools"]（LangChain JS 的 createAgent 支持
 未标注时存**空列表**（与非流式 to_cited_sources 的「回退全部召回」不同）。
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -34,8 +42,16 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
+from langchain.agents.middleware import (
+    ModelCallLimitMiddleware,
+    SummarizationMiddleware,
+)
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from langchain_core.tools import tool
 from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, Field, SecretStr
@@ -45,7 +61,11 @@ from app.core.config import settings
 from app.pipeline.types import ChunkHit
 from app.schemas.ai import ChatStreamRequest, CreateSessionRequest
 from app.schemas.auth import AuthUser
+from app.services.chat_long_memory import chat_long_memory_service
+from app.services.chat_memory import db_rows_to_messages
+from app.services.chat_query_rewrite import chat_query_rewrite_service
 from app.services.chat_session import chat_session_service, title_from_question
+from app.services.chat_short_memory import chat_short_memory_service
 from app.services.retrieval import hybrid_retrieval_service
 from app.services.web_search import web_search_service
 
@@ -60,13 +80,36 @@ _CITATION_RE = re.compile(r"\[(\d+)\]")
 
 _SYSTEM_PROMPT = (
     "你是企业知识库助手。优先根据「检索到的资料」回答。"
+    "结合对话历史和记忆里的用户背景，但制度/流程以本轮资料为准，不要用记忆替代文档。"
+    "没有检索资料且是寒暄时，直接回应，不必调用 web_search。"
     "资料不足、需要时效性或外部公开信息时，调用 web_search。"
     "依据资料的陈述句末标 [n]，与资料编号一致。"
     "联网结果用标题+链接说明，不要编造。资料不够就明确说不知道。"
 )
 
+# 摘要中间件提示词（与 TS summaryPrompt 逐字一致，{messages} 由中间件填充）
+_SUMMARY_PROMPT = (
+    "用中文简洁总结对话：话题、已确认结论、待办。不要写入知识库条文。\n\n"
+    "待摘要的对话：\n{messages}\n\n摘要："
+)
+# 历史达到 12 条时触发摘要，保留最近 6 条（对齐 TS trigger/keep）
+_SUMMARY_TRIGGER_MESSAGES = 12
+_SUMMARY_KEEP_MESSAGES = 6
+
 # SSE 终止帧（AI SDK useChat / DefaultChatTransport 识别用）
 _SSE_DONE = "data: [DONE]\n\n"
+
+# 长期记忆写入是 fire-and-forget（对齐 TS 不 await 的 rememberTurn）。
+# ⚠️ 必须持强引用：asyncio.create_task 生成的 Task 若无引用会被 GC 回收，
+# 记忆写入会静默丢失（异常也被吞掉只 WARN，很难发现）。
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def _spawn(coro: Any) -> None:
+    """启动后台任务并持强引用（见 _background_tasks 注释）"""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 class UiMessageStreamWriter:
@@ -225,13 +268,39 @@ def _build_agent() -> Any | None:
         stream_usage=False,
         extra_body={"thinking": {"type": "enabled" if thinking_enabled else "disabled"}},
     )
-    # 对齐 TS modelCallLimitMiddleware({ runLimit: 4, exitBehavior: 'end' })：
-    # 单次 invoke 最多 4 次模型调用，超限正常结束而非抛错
+    # 摘要用 LLM（对齐 TS compactLlm：temperature 0）。
+    # ⚠️ 刻意差异：TS 的 compactLlm 没关 thinking（DeepSeek 默认开），这里按 TS 注释
+    # 「摘要/分类不要开思考」的意图显式关闭——思考对摘要无益，还拉长耗时与成本。
+    compact_llm = ChatDeepSeek(
+        api_key=SecretStr(api_key),
+        model=model,
+        base_url=base_url,
+        temperature=0,
+        timeout=timeout_s,
+        max_retries=0,
+        stream_usage=False,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+    # 中间件列表显式标注为 list[Any]：SummarizationMiddleware 与 ModelCallLimitMiddleware
+    # 的状态泛型不同，直接内联进 create_agent 会让 mypy 按首元素推断列表类型而报错。
+    middleware: list[Any] = [
+        # 历史过长时把早期对话压成摘要、保留最近 6 条（对齐 TS summarizationMiddleware）。
+        # Python 侧 trigger / keep 必须是元组形式（字典 `{messages: 12}` 会解包报错）。
+        SummarizationMiddleware(
+            model=compact_llm,
+            trigger=("messages", _SUMMARY_TRIGGER_MESSAGES),
+            keep=("messages", _SUMMARY_KEEP_MESSAGES),
+            summary_prompt=_SUMMARY_PROMPT,
+        ),
+        # 单次 invoke 最多 4 次模型调用（对齐 TS modelCallLimitMiddleware）：
+        # 避免 web_search 循环打爆；超限正常结束而非抛错
+        ModelCallLimitMiddleware(run_limit=4, exit_behavior="end"),
+    ]
     return create_agent(
         model=llm,
         tools=[_web_search],
         system_prompt=_SYSTEM_PROMPT,
-        middleware=[ModelCallLimitMiddleware(run_limit=4, exit_behavior="end")],
+        middleware=middleware,
     )
 
 
@@ -298,6 +367,7 @@ class AiStreamService:
         top_k = dto.topK or 5
         persist_session_id: str | None = dto.sessionId
         persist_sources: list[dict[str, Any]] = []
+        persist_history: list[BaseMessage] = []
 
         yield writer.start()
 
@@ -321,14 +391,34 @@ class AiStreamService:
         persist_session_id = str(sess.id)
         yield writer.data("session", {"sessionId": persist_session_id})
 
-        yield writer.data("status", {"stage": "retrieve", "text": "正在检索知识库…"})
+        # 历史：先读 Redis 热窗口，miss 才查库回填
+        history = await self.load_working_history(db, user.user_id, persist_session_id)
+        persist_history = history
 
-        hits: list[ChunkHit] = []
-        try:
-            rows = await hybrid_retrieval_service.retrieve(question, top_k, user)
-            hits = [ChunkHit.from_row(row) for row in rows]
-        except Exception as exc:  # noqa: BLE001 —— 检索失败不阻断作答（对齐 TS catch）
-            logger.warning("RAG 检索失败：%s", exc)
+        # 追问改写：有历史才有改写价值（对齐 TS `if (history.length)`）
+        if history:
+            yield writer.data("status", {"stage": "rewrite", "text": "正在理解问题…"})
+        plan = await chat_query_rewrite_service.rewrite(question, history)
+        if plan["need_retrieve"]:
+            yield writer.data("status", {"stage": "retrieve", "text": "正在检索知识库…"})
+
+        # 检索与长期记忆并行（对齐 TS Promise.all）；need_retrieve=false 时跳过检索
+        async def _retrieve_if_needed() -> list[ChunkHit]:
+            if not plan["need_retrieve"]:
+                return []
+            try:
+                rows = await hybrid_retrieval_service.retrieve(plan["query"], top_k, user)
+                return [ChunkHit.from_row(row) for row in rows]
+            except Exception as exc:  # noqa: BLE001 —— 检索失败不阻断作答（对齐 TS catch）
+                logger.warning("RAG 检索失败：%s", exc)
+                return []
+
+        hits, mem_hits = await asyncio.gather(
+            _retrieve_if_needed(),
+            chat_long_memory_service.search(
+                user.user_id, persist_session_id, plan["query"]
+            ),
+        )
 
         sources = [
             {
@@ -345,7 +435,8 @@ class AiStreamService:
         yield writer.data(
             "retrieve",
             {
-                "query": question,
+                # 对齐 TS：上报的是改写后的检索 query，不是原始追问
+                "query": plan["query"],
                 "items": [
                     {
                         "index": s["index"],
@@ -369,15 +460,25 @@ class AiStreamService:
             yield _SSE_DONE
             return
 
-        prompt = (
-            f"检索到的资料：\n{self.build_context(hits)}\n\n用户问题：{question}"
-            if hits
-            else f"知识库没有召回到相关内容。\n\n用户问题：{question}"
-        )
+        if hits:
+            prompt = f"检索到的资料：\n{self.build_context(hits)}\n\n用户问题：{question}"
+        elif plan["need_retrieve"]:
+            prompt = f"知识库没有召回到相关内容。\n\n用户问题：{question}"
+        else:
+            # 寒暄：不检索，直接作答（对齐 TS）
+            prompt = f"用户问题：{question}"
+
+        # 长期记忆拼成一条 SystemMessage 前置；两层皆空时为 None，不注入（对齐 TS）
+        memory_msg = chat_long_memory_service.build_system_message(mem_hits)
+        messages: list[BaseMessage] = [
+            *([memory_msg] if memory_msg else []),
+            *history,
+            HumanMessage(prompt),
+        ]
 
         try:
             agent_stream = self._agent.astream(
-                {"messages": [HumanMessage(prompt)]},
+                {"messages": messages},
                 stream_mode=["messages", "updates"],
             )
             async for mode, payload in agent_stream:
@@ -425,12 +526,48 @@ class AiStreamService:
         cited = [s for s in persist_sources if s["index"] in used] if used else []
         if not question or not persist_session_id:
             return
+        final_answer = answer or "未能生成回答。"
         try:
             await chat_session_service.append_turn(
-                db, user.user_id, persist_session_id, question, answer or "未能生成回答。", cited
+                db, user.user_id, persist_session_id, question, final_answer, cited
+            )
+            # 短期记忆回写：history + 本轮问答（appendTurn 内部再截断到窗口）
+            await chat_short_memory_service.append_turn(
+                user.user_id, persist_session_id, persist_history, question, final_answer
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("流式对话落库失败：%s", exc)
+        # 长期记忆写入不 await（对齐 TS 的 fire-and-forget）：分类器是一次额外 LLM 调用，
+        # 不能让用户等它；remember_turn 内部已吞异常只 WARN。
+        _spawn(
+            chat_long_memory_service.remember_turn(
+                user.user_id, persist_session_id, question, final_answer
+            )
+        )
+
+    async def load_working_history(
+        self, db: AsyncSession, user_id: str, session_id: str
+    ) -> list[BaseMessage]:
+        """取本轮要用的历史：Redis 热窗口优先，miss 才查库回填（对应 TS loadWorkingHistory）
+
+        返回的 history 会前置进 agent 的 messages，并在落库时原样交给短期记忆
+        追加本轮问答（否则只写本轮、丢掉窗口里已有的历史）。
+        """
+        cached = await chat_short_memory_service.try_load(user_id, session_id)
+        # ⚠️ 必须是 `is not None` 而不是真值判断：save([]) 后 try_load 返回 []，
+        # 那是「命中但窗口为空」而不是 miss，用 `if cached:` 会白白回填一次库。
+        if cached is not None:
+            return cached
+        rows = await chat_session_service.list_recent_messages(
+            db, user_id, session_id, chat_short_memory_service.window_size
+        )
+        history = db_rows_to_messages(rows)
+        if history:
+            await chat_short_memory_service.save(user_id, session_id, history)
+            logger.info(
+                "短期记忆从库回填：sessionId=%s, n=%d", session_id, len(history)
+            )
+        return history
 
     @staticmethod
     def build_context(hits: list[ChunkHit]) -> str:

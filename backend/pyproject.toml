@@ -36,6 +36,7 @@ dependencies = [
     "aiosmtplib>=5.1.2",
     "langchain>=1.4.0",
     "langchain-deepseek>=1.1.0",
+    "mem0ai>=2.0.20",
 ]
 
 [tool.uv]
@@ -51,6 +52,15 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
+
+# ⚠️ mem0ai 没带 py.typed，但 mypy 仍会**跟随它的 import 图**：实测日志显示会去解析
+# qdrant-client / dnspython / posthog / urllib3 / pydantic.v1 等一大堆第三方包，
+# 在本机（16G 内存被 Docker 占满、free 仅百余 MB）直接 OOM 被杀，exit 137。
+# 显式跳过该包的类型跟随；mem0 对象按 Any 处理，业务侧用法已在
+# services/chat_long_memory.py 里按 mem0ai 2.0.20 源码逐条核对，不依赖 mypy 兜底。
+[[tool.mypy.overrides]]
+module = ["mem0", "mem0.*"]
+follow_imports = "skip"
 
 [dependency-groups]
 dev = [

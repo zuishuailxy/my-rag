@@ -12,6 +12,15 @@ ON DELETE CASCADE，但 TS 是显式两步删除，不依赖库级级联。
   save() 触发更新，这里用 SQL 表达式赋值达到同样效果（每次问答必刷新）。
 - _get_owned 非法 / 不存在的会话 id 统一 404「会话不存在」（parse_bigint
   语义，路径参数非法值 404；TS 靠 bigint 查不到自然 404，行为一致）。
+
+缓存联动（2026-09-18 补齐，对齐 TS chat-session.service.ts）：
+- `list_recent_messages` 只查库，供调用方在 Redis 热窗口 miss 时回填；它**自己
+  不写 Redis**——写窗口是 ChatShortMemoryService 的职责，两处各自实现过滤口径
+  迟早会漂移（「只存 human/ai 原文」的判定集中在 chat_memory.py）。
+- `remove` 除删库外还要清该会话的短期记忆（Redis 热窗口）与长期记忆会话层
+  （Mem0 session 层）：只删库不清缓存，会话内容会在 TTL 内继续被当作「历史
+  记忆」召回，表现为「删了的会话还在影响回答」。
+  两处清理失败只 WARN，不影响删除结果（缓存不可用不能阻断删除）。
 """
 
 import logging
@@ -31,6 +40,8 @@ from app.models.ai_session import (
     AiSession,
 )
 from app.schemas.ai import CreateSessionRequest, QuerySessionRequest, UpdateSessionRequest
+from app.services.chat_long_memory import chat_long_memory_service
+from app.services.chat_short_memory import chat_short_memory_service
 
 logger = logging.getLogger("ChatSessionService")
 
@@ -92,11 +103,19 @@ class ChatSessionService:
         return entity
 
     async def remove(self, session: AsyncSession, user_id: str, session_id: str) -> dict:
-        """删除会话：先删消息再删会话，返回 { message: '已删除' }（对应 TS remove）"""
+        """删除会话：先删消息再删会话，最后清缓存，返回 { message: '已删除' }
+
+        对应 TS remove。清理顺序与 TS 一致：库删除提交后再清 Redis / Mem0——
+        先清缓存再删库的话，若删库失败就出现「缓存已清但数据还在」，
+        虽不影响正确性（回落数据库）但会让窗口白丢一次。
+        """
         entity = await self._get_owned(session, user_id, session_id)
         await session.execute(sa_delete(AiMessage).where(AiMessage.session_id == entity.id))
         await session.execute(sa_delete(AiSession).where(AiSession.id == entity.id))
         await session.commit()
+        # 缓存清理失败只 WARN（两个 service 内部已各自吞异常并记日志）
+        await chat_short_memory_service.clear(user_id, session_id)
+        await chat_long_memory_service.clear_session(user_id, session_id)
         logger.info("AI 会话已删除：sessionId=%s, userId=%s", session_id, user_id)
         return {"message": "已删除"}
 
@@ -111,6 +130,37 @@ class ChatSessionService:
             .order_by(AiMessage.created_at.asc(), AiMessage.id.asc())
         )
         return list((await session.scalars(stmt)).all())
+
+    async def list_recent_messages(
+        self, session: AsyncSession, user_id: str, session_id: str, limit: int
+    ) -> list[AiMessage]:
+        """最近 N 条消息，**时间正序**返回（对应 TS listRecentMessages）
+
+        用途：Redis 热窗口 miss 时，由调用方取这批行 → db_rows_to_messages →
+        回填 ChatShortMemoryService。**只查库，不写缓存**（写窗口是短期记忆服务
+        的职责，见模块注释「缓存联动」）。
+
+        实现要点与 TS 逐条对齐：
+        - 先 `_get_owned`（本人校验，非本人 / 非法 id 404），再查消息。
+        - SQL 用 created_at DESC, id DESC 取「最新的 N 条」，返回前 reverse 成
+          正序——不能反过来用 ASC + limit（那取到的是最旧的 N 条）。这里必须
+          走 SQL 侧 LIMIT 而不是取全量再切片：会话可能很长，全量拉进内存只为
+          截 20 条是浪费。
+        - limit 做 `max(limit, 1)` 兜底（对齐 TS `take: Math.max(limit, 1)`）：
+          limit<=0 时退化成 1 条，绝不退化成「不限量」。⚠️ TS 传 NaN 会得到
+          NaN 从而让 TypeORM 报错，Python 传非 int 在这里是类型错误，
+          不构造等价行为。
+        """
+        entity = await self._get_owned(session, user_id, session_id)
+        stmt = (
+            select(AiMessage)
+            .where(AiMessage.session_id == entity.id)
+            .order_by(AiMessage.created_at.desc(), AiMessage.id.desc())
+            .limit(max(limit, 1))
+        )
+        rows = list((await session.scalars(stmt)).all())
+        rows.reverse()
+        return rows
 
     async def append_turn(
         self,

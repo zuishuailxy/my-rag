@@ -234,8 +234,49 @@ class Settings(BaseSettings):
     # 流式对话思考开关（对应 TS LLM_ENABLE_THINKING）：严格 == "false" 才关，
     # 默认开——deepseek-v4-flash 开思考后 reasoning_content 随流式 delta 返回
     LLM_ENABLE_THINKING: str = "true"
+
+    # ---- 检索改写（多轮追问 → 独立短查询；对应 TS chat-query-rewrite.service.ts）----
+    # 单次改写 LLM 超时（毫秒，TS `Number(config.get('AI_QUERY_REWRITE_TIMEOUT_MS', 15000))`）。
+    # 改写是增强环节：超时/失败都回退原问题，绝不阻断检索。
+    # ⚠️ TS 的 `Number(...)` 会把写错的环境变量变成 NaN 一路传到 ChatOpenAI；
+    # 这里声明为 int，非法值在启动时即报错（同 chat_short_memory 的处理）。
+    AI_QUERY_REWRITE_TIMEOUT_MS: int = 15000
+
+    # ---- LangSmith（LangChain / LangGraph 链路追踪）----
+    # ⚠️ 这里声明只是为了让 pydantic 认识这四个 key（extra="ignore" 下未声明的会被静默丢弃）。
+    # **真正让追踪生效的是文件末尾的 _export_langsmith_env()**：LangSmith SDK 只读
+    # `os.environ`，不读 pydantic Settings。pydantic-settings 只把 .env 读进 Settings
+    # 对象，**不会写回 os.environ** —— 所以只填 .env 而不导出时，
+    # `tracing_is_enabled()` 恒为 False，Web 上一条记录都没有。
+    # 开关用字符串，与项目其他开关一致：仅严格 == "true" 才开启（SDK 同款判定）。
+    LANGSMITH_TRACING: str = "false"
+    LANGSMITH_API_KEY: str | None = None
+    LANGSMITH_PROJECT: str = "default"
+    # 留空用官方 SaaS（https://api.smith.langchain.com）；自建网关才需覆盖
+    LANGSMITH_ENDPOINT: str | None = None
     # 联网搜索（Tavily，对应 TS WebSearchService；TS 原版是 Bocha，刻意迁移已文档化）
     TAVILY_API_KEY: str | None = None
+
+    # ---- 对话短期记忆（Redis 热窗口；对应 TS chat-short-memory.service.ts）----
+    # 用途：最近若干条 human/ai 原文放 Redis，避免每轮问答都回 Postgres 拉历史；
+    # 只存原文，不含检索资料 / 思考 / Mem0 系统消息（由 chat_memory.is_working_message 过滤）。
+    # 窗口 key 为 `{PREFIX}:{userId}:{sessionId}:messages`，miss 时由调用方从库回填。
+    # ⚠️ TS 用 `Number(config.get(..., 86400))`，环境变量写错会得到 NaN 并一路传到 Redis；
+    # 这里声明为 int，非法值在启动时即报错（刻意优于 TS，不静默降级）。
+    CHAT_SHORT_MEMORY_TTL_SECONDS: int = 86400
+    CHAT_SHORT_MEMORY_MAX_MESSAGES: int = 20
+    CHAT_SHORT_MEMORY_KEY_PREFIX: str = "kh:chat"
+
+    # ---- 对话长期记忆（Mem0 托管平台；对应 TS chat-long-memory.service.ts）----
+    # 未配置 MEM0_API_KEY 时整个长期记忆模块跳过（构造时 WARN，各方法直接返回空/不写）。
+    # MEM0_HOST 留空则用 SDK 默认 https://api.mem0.ai（自建网关时才需覆盖）。
+    # 每层各取多少条（TS `Number(config.get('MEM0_TOP_K', 5))`）。
+    # ⚠️ 记忆的「抽取」在 Mem0 云侧完成，SDK 不暴露模型参数，只能用 custom_instructions
+    # 约束输出；本进程只跑「分类器」（判断写 user 层 / session 层 / 都不写），走下方
+    # OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY 链，本项目即 deepseek-v4-flash。
+    MEM0_API_KEY: str | None = None
+    MEM0_HOST: str | None = None
+    MEM0_TOP_K: int = 5
 
     # ---- Neo4j（KG 知识图谱存储；与 docker-compose 中 neo4j 服务一致）----
     NEO4J_ENABLED: bool = True
@@ -253,3 +294,25 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+
+def _export_langsmith_env() -> None:
+    """把 LangSmith 配置导出到 os.environ（SDK 只读环境变量）
+
+    ⚠️ 这是「在 .env 填了 key 但 Web 看不到记录」的根因修复。
+    LangSmith SDK 的 `tracing_is_enabled()` / Client 都走 `os.environ`；
+    pydantic-settings 不会把 .env 写回进程环境，必须显式导出。
+
+    用 `setdefault`：外部真实环境变量（docker/CI/命令行 export）优先于 .env，
+    与 pydantic-settings 的优先级一致。空值不导出，避免 SDK 拿到空串 key。
+    """
+    for key in ("LANGSMITH_TRACING", "LANGSMITH_PROJECT", "LANGSMITH_ENDPOINT"):
+        value = getattr(settings, key)
+        if value:
+            os.environ.setdefault(key, str(value))
+    if settings.LANGSMITH_API_KEY:
+        os.environ.setdefault("LANGSMITH_API_KEY", settings.LANGSMITH_API_KEY)
+
+
+# 在 import 期即导出（config 被所有服务模块引用，早于任何 langsmith 运行时取值）
+_export_langsmith_env()

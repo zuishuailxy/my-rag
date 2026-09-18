@@ -30,3 +30,5 @@ pyjwt>=2.13.0
 email-validator>=2.3.0
 redis>=8.1.0
 aiosmtplib>=5.1.2
+# 对话长期记忆（Mem0 托管平台 SDK）；包内无 py.typed，mypy 侧见 pyproject 的 overrides
+mem0ai>=2.0.20
