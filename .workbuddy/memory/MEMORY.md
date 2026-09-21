@@ -40,10 +40,11 @@ TS(NestJS) → Python(FastAPI) 重写：逐文件对照 TS 源码核验（贴源
 - RBAC 种子：角色 `2000000000000000001~3`、用户 `1000000000000000001~3`（admin=ADMIN+REVIEWER / reviewer / user，密码 123456）；`kh_role_permission` **11 行**——**加权限层前必须先补种子，否则普通用户全线 403**（`seed_role_permission_matrix.py` 幂等刷）；`kh_user_role` 无 CASCADE → 删用户先删子表。
 - 守卫口径：管理端点 = `@roles(ADMIN)` + `require_permission("system:xxx")`；`/search`、`/search/hybrid`、graph 4 端点挂 `require_permission("search")`。保真例外：**`GET /teams/mine` 登录即可**、**`GET /teams/tree` 是 ADMIN + system:team**；**Redis 必须 `decode_responses=True`**；Neo4j driver 6.x 传原生 `int` limit。
 
-## 对话记忆（09-18；短期 + 长期均已实现，ai_stream 已接入）
+## 对话记忆（09-18/09-21；短期 + 长期 + 滚动摘要均已实现，ai_stream 已接入）
 - **短期**（Redis 热窗口）`services/chat_short_memory.py` + `chat_memory.py`：key `kh:chat:{uid}:{sid}:messages`、TTL 86400、窗口 20 条、**只存 human/ai 原文**；失败只 WARN，`try_load` 返回 None = 「请回落数据库」。⚠️ `save([])` 后 `try_load` 返回 `[]` **不是** None，别当 miss 回填。⚠️ 冒烟必须先 `ping()` 探活：save 吞异常 → Redis 没起时静默失败 → `is None` 断言**假绿**。
 - **回填链路**（TS `loadWorkingHistory`）：`try_load` →（`is not None`）→ miss 才 `chat_session_service.list_recent_messages(db, uid, sid, window_size)` → `db_rows_to_messages` → `save`。该方法**只查库不写缓存**；⚠️ 必须 `created_at DESC, id DESC` + `LIMIT max(limit,1)` 再 `reverse()` 成正序——写成 ASC+limit 就是「取最旧 N 条」（`smoke_ai_sessions` 第 14 段回退法证伪）。
-- **删会话**三处一起动：PG（先删消息再删会话）→ 短期 `clear` → 长期 `clear_session`；只删库不清缓存 → 已删会话内容在 TTL 内继续被当「历史记忆」召回。
+- **滚动摘要**（09-21）`services/chat_summary.py` + `models/ai_session_summary.py` + 表 `kh_ai_session_summary`：把**滑出热窗口**的旧历史增量折叠成一段摘要（≤ `CHAT_SUMMARY_MAX_CHARS`=400 字），作答时 SystemMessage 前置。存储 = Redis `kh:chat:{uid}:{sid}:summary` + PG 双写（Redis 优先 / DB 兜底）。水位 `covered_until_message_id` = 已折叠的最大消息 id，只折 `id > 水位 且 id < 窗口最旧 id`（**用 id 不用计数**：删除/补写会让计数漂移；前提是雪花 id 单进程严格递增）。⚠️ `langchain SummarizationMiddleware` 已删除（只看得到进 agent 的 ≤N 条、不持久化、每轮重算，压不到窗口外）。⚠️ 锁是**进程内 asyncio.Lock**（多 worker 需换 Redis 锁）；`_locks` 字典只增不减（慢泄漏）。
+- **删会话**四处一起动：PG（先删消息再删会话）→ 短期 `clear` → 长期 `clear_session` → 摘要 `clear`；只删库不清缓存 → 已删会话内容在 TTL 内继续被当「历史记忆」召回。
 - **长期**（Mem0 **托管平台**）`services/chat_long_memory.py`；未配 `MEM0_API_KEY` 整体跳过。⚠️ **两个 LLM 分工**：分类器（判 write_user/write_session）在**本进程**用 deepseek；**抽取在云侧、SDK 不能指定模型**（要换须改 OSS 自托管）。
   ⚠️⚠️ **v3 实体 ID 三方法传法各不相同**（SDK 类型注释是错的，以实测为准）：`search` **必须** `filters={'user_id':…,'run_id':…}`（顶层被 SDK `ENTITY_PARAMS` raise）；`add`/`delete_all` **必须**顶层 `user_id=`/`run_id=`（传 `filters={...}` SDK 不拦但服务端 400；`delete_all` 走 query string，dict 被 `str()` 塞进 URL）。
   ⚠️⚠️ **`delete_all(user_id, run_id)` 忽略 run_id、清空整个 user 记忆**（实测 4/1/1 → 0/0/0，120s 不复原）→ TS 的 `deleteAll({userId,runId})` 做 clearSession = 「删一个会话抹掉该用户全部长期记忆」。本项目 `clear_session` 改为 `get_all(filters={user_id,run_id})` 列 id → 逐条 `delete(id)`。
