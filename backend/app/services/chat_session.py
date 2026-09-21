@@ -42,6 +42,7 @@ from app.models.ai_session import (
 from app.schemas.ai import CreateSessionRequest, QuerySessionRequest, UpdateSessionRequest
 from app.services.chat_long_memory import chat_long_memory_service
 from app.services.chat_short_memory import chat_short_memory_service
+from app.services.chat_summary import chat_session_summary_service
 
 logger = logging.getLogger("ChatSessionService")
 
@@ -113,9 +114,12 @@ class ChatSessionService:
         await session.execute(sa_delete(AiMessage).where(AiMessage.session_id == entity.id))
         await session.execute(sa_delete(AiSession).where(AiSession.id == entity.id))
         await session.commit()
-        # 缓存清理失败只 WARN（两个 service 内部已各自吞异常并记日志）
+        # 缓存清理失败只 WARN（三个 service 内部已各自吞异常并记日志）
         await chat_short_memory_service.clear(user_id, session_id)
         await chat_long_memory_service.clear_session(user_id, session_id)
+        # 滚动摘要：Redis + kh_ai_session_summary 两边都要清（DB 侧虽有 CASCADE，
+        # 但这里显式删一遍，不依赖库级级联——与「先删消息再删会话」同一思路）
+        await chat_session_summary_service.clear(user_id, session_id)
         logger.info("AI 会话已删除：sessionId=%s, userId=%s", session_id, user_id)
         return {"message": "已删除"}
 

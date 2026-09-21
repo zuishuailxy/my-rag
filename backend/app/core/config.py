@@ -267,6 +267,14 @@ class Settings(BaseSettings):
     CHAT_SHORT_MEMORY_MAX_MESSAGES: int = 20
     CHAT_SHORT_MEMORY_KEY_PREFIX: str = "kh:chat"
 
+    # ---- 会话滚动摘要（滑出热窗口的旧历史 → 增量折叠成一段摘要）----
+    # 存储：Redis 热缓存（`{PREFIX}:{uid}:{sid}:summary`，TTL 复用上方）
+    #       + Postgres `kh_ai_session_summary`（双写，Redis 优先 / DB 兜底）。
+    # 摘要目标字数：热窗口 20 条 ≈ 1500~2500 token，摘要占窗口 ~15% 比较合理；
+    # 因为是**增量折叠**（旧摘要 + 新滑出 → 新摘要），prompt 里限死字数防止无限增长。
+    # 超限会硬截断兜底（见 chat_summary.py）。
+    CHAT_SUMMARY_MAX_CHARS: int = 400
+
     # ---- 对话长期记忆（Mem0 托管平台；对应 TS chat-long-memory.service.ts）----
     # 未配置 MEM0_API_KEY 时整个长期记忆模块跳过（构造时 WARN，各方法直接返回空/不写）。
     # MEM0_HOST 留空则用 SDK 默认 https://api.mem0.ai（自建网关时才需覆盖）。

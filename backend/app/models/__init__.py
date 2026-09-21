@@ -2,6 +2,7 @@
 ORM 模型包
 """
 from app.models.ai_session import AiMessage, AiSession
+from app.models.ai_session_summary import AiSessionSummary
 from app.models.base import Base
 from app.models.doc_chunk import DocChunk
 from app.models.document import DocumentEntity, DocumentStatus
@@ -44,6 +45,7 @@ __all__ = [
     "Base",
     "AiSession",
     "AiMessage",
+    "AiSessionSummary",
     "DocumentEntity",
     "DocumentStatus",
     "DOCUMENT_STATUS_LABEL",

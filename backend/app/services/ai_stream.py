@@ -2,11 +2,14 @@
 
 链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗口，miss 回填库）→ 追问改写
 （检索改写器）→ 混合检索 ∥ 长期记忆检索 → data-* 进度事件 → agent 流式作答
-→ UI Message Stream（AI SDK v6 SSE 协议）→ 落库（appendTurn + 短期/长期记忆）。
+→ UI Message Stream（AI SDK v6 SSE 协议）→ 落库（appendTurn + 短期/长期记忆）
+→ 后台滚动摘要折叠。
 
 短期记忆（Redis 热窗口）：`load_working_history` 先 `tryLoad`，miss 才查库回填；
 长期记忆（Mem0）：本轮 `search` 出 user/session 两层，拼成 SystemMessage 前置进
 messages；落库尾部 `remember_turn` 异步写回（不 await，对齐 TS 的 fire-and-forget）。
+会话滚动摘要（ChatSessionSummaryService）：把滑出热窗口的旧历史增量折叠成一段摘要，
+作答时作为 SystemMessage 前置（弥补窗口外历史被丢弃）；落库后后台 fold，不阻塞回答。
 追问改写（ChatQueryRewriteService）：结合历史把「那谁审批？」改写成独立查询，
 并判定本轮是否需要检索；`need_retrieve=false`（寒暄）时跳过检索直接作答。
 
@@ -42,10 +45,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    ModelCallLimitMiddleware,
-    SummarizationMiddleware,
-)
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain_core.messages import (
     AIMessageChunk,
     BaseMessage,
@@ -66,6 +66,7 @@ from app.services.chat_memory import db_rows_to_messages
 from app.services.chat_query_rewrite import chat_query_rewrite_service
 from app.services.chat_session import chat_session_service, title_from_question
 from app.services.chat_short_memory import chat_short_memory_service
+from app.services.chat_summary import chat_session_summary_service
 from app.services.retrieval import hybrid_retrieval_service
 from app.services.web_search import web_search_service
 
@@ -87,14 +88,10 @@ _SYSTEM_PROMPT = (
     "联网结果用标题+链接说明，不要编造。资料不够就明确说不知道。"
 )
 
-# 摘要中间件提示词（与 TS summaryPrompt 逐字一致，{messages} 由中间件填充）
-_SUMMARY_PROMPT = (
-    "用中文简洁总结对话：话题、已确认结论、待办。不要写入知识库条文。\n\n"
-    "待摘要的对话：\n{messages}\n\n摘要："
-)
-# 历史达到 12 条时触发摘要，保留最近 6 条（对齐 TS trigger/keep）
-_SUMMARY_TRIGGER_MESSAGES = 12
-_SUMMARY_KEEP_MESSAGES = 6
+# 摘要中间件已移除：历史压缩改由 ChatSessionSummaryService 做**跨请求持久化的滚动摘要**
+# （滑出 Redis 热窗口的旧历史增量折叠进 kh_ai_session_summary）。
+# 原来的 langchain SummarizationMiddleware 只能看到进 agent 的 ≤N 条，且摘要在 agent state
+# 里不持久化、每轮重算，与「窗口外压缩」是两回事。
 
 # SSE 终止帧（AI SDK useChat / DefaultChatTransport 识别用）
 _SSE_DONE = "data: [DONE]\n\n"
@@ -268,39 +265,15 @@ def _build_agent() -> Any | None:
         stream_usage=False,
         extra_body={"thinking": {"type": "enabled" if thinking_enabled else "disabled"}},
     )
-    # 摘要用 LLM（对齐 TS compactLlm：temperature 0）。
-    # ⚠️ 刻意差异：TS 的 compactLlm 没关 thinking（DeepSeek 默认开），这里按 TS 注释
-    # 「摘要/分类不要开思考」的意图显式关闭——思考对摘要无益，还拉长耗时与成本。
-    compact_llm = ChatDeepSeek(
-        api_key=SecretStr(api_key),
-        model=model,
-        base_url=base_url,
-        temperature=0,
-        timeout=timeout_s,
-        max_retries=0,
-        stream_usage=False,
-        extra_body={"thinking": {"type": "disabled"}},
-    )
-    # 中间件列表显式标注为 list[Any]：SummarizationMiddleware 与 ModelCallLimitMiddleware
-    # 的状态泛型不同，直接内联进 create_agent 会让 mypy 按首元素推断列表类型而报错。
-    middleware: list[Any] = [
-        # 历史过长时把早期对话压成摘要、保留最近 6 条（对齐 TS summarizationMiddleware）。
-        # Python 侧 trigger / keep 必须是元组形式（字典 `{messages: 12}` 会解包报错）。
-        SummarizationMiddleware(
-            model=compact_llm,
-            trigger=("messages", _SUMMARY_TRIGGER_MESSAGES),
-            keep=("messages", _SUMMARY_KEEP_MESSAGES),
-            summary_prompt=_SUMMARY_PROMPT,
-        ),
-        # 单次 invoke 最多 4 次模型调用（对齐 TS modelCallLimitMiddleware）：
-        # 避免 web_search 循环打爆；超限正常结束而非抛错
-        ModelCallLimitMiddleware(run_limit=4, exit_behavior="end"),
-    ]
+    # 摘要用 LLM 已移除：滚动摘要由 chat_summary.ChatSessionSummaryService 自己做
+    # （跨请求持久化，不再依赖 agent state）。
+    # 单次 invoke 最多 4 次模型调用（对齐 TS modelCallLimitMiddleware）：
+    # 避免 web_search 循环打爆；超限正常结束而非抛错
     return create_agent(
         model=llm,
         tools=[_web_search],
         system_prompt=_SYSTEM_PROMPT,
-        middleware=middleware,
+        middleware=[ModelCallLimitMiddleware(run_limit=4, exit_behavior="end")],
     )
 
 
@@ -395,6 +368,11 @@ class AiStreamService:
         history = await self.load_working_history(db, user.user_id, persist_session_id)
         persist_history = history
 
+        # 滚动摘要：热窗口之外的旧历史（Redis + Postgres 双写，Redis 优先）
+        summary_state = await chat_session_summary_service.try_load(
+            user.user_id, persist_session_id
+        )
+
         # 追问改写：有历史才有改写价值（对齐 TS `if (history.length)`）
         if history:
             yield writer.data("status", {"stage": "rewrite", "text": "正在理解问题…"})
@@ -468,9 +446,12 @@ class AiStreamService:
             # 寒暄：不检索，直接作答（对齐 TS）
             prompt = f"用户问题：{question}"
 
-        # 长期记忆拼成一条 SystemMessage 前置；两层皆空时为 None，不注入（对齐 TS）
+        # 会话摘要（早前对话）与长期记忆各拼一条 SystemMessage 前置；
+        # 顺序：先摘要（对话上下文），后 Mem0（用户背景）。空则跳过。
+        summary_msg = chat_session_summary_service.build_system_message(summary_state)
         memory_msg = chat_long_memory_service.build_system_message(mem_hits)
         messages: list[BaseMessage] = [
+            *([summary_msg] if summary_msg else []),
             *([memory_msg] if memory_msg else []),
             *history,
             HumanMessage(prompt),
@@ -542,6 +523,15 @@ class AiStreamService:
         _spawn(
             chat_long_memory_service.remember_turn(
                 user.user_id, persist_session_id, question, final_answer
+            )
+        )
+        # 滚动摘要：把滑出热窗口的旧消息增量折叠进摘要（fire-and-forget，
+        # 与摘要读取同为「下一轮生效」；服务内部有每会话锁防重复折叠）。
+        _spawn(
+            chat_session_summary_service.fold(
+                user.user_id,
+                persist_session_id,
+                chat_short_memory_service.window_size,
             )
         )
 

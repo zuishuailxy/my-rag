@@ -271,3 +271,14 @@ CREATE TABLE IF NOT EXISTS kh_ai_message (
 -- 拉取某会话的完整对话（按时间正序）
 CREATE INDEX IF NOT EXISTS idx_kh_ai_message_session_id
     ON kh_ai_message(session_id, created_at);
+
+-- 会话滚动摘要（Redis 热窗口之外的旧历史增量折叠成一段摘要；对应 services/chat_summary.py）
+-- 1:1 挂会话；独立表而非给 kh_ai_session 加列，因为应用启动的 create_all 只建表不改表，
+-- 独立表在存量库上能自动补建。covered_until_message_id = 已折叠的最大消息 id。
+CREATE TABLE IF NOT EXISTS kh_ai_session_summary (
+    session_id BIGINT PRIMARY KEY
+        REFERENCES kh_ai_session(id) ON DELETE CASCADE,   -- 删会话级联删摘要
+    summary TEXT NOT NULL DEFAULT '',                     -- 早前对话摘要
+    covered_until_message_id BIGINT NOT NULL DEFAULT 0,   -- 折叠水位
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
