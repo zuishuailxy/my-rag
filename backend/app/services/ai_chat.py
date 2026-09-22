@@ -25,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.pipeline.types import ChunkHit
 from app.schemas.auth import AuthUser
+from app.services.agentic_retrieve import retrieve_until_relevant
+from app.services.chat_query_rewrite import chat_query_rewrite_service
 from app.services.chat_session import chat_session_service
 from app.services.retrieval import hybrid_retrieval_service
 
@@ -72,10 +74,23 @@ class AiChatService:
             # 空问题不落库，sessionId 原样透传（对齐 TS 早退分支）
             return {"sessionId": session_id, "answer": "请输入问题。", "sources": []}
 
-        # 传 user 计算可见性范围（对应 TS `retrieve(trimmed, topK, user)`）
-        hits = await hybrid_retrieval_service.retrieve(trimmed, top_k, user)
-        if not hits:
-            logger.log(logging.INFO, "RAG 对话无召回：queryLength=%d，返回无内容提示", len(trimmed))
+        # 检索 + 切题评估（不切题 → 改写一次再查，对应 TS retrieveUntilRelevant）：
+        # 传 user 计算可见性范围；只有切题的 hits 会进上下文，无关资料不喂给 LLM。
+        outcome = await retrieve_until_relevant(
+            question=trimmed,
+            query=trimmed,
+            top_k=top_k,
+            user=user,
+            retrieval=hybrid_retrieval_service,
+            rewrite=chat_query_rewrite_service,
+        )
+        if not outcome.hits:
+            logger.log(
+                logging.INFO,
+                "RAG 对话无切题召回：queryLength=%d, eval=%s，返回无内容提示",
+                len(trimmed),
+                outcome.eval.reason,
+            )
             answer = "知识库里没有相关内容。"
             sess = (
                 await chat_session_service.append_turn(db, user.user_id, session_id, trimmed, answer, [])
@@ -97,7 +112,7 @@ class AiChatService:
                 detail="未配置 OPENAI_API_KEY / LLM_API_KEY / DASHSCOPE_API_KEY，无法生成回答",
             )
 
-        hit_objects = [ChunkHit.from_row(hit) for hit in hits]
+        hit_objects = outcome.hits
         context = self.build_context(hit_objects)
         response = await self._llm.ainvoke(
             [

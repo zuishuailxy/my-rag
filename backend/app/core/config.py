@@ -242,6 +242,12 @@ class Settings(BaseSettings):
     # 这里声明为 int，非法值在启动时即报错（同 chat_short_memory 的处理）。
     AI_QUERY_REWRITE_TIMEOUT_MS: int = 15000
 
+    # ---- TypeSafe 结构化判定（意图识别；本次新增，TS 无对应依赖）----
+    # TypeSafe 是判定式 SaaS（system_one → Noul/Choice/Score 类型化结果），只用来做
+    # 检索前的 5 路意图分类；查询改写仍是生成式 LLM（路线 A：TypeSafe 管决策、LLM 管改写）。
+    # 未配置则意图识别回退 LLM 的 need_retrieve 推导（见 chat_query_rewrite.py）。
+    TYPESAFE_API_KEY: str | None = None
+
     # ---- LangSmith（LangChain / LangGraph 链路追踪）----
     # ⚠️ 这里声明只是为了让 pydantic 认识这四个 key（extra="ignore" 下未声明的会被静默丢弃）。
     # **真正让追踪生效的是文件末尾的 _export_langsmith_env()**：LangSmith SDK 只读

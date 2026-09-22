@@ -1,40 +1,36 @@
 """AI 流式对话服务（对应 TS ai/ai-stream.service.ts，逐段转写）
 
-链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗口，miss 回填库）→ 追问改写
-（检索改写器）→ 混合检索 ∥ 长期记忆检索 → data-* 进度事件 → agent 流式作答
-→ UI Message Stream（AI SDK v6 SSE 协议）→ 落库（appendTurn + 短期/长期记忆）
+Agentic RAG 链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗口，miss 回填库）
+→ 滚动摘要 → 意图识别（TypeSafe classify → data-intent）→ 长期记忆检索
+→ 按意图现建 agent 并挂工具（retrieve_knowledge / rewrite_query / web_search）
+→ agent 循环（模型驱动：检索 → 评估 → 不足则改写再查，最多两次 → 仍不足才联网）
+→ UI Message Stream（AI SDK v6 SSE）→ 落库（appendTurn + 短期/长期记忆）
 → 后台滚动摘要折叠。
+
+工具内用 LangGraph `get_stream_writer()` 推 `data-eval` / `data-sources` /
+`source-document` / `data-status`（custom 流）；SSE 生成器把 custom 帧原样转发。
+内部评估/改写 LLM 调用带 `kh-internal` tag 且清空 callbacks（对应 TS invokeIsolated），
+消费端再按 metadata.tags 过滤，避免内部结构化 JSON 混进回答正文。
 
 短期记忆（Redis 热窗口）：`load_working_history` 先 `tryLoad`，miss 才查库回填；
 长期记忆（Mem0）：本轮 `search` 出 user/session 两层，拼成 SystemMessage 前置进
-messages；落库尾部 `remember_turn` 异步写回（不 await，对齐 TS 的 fire-and-forget）。
-会话滚动摘要（ChatSessionSummaryService）：把滑出热窗口的旧历史增量折叠成一段摘要，
-作答时作为 SystemMessage 前置（弥补窗口外历史被丢弃）；落库后后台 fold，不阻塞回答。
-追问改写（ChatQueryRewriteService）：结合历史把「那谁审批？」改写成独立查询，
-并判定本轮是否需要检索；`need_retrieve=false`（寒暄）时跳过检索直接作答。
+messages；落库尾部 `remember_turn` 异步写回（不 await，对齐 TS fire-and-forget）。
+滚动摘要（ChatSessionSummaryService）：把滑出热窗口的旧历史增量折叠；作答时作为
+SystemMessage 前置，落库后后台 fold，不阻塞回答。
 
-🔴 刻意差异一：协议编码器自研（本文件 UiMessageStreamWriter）。
-TS 用 `ai` 包的 createUIMessageStream/pipeUIMessageStreamToResponse，Python 无对应物。
-候选包均不合适：
-- ai-sdk-stream-python：要求 fastapi>=0.128.8，项目锁 fastapi==0.110.1，
-  为辅助包升级 Web 框架爆炸半径过大；
-- langchain-vercel-ai-sdk-adapter：alpha 且**明确过滤 thinking 块**（会丢
-  DeepSeek reasoning_content），也不支持 data-* 自定义事件与流合并。
-事件序列逐条对齐 TS writer 调用（含 data-session / data-status / data-retrieve /
-data-sources / source-document），SSE 帧格式 `data: {json}\\n\\n`，
-终止帧 `data: [DONE]\\n\\n`，响应头 `x-vercel-ai-ui-message-stream: v1`。
+🔴 刻意差异（与 TS）：
+- **协议编码器自研**（UiMessageStreamWriter）：TS 用 ai 包的 createUIMessageStream /
+  toUIMessageStream，Python 无合适替代（候选包或要求高版本 fastapi、或丢 reasoning、
+  或不支持 data-* / 流合并）。
+- **agent 流用 stream_mode=["messages","updates","custom"]**：TS streamMode=
+  ["messages","tools"]；Python 的 tools 等价物是 updates 取 ToolMessage，custom 是
+  工具内推 data-* 的通道（TS 直接把 writer 传进工具闭包，Python 用 get_stream_writer）。
+- **摘要不用 TS 的 summarizationMiddleware**：改由 ChatSessionSummaryService 做
+  **跨请求持久化**的滚动摘要（中间件只在 agent state 内、每轮重算、不持久）。
+- **mapReasoningStream 不需要**：DeepSeek reasoning_content 直接落在
+  AIMessageChunk.additional_kwargs，这里直接映射 reasoning-* parts。
 
-🔴 刻意差异二：不需要 TS 的 mapReasoningStream。那是为了喂 @ai-sdk/langchain
-适配器（只认 additional_kwargs.reasoning.summary）；DeepSeek（OpenAI 兼容口）
-的思考 delta 直接落在 AIMessageChunk.additional_kwargs["reasoning_content"]，
-此处直接映射协议的 reasoning-start/delta/end parts。
-
-🔴 刻意差异三：agent 流用 langgraph 的 stream_mode=["messages", "updates"]。
-TS 用 streamMode=["messages", "tools"]（LangChain JS 的 createAgent 支持
-"tools" 模式），Python 端等价物是 updates 模式里取 ToolMessage。
-
-落库语义（对齐 TS onFinish）：sources 只存回答中实际引用 [n] 的条目，
-未标注时存**空列表**（与非流式 to_cited_sources 的「回退全部召回」不同）。
+落库语义（对齐 TS onFinish）：sources 只存回答中实际引用 [n] 的条目，未标注存空列表。
 """
 
 import asyncio
@@ -54,6 +50,7 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import tool
 from langchain_deepseek import ChatDeepSeek
+from langgraph.config import get_stream_writer
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,9 +58,10 @@ from app.core.config import settings
 from app.pipeline.types import ChunkHit
 from app.schemas.ai import ChatStreamRequest, CreateSessionRequest
 from app.schemas.auth import AuthUser
+from app.services.agentic_retrieve import GradedRetrieve, retrieve_and_grade
 from app.services.chat_long_memory import chat_long_memory_service
 from app.services.chat_memory import db_rows_to_messages
-from app.services.chat_query_rewrite import chat_query_rewrite_service
+from app.services.chat_query_rewrite import KH_INTERNAL_TAG, chat_query_rewrite_service
 from app.services.chat_session import chat_session_service, title_from_question
 from app.services.chat_short_memory import chat_short_memory_service
 from app.services.chat_summary import chat_session_summary_service
@@ -79,20 +77,6 @@ _CONTEXT_SNIPPET_LEN = 800
 # 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 
-_SYSTEM_PROMPT = (
-    "你是企业知识库助手。优先根据「检索到的资料」回答。"
-    "结合对话历史和记忆里的用户背景，但制度/流程以本轮资料为准，不要用记忆替代文档。"
-    "没有检索资料且是寒暄时，直接回应，不必调用 web_search。"
-    "资料不足、需要时效性或外部公开信息时，调用 web_search。"
-    "依据资料的陈述句末标 [n]，与资料编号一致。"
-    "联网结果用标题+链接说明，不要编造。资料不够就明确说不知道。"
-)
-
-# 摘要中间件已移除：历史压缩改由 ChatSessionSummaryService 做**跨请求持久化的滚动摘要**
-# （滑出 Redis 热窗口的旧历史增量折叠进 kh_ai_session_summary）。
-# 原来的 langchain SummarizationMiddleware 只能看到进 agent 的 ≤N 条，且摘要在 agent state
-# 里不持久化、每轮重算，与「窗口外压缩」是两回事。
-
 # SSE 终止帧（AI SDK useChat / DefaultChatTransport 识别用）
 _SSE_DONE = "data: [DONE]\n\n"
 
@@ -107,6 +91,23 @@ def _spawn(coro: Any) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+
+
+def _noop_stream_writer(_event: dict[str, Any]) -> None:
+    return None
+
+
+def _stream_writer() -> Any:
+    """取 LangGraph custom 流写端（工具内推 data-* 事件用）。
+
+    在图内（正常请求路径）返回真实 writer；不在图内（如冒烟直接 invoke 工具）时
+    `get_stream_writer()` 会抛 KeyError，这里退化为 no-op —— 事件是过程条增强，
+    推不出去不应影响检索与作答。
+    """
+    try:
+        return get_stream_writer()
+    except Exception:  # noqa: BLE001
+        return _noop_stream_writer
 
 
 class UiMessageStreamWriter:
@@ -145,7 +146,7 @@ class UiMessageStreamWriter:
         return self.write({"type": "error", "errorText": error_text})
 
     def data(self, name: str, data: Any) -> str:
-        """自定义 data-* part（TS: data-session / data-status / data-retrieve / data-sources）"""
+        """自定义 data-* part（TS: data-session / data-status / data-intent / data-eval / data-sources）"""
         return self.write({"type": f"data-{name}", "data": data})
 
     def source_document(self, source_id: str, media_type: str, title: str) -> str:
@@ -213,16 +214,31 @@ class UiMessageStreamWriter:
         return self.write({"type": "tool-output-available", "toolCallId": tool_call_id, "output": output})
 
 
+# ---- 工具参数 schema（对齐 TS zod schema）----
+
 class _WebSearchInput(BaseModel):
-    """web_search 工具参数（对齐 TS zod schema）"""
+    """web_search 工具参数"""
 
     query: str = Field(min_length=1, description="搜索关键词")
     count: int = Field(default=5, ge=1, le=10, description="条数，默认 5")
 
 
+class _RetrieveKnowledgeInput(BaseModel):
+    """retrieve_knowledge 工具参数"""
+
+    query: str = Field(min_length=1, description="适合检索的关键词或短句")
+    top_k: int | None = Field(default=None, ge=1, le=10, description="条数，默认与请求一致")
+
+
+class _RewriteQueryInput(BaseModel):
+    """rewrite_query 工具参数"""
+
+    focus: str | None = Field(default=None, description="希望改写时强调的缺口，可空")
+
+
 @tool("web_search", description=(
-    "联网搜索（Tavily）。知识库不足、需要最新公开信息或外部资料时再调用。"
-    "不要用它替代知识库已有内容。"
+    "联网搜索（Tavily）。知识库循环结束后仍不足、或本轮只需公开时效信息时再调用。"
+    "不要用网页替代已切题的知识库资料。"
 ), args_schema=_WebSearchInput)
 async def _web_search(query: str, count: int = 5) -> dict[str, Any]:
     result = await web_search_service.search(query, count)
@@ -238,8 +254,8 @@ async def _web_search(query: str, count: int = 5) -> dict[str, Any]:
     return out
 
 
-def _build_agent() -> Any | None:
-    """构建 agent（对应 TS 构造函数）；未配置 API Key 返回 None"""
+def _build_agent_llm() -> ChatDeepSeek | None:
+    """构建 agent 用 LLM（对应 TS 构造函数）；未配置 API Key 返回 None"""
     api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
     if not api_key:
         return None
@@ -255,7 +271,7 @@ def _build_agent() -> Any | None:
     # reasoning_content（模块注释要求用 provider-specific subclass），实测流式思考
     # 全部丢失；ChatDeepSeek 实测把 reasoning_content 透传进 additional_kwargs。
     # 非流式 ai_chat.py 仍用 ChatOpenAI（thinking 关闭，无此需求）。
-    llm = ChatDeepSeek(
+    return ChatDeepSeek(
         api_key=SecretStr(api_key),
         model=model,
         base_url=base_url,
@@ -265,16 +281,112 @@ def _build_agent() -> Any | None:
         stream_usage=False,
         extra_body={"thinking": {"type": "enabled" if thinking_enabled else "disabled"}},
     )
-    # 摘要用 LLM 已移除：滚动摘要由 chat_summary.ChatSessionSummaryService 自己做
-    # （跨请求持久化，不再依赖 agent state）。
-    # 单次 invoke 最多 4 次模型调用（对齐 TS modelCallLimitMiddleware）：
-    # 避免 web_search 循环打爆；超限正常结束而非抛错
-    return create_agent(
-        model=llm,
-        tools=[_web_search],
-        system_prompt=_SYSTEM_PROMPT,
-        middleware=[ModelCallLimitMiddleware(run_limit=4, exit_behavior="end")],
+
+
+def system_for_plan(plan: dict[str, Any]) -> str:
+    """按本轮意图写 agent 系统提示（对应 TS systemForPlan），规定 Agentic RAG 循环。"""
+    prompt = (
+        "你是企业知识库助手，必须按 Agentic RAG 循环作答，不要跳步。"
+        "结合对话历史和记忆里的用户背景，但制度/流程以本轮检索资料为准。"
+        f"本轮意图：{plan['label']}。"
     )
+    if plan["allow_retrieve"]:
+        prompt += (
+            f"建议检索词「{plan['query']}」，可改写成更准的 query。"
+            "循环：① retrieve_knowledge；② 若 eval.ok 则用 context 作答并标 [n]；"
+            "③ 若 insufficient，先 rewrite_query，再用返回的新词再次 retrieve_knowledge"
+            "（知识库最多两次）；④ 两次后仍不足再考虑联网。"
+            "eval.ok 后不要再检索、不要改写。不要第三次 retrieve_knowledge。不要用记忆替代文档。"
+        )
+    else:
+        prompt += "不要调用 retrieve_knowledge 或 rewrite_query。"
+    if plan["intent"] == "chitchat":
+        prompt += "这是闲聊，直接回应，不要调用任何工具。"
+    if plan["intent"] == "profile":
+        prompt += "这是个人偏好或身份问题，根据记忆回答，不要检索知识库。"
+    if plan["intent"] == "kb":
+        prompt += "两次检索后仍 insufficient：明确说知识库没有相关内容，禁止编造制度，不要联网。"
+    if plan["intent"] == "web":
+        prompt += "用 web_search 查公开信息，用标题+链接说明，不要编造。"
+    if plan["intent"] == "kb_then_web":
+        prompt += (
+            "先走完知识库循环；两次后仍 insufficient 再 web_search。"
+            "联网结果用标题+链接说明，不要把网页写成内部制度。"
+        )
+    if not plan["allow_web"]:
+        prompt += "不要调用 web_search。"
+    prompt += "资料不够就明确说不知道。"
+    return prompt
+
+
+def _pack_retrieve_result(
+    hits: list[ChunkHit],
+    query: str,
+    persist_sources: list[dict[str, Any]],
+    stream_writer: Any,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """命中写入 persist_sources 并推 data-sources；context 给模型，excerpt 给前端。
+
+    对应 TS packRetrieveResult：多次检索的命中用全局连续编号（offset = 已有条数），
+    每次推**全量** data-sources（前端覆盖），逐条发 source-document。
+    """
+    offset = len(persist_sources)
+    sources = [
+        {
+            "index": offset + i + 1,
+            "documentId": hit.documentId,
+            "documentTitle": hit.documentTitle,
+            "heading": hit.heading,
+            "excerpt": excerpt(hit.content),
+            "score": hit.score,
+        }
+        for i, hit in enumerate(hits)
+    ]
+    persist_sources.extend(sources)
+    items = [
+        {
+            "index": s["index"],
+            "documentId": s["documentId"],
+            "documentTitle": s["documentTitle"],
+            "heading": s["heading"],
+        }
+        for s in sources
+    ]
+    # 只推 data-sources（全量快照）+ source-document，对齐 TS packRetrieveResult；
+    # 不再单独推 data-retrieve —— query/items 由前端 retrieve_knowledge 工具卡展示。
+    stream_writer({"type": "data-sources", "data": list(persist_sources)})
+    for src in sources:
+        stream_writer(
+            {
+                "type": "source-document",
+                "sourceId": str(src["documentId"]),
+                "mediaType": "text/markdown",
+                "title": f"[{src['index']}] {src['documentTitle']}",
+            }
+        )
+    context = "\n\n".join(
+        f"[{sources[i]['index']}] {hit.documentTitle}"
+        + (f" / {hit.heading}" if hit.heading else "")
+        + "\n"
+        + (
+            hit.content[:_CONTEXT_SNIPPET_LEN] + "..."
+            if len(hit.content) > _CONTEXT_SNIPPET_LEN
+            else hit.content
+        )
+        for i, hit in enumerate(hits)
+    )
+    result: dict[str, Any] = {
+        "query": query,
+        "items": [
+            {**item, "excerpt": s["excerpt"]}
+            for item, s in zip(items, sources, strict=True)
+        ],
+        "context": context,
+    }
+    if extra:
+        result.update(extra)
+    return result
 
 
 def _chunk_text(chunk: AIMessageChunk) -> str:
@@ -326,10 +438,138 @@ def excerpt(content: str) -> str:
 
 
 class AiStreamService:
-    """AI 流式对话：会话编排 → 检索 → agent 流 → UI Message Stream → 落库"""
+    """AI 流式对话：会话编排 → 意图路由 → agentic 检索循环 → UI Message Stream → 落库"""
 
     def __init__(self) -> None:
-        self._agent = _build_agent()
+        # 只建 LLM，agent/工具**每轮现建**（闭包持本轮 retrieve_count / last_retrieve /
+        # persist_sources），对应 TS createTurnAgent。
+        self._llm = _build_agent_llm()
+
+    def create_turn_agent(
+        self,
+        user: AuthUser,
+        default_top_k: int,
+        persist_sources: list[dict[str, Any]],
+        plan: dict[str, Any],
+        question: str,
+    ) -> Any | None:
+        """按本轮意图挂工具现建 agent（对应 TS createTurnAgent）
+
+        检索、改写、再检索由 agent 循环调度，每个工具只做一步。工具内的可变状态
+        （retrieve_count / last_retrieve）与 persist_sources 由闭包捕获，天然按轮隔离。
+        """
+        if self._llm is None:
+            return None
+        retrieval = hybrid_retrieval_service
+        rewrite = chat_query_rewrite_service
+        tools: list[Any] = []
+        turn_state: dict[str, Any] = {"retrieve_count": 0, "last_retrieve": None}
+
+        if plan["allow_retrieve"]:
+            @tool(
+                "retrieve_knowledge",
+                args_schema=_RetrieveKnowledgeInput,
+                description=(
+                    "检索企业知识库一次（仅当前用户可见文档）并评估是否切题。不会自动再查。"
+                    "eval.ok 为 false 时先 rewrite_query，再用新词再调本工具。本轮最多两次。"
+                ),
+            )
+            async def retrieve_knowledge(
+                query: str, top_k: int | None = None
+            ) -> dict[str, Any]:
+                if turn_state["retrieve_count"] >= 2:
+                    return {
+                        "query": query,
+                        "items": [],
+                        "insufficient": True,
+                        "error": "本轮知识库最多检索两次，请根据已有评估作答或联网",
+                    }
+                turn_state["retrieve_count"] += 1
+                last: GradedRetrieve | None = turn_state["last_retrieve"]
+                result = await retrieve_and_grade(
+                    question=question,
+                    query=query,
+                    top_k=top_k or default_top_k,
+                    user=user,
+                    retrieval=retrieval,
+                    rewrite=rewrite,
+                    retried=turn_state["retrieve_count"] > 1,
+                    previous_query=last.used_query if last else None,
+                )
+                turn_state["last_retrieve"] = result
+                stream_writer = _stream_writer()
+                stream_writer({"type": "data-eval", "data": result.eval.to_payload()})
+                if result.eval.reason == "error":
+                    logger.warning("RAG 检索失败：%s", result.eval.text)
+                    return {
+                        "query": result.used_query,
+                        "items": [],
+                        "error": result.eval.text,
+                        "insufficient": True,
+                        "eval": result.eval.to_payload(),
+                    }
+                if not result.eval.ok:
+                    return _pack_retrieve_result(
+                        [],
+                        result.used_query,
+                        persist_sources,
+                        stream_writer,
+                        {"insufficient": True, "eval": result.eval.to_payload()},
+                    )
+                return _pack_retrieve_result(
+                    result.hits,
+                    result.used_query,
+                    persist_sources,
+                    stream_writer,
+                    {"eval": result.eval.to_payload()},
+                )
+
+            @tool(
+                "rewrite_query",
+                args_schema=_RewriteQueryInput,
+                description=(
+                    "根据上次检索评估改写检索词。仅在 retrieve_knowledge 返回 insufficient 后调用，"
+                    "再把返回的 query 交给 retrieve_knowledge。"
+                ),
+            )
+            async def rewrite_query(focus: str | None = None) -> dict[str, Any]:
+                last: GradedRetrieve | None = turn_state["last_retrieve"]
+                if last is None:
+                    return {"error": "请先调用 retrieve_knowledge"}
+                if last.eval.ok:
+                    return {"error": "当前资料已切题，无需改写", "query": last.used_query}
+                _stream_writer()(
+                    {"type": "data-status", "data": {"stage": "rewrite", "text": "正在改写检索词…"}}
+                )
+                retry_query = await rewrite.rewrite_after_retrieve(
+                    question, last.used_query, last.grade, last.raw_hits
+                )
+                if not retry_query:
+                    return {
+                        "error": "无法改写出与上次不同的检索词",
+                        "previousQuery": last.used_query,
+                        "reason": last.eval.text,
+                    }
+                return {
+                    "query": retry_query,
+                    "previousQuery": last.used_query,
+                    "reason": last.eval.text,
+                    "focus": focus,
+                }
+
+            tools.extend([retrieve_knowledge, rewrite_query])
+
+        if plan["allow_web"]:
+            tools.append(_web_search)
+
+        # 单次 invoke 最多 6 次模型调用（对齐 TS modelCallLimitMiddleware）：避免循环打爆；
+        # 超限正常结束而非抛错。工具内部的评估/改写 LLM 调用已用 kh-internal 隔离、不计入。
+        return create_agent(
+            model=self._llm,
+            tools=tools,
+            system_prompt=system_for_plan(plan),
+            middleware=[ModelCallLimitMiddleware(run_limit=6, exit_behavior="end")],
+        )
 
     async def stream_chat(
         self, db: AsyncSession, dto: ChatStreamRequest, user: AuthUser
@@ -373,98 +613,65 @@ class AiStreamService:
             user.user_id, persist_session_id
         )
 
-        # 追问改写：有历史才有改写价值（对齐 TS `if (history.length)`）
-        if history:
-            yield writer.data("status", {"stage": "rewrite", "text": "正在理解问题…"})
-        plan = await chat_query_rewrite_service.rewrite(question, history)
-        if plan["need_retrieve"]:
-            yield writer.data("status", {"stage": "retrieve", "text": "正在检索知识库…"})
-
-        # 检索与长期记忆并行（对齐 TS Promise.all）；need_retrieve=false 时跳过检索
-        async def _retrieve_if_needed() -> list[ChunkHit]:
-            if not plan["need_retrieve"]:
-                return []
-            try:
-                rows = await hybrid_retrieval_service.retrieve(plan["query"], top_k, user)
-                return [ChunkHit.from_row(row) for row in rows]
-            except Exception as exc:  # noqa: BLE001 —— 检索失败不阻断作答（对齐 TS catch）
-                logger.warning("RAG 检索失败：%s", exc)
-                return []
-
-        hits, mem_hits = await asyncio.gather(
-            _retrieve_if_needed(),
-            chat_long_memory_service.search(
-                user.user_id, persist_session_id, plan["query"]
-            ),
-        )
-
-        sources = [
-            {
-                "index": i,
-                "documentId": hit.documentId,
-                "documentTitle": hit.documentTitle,
-                "heading": hit.heading,
-                "excerpt": excerpt(hit.content),
-                "score": hit.score,
-            }
-            for i, hit in enumerate(hits, start=1)
-        ]
-        persist_sources = sources
+        # 意图路由（TypeSafe）在 agent 之前完成：工具列表按 plan 挂载，前端立刻能画意图卡
+        yield writer.data("status", {"stage": "intent", "text": "正在识别意图…"})
+        plan = await chat_query_rewrite_service.classify(question, history)
         yield writer.data(
-            "retrieve",
+            "intent",
             {
-                # 对齐 TS：上报的是改写后的检索 query，不是原始追问
+                "intent": plan["intent"],
+                "label": plan["label"],
                 "query": plan["query"],
-                "items": [
-                    {
-                        "index": s["index"],
-                        "documentId": s["documentId"],
-                        "documentTitle": s["documentTitle"],
-                        "heading": s["heading"],
-                    }
-                    for s in sources
-                ],
+                "allowRetrieve": plan["allow_retrieve"],
+                "allowWeb": plan["allow_web"],
             },
         )
-        yield writer.data("sources", sources)
-        for s in sources:
-            yield writer.source_document(
-                str(s["documentId"]), "text/markdown", f"[{s['index']}] {s['documentTitle']}"
-            )
 
-        if self._agent is None:
+        # 长期记忆检索（对齐 TS：用用户原问题，不用建议检索词）
+        mem_hits = await chat_long_memory_service.search(
+            user.user_id, persist_session_id, question
+        )
+
+        agent = self.create_turn_agent(user, top_k, persist_sources, plan, question)
+        if agent is None:
             yield writer.error("未配置 LLM Key，无法生成回答")
             yield writer.finish()
             yield _SSE_DONE
             return
 
-        if hits:
-            prompt = f"检索到的资料：\n{self.build_context(hits)}\n\n用户问题：{question}"
-        elif plan["need_retrieve"]:
-            prompt = f"知识库没有召回到相关内容。\n\n用户问题：{question}"
-        else:
-            # 寒暄：不检索，直接作答（对齐 TS）
-            prompt = f"用户问题：{question}"
-
         # 会话摘要（早前对话）与长期记忆各拼一条 SystemMessage 前置；
         # 顺序：先摘要（对话上下文），后 Mem0（用户背景）。空则跳过。
         summary_msg = chat_session_summary_service.build_system_message(summary_state)
         memory_msg = chat_long_memory_service.build_system_message(mem_hits)
+        human_parts = []
+        if plan["allow_retrieve"]:
+            human_parts.append(f"建议检索词（可按问题改写后再检索）：{plan['query']}")
+        human_parts.append(f"用户问题：{question}")
         messages: list[BaseMessage] = [
             *([summary_msg] if summary_msg else []),
             *([memory_msg] if memory_msg else []),
             *history,
-            HumanMessage(prompt),
+            HumanMessage("\n\n".join(human_parts)),
         ]
 
         try:
-            agent_stream = self._agent.astream(
+            # custom 流 = 工具内 get_stream_writer 推来的 data-*；messages = 模型 token/思考；
+            # updates = 工具结果（对应 TS 'tools' 流模式）。
+            agent_stream = agent.astream(
                 {"messages": messages},
-                stream_mode=["messages", "updates"],
+                stream_mode=["messages", "updates", "custom"],
             )
             async for mode, payload in agent_stream:
+                if mode == "custom":
+                    # 工具推来的 UI 事件（data-eval / data-sources / source-document / data-status）
+                    if isinstance(payload, dict):
+                        yield UiMessageStreamWriter.write(payload)
+                    continue
                 if mode == "messages":
-                    chunk, _meta = payload
+                    chunk, meta = payload
+                    # 内部评估/改写 LLM 的 token 不能进正文（对应 TS kh-internal 兜底过滤）
+                    if KH_INTERNAL_TAG in ((meta or {}).get("tags") or []):
+                        continue
                     if not isinstance(chunk, AIMessageChunk):
                         continue
                     reasoning = chunk.additional_kwargs.get("reasoning_content")
@@ -486,7 +693,7 @@ class AiStreamService:
                                 str(call.get("name") or ""),
                                 call.get("args") or {},
                             )
-                else:  # updates：工具结果（对应 TS 'tools' 流模式）
+                else:  # updates：工具结果
                     for msg in _iter_tool_messages(payload):
                         if msg.tool_call_id in writer._tool_input_sent:
                             yield writer.tool_output_available(
@@ -558,20 +765,6 @@ class AiStreamService:
                 "短期记忆从库回填：sessionId=%s, n=%d", session_id, len(history)
             )
         return history
-
-    @staticmethod
-    def build_context(hits: list[ChunkHit]) -> str:
-        """把召回块拼成 LLM 上下文（对齐 TS buildContext）"""
-        parts = []
-        for i, src in enumerate(hits, start=1):
-            heading = f" / {src.heading}" if src.heading else ""
-            snippet = (
-                src.content[:_CONTEXT_SNIPPET_LEN] + "..."
-                if len(src.content) > _CONTEXT_SNIPPET_LEN
-                else src.content
-            )
-            parts.append(f"[{i}] {src.documentTitle}{heading}\n{snippet}")
-        return "\n\n".join(parts)
 
 
 # 全局单例

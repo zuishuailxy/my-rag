@@ -3,8 +3,10 @@
 裸 FastAPI app + ASGITransport，SSE 逐帧解析，断言 UI Message Stream 协议：
   1. 未登录 → 401
   2. 响应头 x-vercel-ai-ui-message-stream: v1
-  3. 事件顺序：start → data-session → data-status → data-retrieve →
-     data-sources → (source-document)* → [reasoning-*/text-*] → finish → [DONE]
+  3. 事件顺序：start → data-session → data-status → data-intent →
+     [data-eval → data-sources → (source-document)*] →
+     [tool-*/reasoning-*/text-*] → finish → [DONE]
+     （中括号段为 agentic 检索循环，意图不允许检索或模型未调用工具时可不出现）
   4. 正文非空（text-delta 聚合）
   5. 落库：assistant 消息内容 == 流式回答；二轮对话同会话消息数 2 → 4
   6. 临时会话 DELETE 清理零残留
@@ -95,19 +97,19 @@ async def main() -> None:
 
         check(
             "data 事件顺序",
-            0
-            < _idx("data-session")
-            < _idx("data-status")
-            < _idx("data-retrieve")
-            < _idx("data-sources"),
+            0 < _idx("data-session") < _idx("data-status") < _idx("data-intent"),
             f"session={_idx('data-session')}, status={_idx('data-status')}, "
-            f"retrieve={_idx('data-retrieve')}, sources={_idx('data-sources')}",
+            f"intent={_idx('data-intent')}",
         )
-        check(
-            "正文晚于检索事件",
-            _idx("text-start") == -1 or _idx("text-start") > _idx("data-sources"),
-            f"text-start={_idx('text-start')}, sources={_idx('data-sources')}",
-        )
+        # 检索系事件：仅当意图允许检索且模型调用了工具时才出现（agentic 循环由模型驱动）
+        if _idx("data-sources") != -1:
+            check(
+                "检索事件先于来源",
+                _idx("data-eval") < _idx("data-sources"),
+                f"eval={_idx('data-eval')}, sources={_idx('data-sources')}",
+            )
+        else:
+            print("   （本轮无检索事件：意图未允许检索或模型未调用工具）")
         session_id = next(
             (e["data"]["sessionId"] for e in events if e.get("type") == "data-session"), None
         )
