@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, TouchEvent, WheelEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, DownOutlined, PlusOutlined } from "@ant-design/icons";
 import { App, Button, Empty, Input, Space, Typography, message } from "antd";
 import { aiApi } from "../api";
 import { API_BASE, ApiError } from "../api/client";
@@ -16,7 +16,7 @@ import {
 import type { ChatMessage, ChatSession } from "../types";
 import { formatTime } from "../utils";
 
-const CHAT_ID = "kh-chat";
+const CHAT_ID = "kh-chat"; // useChat 会话键，切页面时复用同一条流
 
 export default function ChatPage() {
   const navigate = useNavigate();
@@ -29,14 +29,18 @@ export default function ChatPage() {
   const logRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef(sessionId);
   const loadedSessionRef = useRef<string | undefined>(undefined);
+  /** true 时流式输出自动滚到底；用户上滑后解开，避免抢滚动 */
   const pinBottomRef = useRef(true);
+  /** 程序滚动时忽略 onScroll，避免误判为用户离开底部 */
+  const autoScrollingRef = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
+  const touchYRef = useRef<number | null>(null);
+  const [showJump, setShowJump] = useState(false);
   sessionIdRef.current = sessionId;
 
   const transport = useMemo(
     () =>
       new DefaultChatTransport<KhUIMessage>({
-        // 必须走 API_BASE（默认 /api/v1）：vite proxy 对 /api 前缀原样转发、
-        // 不做 rewrite，漏掉 /v1 会被后端当未知路由返回 404。
         api: `${API_BASE}/ai/chat/stream`,
         headers: () => {
           const token = getAccessToken();
@@ -113,25 +117,91 @@ export default function ChatPage() {
     };
   }, [sessionId, streaming, navigate, setMessages]);
 
+  function gapToBottom(el: HTMLElement) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  }
+
+  function syncJumpButton() {
+    const el = logRef.current;
+    const overflow = !!el && el.scrollHeight - el.clientHeight > 8;
+    const next = !pinBottomRef.current && overflow;
+    setShowJump((prev) => (prev === next ? prev : next));
+  }
+
+  function setPinned(next: boolean) {
+    pinBottomRef.current = next;
+    if (!next && scrollRafRef.current != null) {
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+    syncJumpButton();
+  }
+
+  function scrollToBottom() {
+    const el = logRef.current;
+    if (!el || !pinBottomRef.current) return;
+    autoScrollingRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      autoScrollingRef.current = false;
+    });
+  }
+
   function onLogScroll() {
+    if (autoScrollingRef.current) return;
     const el = logRef.current;
     if (!el) return;
-    pinBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setPinned(gapToBottom(el) < 48);
+  }
+
+  /** 滚轮向上立刻取消钉底；向下接近底部再钉回 */
+  function onLogWheel(e: WheelEvent<HTMLDivElement>) {
+    if (e.deltaY < 0) {
+      setPinned(false);
+      return;
+    }
+    const el = logRef.current;
+    if (el && gapToBottom(el) - e.deltaY < 48) setPinned(true);
+  }
+
+  function onLogTouchStart(e: TouchEvent<HTMLDivElement>) {
+    touchYRef.current = e.touches[0]?.clientY ?? null;
+  }
+
+  function onLogTouchMove(e: TouchEvent<HTMLDivElement>) {
+    const y = e.touches[0]?.clientY;
+    if (touchYRef.current != null && y != null && y > touchYRef.current + 6) {
+      setPinned(false);
+    }
+    touchYRef.current = y ?? null;
+  }
+
+  function jumpToBottom() {
+    setPinned(true);
+    scrollToBottom();
   }
 
   useEffect(() => {
     if (!pinBottomRef.current) return;
-    requestAnimationFrame(() => {
-      logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+    if (scrollRafRef.current != null)
+      cancelAnimationFrame(scrollRafRef.current);
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      scrollToBottom();
     });
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
   }, [messages, status]);
 
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
-    pinBottomRef.current = true;
+    setPinned(true);
     await sendMessage({ text }, { body: { sessionId } });
   }
 
@@ -229,33 +299,54 @@ export default function ChatPage() {
           知识问答
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          只会检索你有权限的文档（公开、所在团队、自己写的）。流式回答会展示检索、思考与联网搜索过程，并写入左侧会话。
+          只会检索你有权限的文档（公开、所在团队、自己写的）。先识别意图再检索；资料不切题时由助手改写问题再查，仍不足才按需联网。
         </Typography.Paragraph>
-        <div className="kh-chat-log" ref={logRef} onScroll={onLogScroll}>
-          {messages.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="输入问题开始一段对话"
-            />
-          ) : (
-            messages.map((m, i) => {
-              const liveAssistant =
-                streaming &&
-                m.role === "assistant" &&
-                i === messages.length - 1;
-              return (
-                <div key={m.id} className={`kh-bubble ${m.role}`}>
-                  <ChatMessageParts
-                    messageId={m.id}
-                    parts={m.parts}
-                    role={m.role}
-                    showSources={!liveAssistant}
-                  />
-                </div>
-              );
-            })
-          )}
-          {error ? <div className="kh-chat-error">{error.message}</div> : null}
+        <div className="kh-chat-log-wrap">
+          <div
+            className="kh-chat-log"
+            ref={logRef}
+            onScroll={onLogScroll}
+            onWheel={onLogWheel}
+            onTouchStart={onLogTouchStart}
+            onTouchMove={onLogTouchMove}
+          >
+            {messages.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="输入问题开始一段对话"
+              />
+            ) : (
+              messages.map((m, i) => {
+                const liveAssistant =
+                  streaming &&
+                  m.role === "assistant" &&
+                  i === messages.length - 1;
+                return (
+                  <div key={m.id} className={`kh-bubble ${m.role}`}>
+                    <ChatMessageParts
+                      messageId={m.id}
+                      parts={m.parts}
+                      role={m.role}
+                      showSources={!liveAssistant}
+                    />
+                  </div>
+                );
+              })
+            )}
+            {error ? (
+              <div className="kh-chat-error">{error.message}</div>
+            ) : null}
+          </div>
+          {showJump ? (
+            <Button
+              className="kh-chat-jump"
+              size="small"
+              icon={<DownOutlined />}
+              onClick={jumpToBottom}
+            >
+              回到底部
+            </Button>
+          ) : null}
         </div>
         <Space.Compact style={{ width: "100%" }}>
           <Input
