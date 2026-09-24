@@ -5,6 +5,7 @@
 - pdf：可选注入图片上传回调（RustFS `pdf-images/` 前缀；未启用则仅输出文本/表格）
 - xlsx：openpyxl 优先，失败降级 OOXML 文本提取
 - pptx / docx / txt / md：直接调用对应 parser
+- jpg / png / webp / bmp / gif：视觉模型 OCR → Markdown（需配视觉模型 Key，否则 400）
 
 解析结果为空或格式不支持时抛 400（HTTPException 对应 BadRequestException）。
 """
@@ -20,6 +21,7 @@ from fastapi import HTTPException
 
 from app.utils.markdown import get_extension
 from app.utils.parsers.docx import parse_docx
+from app.utils.parsers.image import IMAGE_EXTENSIONS, is_vision_configured, parse_image
 from app.utils.parsers.pdf import parse_pdf
 from app.utils.parsers.pptx import parse_pptx
 from app.utils.parsers.text import parse_plain_text
@@ -27,8 +29,8 @@ from app.utils.parsers.xlsx import parse_xlsx
 
 logger = logging.getLogger(__name__)
 
-# 支持解析的文件扩展名
-SUPPORTED_EXTENSIONS = ["pdf", "docx", "xlsx", "pptx", "txt", "md"]
+# 支持解析的文件扩展名（图片走视觉模型 OCR，见 parsers/image.py）
+SUPPORTED_EXTENSIONS = ["pdf", "docx", "xlsx", "pptx", "txt", "md", *IMAGE_EXTENSIONS]
 
 
 class FileParserService:
@@ -75,6 +77,17 @@ class FileParserService:
             result = self._parse_xlsx_with_fallback(buffer)
         elif extension in ("txt", "md"):
             result = parse_plain_text(buffer)
+        elif extension in IMAGE_EXTENSIONS:
+            # 图片：视觉模型 OCR → Markdown；未配置视觉模型则明确 400（不是 500）
+            if not is_vision_configured():
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "图片解析需要视觉模型（配置 DASHSCOPE_API_KEY 或 VISION_API_KEY / "
+                        "VISION_MODEL）；也可直接上传 PDF/Word 等文本类文档"
+                    ),
+                )
+            result = await parse_image(buffer, extension)
         else:
             # 理论不可达（is_supported 已校验）
             raise HTTPException(status_code=400, detail=f"不支持的文件格式: {extension}")

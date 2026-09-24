@@ -238,6 +238,17 @@ class Settings(BaseSettings):
     # 默认开——deepseek-v4-flash 开思考后 reasoning_content 随流式 delta 返回
     LLM_ENABLE_THINKING: str = "true"
 
+    # ---- 多模态图像识别（图片 OCR；Qwen-VL via DashScope 兼容口）----
+    # 图片文件（jpg/png/webp/bmp/gif）走视觉模型 OCR → Markdown，再分块入索引。
+    # Key fallback：VISION_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY。
+    VISION_API_KEY: str | None = None
+    # baseURL 留空用 DashScope 官方兼容口
+    VISION_BASE_URL: str | None = None
+    # 模型 ID 以百炼控制台为准：qwen-vl-max（通用）/ qwen-vl-ocr（专用 OCR）
+    VISION_MODEL: str = "qwen-vl-max"
+    # 单张图片识别超时（毫秒）
+    VISION_TIMEOUT_MS: int = 60000
+
     # ---- 检索改写----
     # 单次改写 LLM 超时（毫秒，(config.get('AI_QUERY_REWRITE_TIMEOUT_MS', 15000))`）。
     # 改写是增强环节：超时/失败都回退原问题，绝不阻断检索。

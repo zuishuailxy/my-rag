@@ -15,7 +15,8 @@
 
 | 模块 | 能力 |
 |---|---|
-| 文档管理 | 多格式解析（PDF / Word / PPT / Excel / 文本）→ 统一 Markdown；草稿 / 待审 / 发布 / 归档 审核流 |
+| 文档管理 | 多格式解析（PDF / Word / PPT / Excel / 文本 / **图片 OCR**）→ 统一 Markdown；草稿 / 待审 / 发布 / 归档 审核流 |
+| 图像理解 | 图片文件（jpg/png/webp/bmp/gif）走视觉模型（Qwen-VL）OCR / 描述 → Markdown，与文本类文档同一索引链路 |
 | 异步流水线 | RabbitMQ 异步消费：解析 → 分块 → **一写三索引**（向量 / 全文 / 图谱） |
 | 混合检索 | ES 关键词 + PGVector 向量 双路召回 → RRF 融合 → Reranker 精排 → 阈值过滤 |
 | Agent 问答 | LangGraph Agent 自主调度 4 个工具：知识库检索 / 查询改写 / 图谱检索 / 联网搜索 |
@@ -194,6 +195,6 @@ retrieve_graph（知识图谱实体关系，带关系出处）
 
 ## ⚠️ 已知边界
 
-- 解析器覆盖文本类格式（PDF / Word / PPT / Excel / 文本），**图片 OCR / 音视频尚未接入**；
+- 解析器覆盖文本类格式（PDF / Word / PPT / Excel / 文本）+ **图片 OCR**（Qwen-VL，jpg/png/webp/bmp/gif）；**音频 ASR / 视频理解、以及文档内嵌图片的 OCR 尚未接入**；
 - 知识图谱的实体由 LLM 抽取，**存在概率性**（同一文档重抽可能得到不同实体集）；命中不到时以知识库检索（条文）为准；
 - 单元测试与 CI 持续完善中（当前以 43 个真实依赖 E2E 冒烟脚本为主）。

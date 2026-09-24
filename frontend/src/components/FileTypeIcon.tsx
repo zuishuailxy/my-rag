@@ -8,6 +8,12 @@ const ICONS: Record<string, { bg: string; label: string; fontSize: number }> = {
   pptx: { bg: "#FB8C00", label: "P", fontSize: 11 },
   txt: { bg: "#78909C", label: "T", fontSize: 11 },
   md: { bg: "#5C6BC0", label: "MD", fontSize: 7 },
+  png: { bg: "#7E57C2", label: "IMG", fontSize: 6 },
+  jpg: { bg: "#7E57C2", label: "IMG", fontSize: 6 },
+  jpeg: { bg: "#7E57C2", label: "IMG", fontSize: 6 },
+  webp: { bg: "#7E57C2", label: "IMG", fontSize: 6 },
+  bmp: { bg: "#7E57C2", label: "IMG", fontSize: 6 },
+  gif: { bg: "#7E57C2", label: "IMG", fontSize: 6 },
 };
 
 const FALLBACK = { bg: "#90A4AE", label: "DOC", fontSize: 7 };

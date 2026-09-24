@@ -26,7 +26,9 @@
 
 ## P1 · 加分项
 
-- [ ] **多模态** —— 目前仅 5 种文本类解析器；补图片 OCR（PaddleOCR）或表格解析，才可写「多模态」。
+- [x] **图片 OCR（多模态第一步）** —— jpg/png/webp/bmp/gif → 视觉模型（Qwen-VL via DashScope 兼容口）
+      OCR/描述 → Markdown 入索引；未配视觉模型 Key 时明确 400。配置：`VISION_API_KEY` / `VISION_MODEL` / `VISION_BASE_URL`。
+- [ ] **多模态（剩余）** —— PDF/Word 内嵌图片 OCR、音频 ASR、视频理解；补齐后才可写完整「多模态」。
 - [ ] **调参实验** —— `chunk 512/64`、`minScore=0.1` 均为默认值；做 chunk size / topK 扫描，用数据支撑选型。
 - [ ] **成本与限流** —— LLM 调用无预算控制；加每用户/每会话调用上限 + token/成本日志。
 - [ ] **可观测性** —— LangSmith 已接但无面板；加请求级 latency / 命中率 / 成本统计。
