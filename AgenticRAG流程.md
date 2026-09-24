@@ -1,6 +1,6 @@
 # Agentic RAG 流程
 
-> 对应 TS：`src/ai/ai-stream.service.ts`、`chat-query-rewrite.service.ts`、`agentic-retrieve.ts`
+>
 > 对应 Python：
 > - 编排：`backend/app/services/ai_stream.py`
 > - 意图 / 评估 / 改写：`backend/app/services/chat_query_rewrite.py`
@@ -38,33 +38,33 @@
 
 ```mermaid
 flowchart TD
-    A["POST /ai/chat/stream"] --> B["取最后一条 user 文本"]
-    B --> C["会话 touchTitle / 新建 → data-session"]
-    C --> D["读历史（Redis 热窗口，miss 回填库）"]
-    D --> E["滚动摘要 try_load"]
-    E --> F["classify(question, history) — TypeSafe"]
-    F --> G["data-intent"]
-    G --> H["长期记忆 search"]
-    H --> I["create_turn_agent：按 plan 挂工具"]
-    I --> J["agent.astream（messages / updates / custom）"]
-    J --> K{"模型输出 tool_call"}
-    K -->|"retrieve_knowledge"| L["retrieve_and_grade → data-eval"]
-    L -->|"eval.ok=false"| M["rewrite_query → data-status"]
-    M --> K
-    L -->|"最多两次"| K
-    K -->|"web_search"| N["联网"]
-    K -->|"无 tool_call"| O["输出正文 text-*"]
-    O --> P["finish / DONE"]
-    P --> Q["onFinish：落库 + 记忆 + 摘要 fold"]
+ A["POST /ai/chat/stream"] --> B["取最后一条 user 文本"]
+ B --> C["会话 touchTitle / 新建 → data-session"]
+ C --> D["读历史（Redis 热窗口，miss 回填库）"]
+ D --> E["滚动摘要 try_load"]
+ E --> F["classify(question, history) — TypeSafe"]
+ F --> G["data-intent"]
+ G --> H["长期记忆 search"]
+ H --> I["create_turn_agent：按 plan 挂工具"]
+ I --> J["agent.astream（messages / updates / custom）"]
+ J --> K{"模型输出 tool_call"}
+ K -->|"retrieve_knowledge"| L["retrieve_and_grade → data-eval"]
+ L -->|"eval.ok=false"| M["rewrite_query → data-status"]
+ M --> K
+ L -->|"最多两次"| K
+ K -->|"web_search"| N["联网"]
+ K -->|"无 tool_call"| O["输出正文 text-*"]
+ O --> P["finish / DONE"]
+ P --> Q["onFinish：落库 + 记忆 + 摘要 fold"]
 ```
 
 文字版事件序列：
 
 ```
 start → data-session → data-status(intent) → data-intent
-      → [ data-eval → data-sources → source-document* ]   # agentic 循环，按需
-      → [ tool-input-* / tool-output-* / reasoning-* / text-* ]
-      → finish → [DONE]
+ → [ data-eval → data-sources → source-document* ] # agentic 循环，按需
+ → [ tool-input-* / tool-output-* / reasoning-* / text-* ]
+ → finish → [DONE]
 ```
 
 ---
@@ -76,7 +76,7 @@ start → data-session → data-status(intent) → data-intent
 - `last_user_text(dto.messages)` 取本轮问题；空问题直接回「请输入问题。」不建会话。
 - 有 `sessionId` → `touch_title`（默认标题时用首问覆盖）；否则 `create`。
 - 历史：`load_working_history` 先读 Redis 热窗口，miss 才查库回填。
-  - ⚠️ 用 `is not None` 判断命中，不能用真值判断（`save([])` 后是「命中但空」而非 miss）。
+ - ⚠️ 用 `is not None` 判断命中，不能用真值判断（`save([])` 后是「命中但空」而非 miss）。
 
 ### 4.2 意图路由（`classify`，TypeSafe）
 
@@ -84,12 +84,12 @@ start → data-session → data-status(intent) → data-intent
 
 ```python
 { "intent": "kb" | "chitchat" | "profile" | "web" | "kb_then_web",
-  "label": "知识库",
-  "query": "差旅审批流程",           # 建议检索词（知识库用）
-  "graph_queries": ["差旅", "审批"],   # 图谱短实体名（仅 kb）
-  "allow_retrieve": True,
-  "allow_graph": True,             # 与 allow_retrieve 相同
-  "allow_web": False }
+ "label": "知识库",
+ "query": "差旅审批流程", # 建议检索词（知识库用）
+ "graph_queries": ["差旅", "审批"], # 图谱短实体名（仅 kb）
+ "allow_retrieve": True,
+ "allow_graph": True, # 与 allow_retrieve 相同
+ "allow_web": False }
 ```
 
 分工（路线 A：**TypeSafe 管决策、LLM 管生成**）：
@@ -107,19 +107,19 @@ start → data-session → data-status(intent) → data-intent
 
 回退：TypeSafe 未装 / 未配 key / 失败 → 用 LLM 的 `need_retrieve` 推导（True→kb，False→chitchat），再不行落 `kb`（宁可多检索不漏制度）。
 
-> 与 TS 差异：TS 的 `classify` 用 LLM 结构化输出（`routeSchema` 一次给出 intent + standalone_query + graph_queries）；本项目把「意图」换成 TypeSafe，改写 + 图谱词仍是一次 LLM 调用（`RewriteResult`）。对调用方契约一致。
+：（`routeSchema` 一次给出 intent + standalone_query + graph_queries）；本项目把「意图」换成 TypeSafe，改写 + 图谱词仍是一次 LLM 调用（`RewriteResult`）。对调用方契约一致。
 
 ### 4.3 记忆与摘要
 
 - **长期记忆（Mem0）**：`search(user_id, session_id, question)` 出 user/session 两层，`build_system_message` 拼成 SystemMessage 前置。注意用**原始问题**，不是建议检索词。
 - **滚动摘要（持久化）**：`chat_session_summary_service.try_load` 读 Redis + Postgres（双写）；`build_system_message` 前置。作答后后台 `fold`（fire-and-forget）把滑出热窗口的旧历史增量折叠。
-  - 与 TS 差异：TS 用 `summarizationMiddleware`（只在 agent state 内、每轮重算、不持久）；本项目用跨请求持久化的滚动摘要。
+：（只在 agent state 内、每轮重算、不持久）；本项目用跨请求持久化的滚动摘要。
 
 messages 组装顺序：`[摘要] + [长期记忆] + history + HumanMessage(...)`。
 
 HumanMessage：
 ```
-建议检索词（可按问题改写后再检索）：<plan.query>   # 仅 allow_retrieve 时
+建议检索词（可按问题改写后再检索）：<plan.query> # 仅 allow_retrieve 时
 用户问题：<question>
 ```
 
@@ -155,38 +155,38 @@ HumanMessage：
 
 ```
 if turn_state.retrieve_count >= 2:
-    返回 {insufficient: true, error: "本轮知识库最多检索两次..."}   # 不再检索
+ 返回 {insufficient: true, error: "本轮知识库最多检索两次..."} # 不再检索
 turn_state.retrieve_count += 1
 result = retrieve_and_grade(question, query, top_k or default_top_k, user,
-                            retried=count>1, previous_query=last.used_query)
+ retried=count>1, previous_query=last.used_query)
 turn_state.last_retrieve = result
 push data-eval(result.eval)
-if eval.reason == "error":   返回 {error, insufficient, eval}
-if not eval.ok:              _pack_retrieve_result([], ..., {insufficient, eval})
-else:                        _pack_retrieve_result(result.hits, ..., {eval})
+if eval.reason == "error": 返回 {error, insufficient, eval}
+if not eval.ok: _pack_retrieve_result([], ..., {insufficient, eval})
+else: _pack_retrieve_result(result.hits, ..., {eval})
 ```
 
 #### `rewrite_query(focus?)`
 
 ```
 last = turn_state.last_retrieve
-if last is None:      返回 {error: "请先调用 retrieve_knowledge"}
-if last.eval.ok:      返回 {error: "当前资料已切题，无需改写"}
+if last is None: 返回 {error: "请先调用 retrieve_knowledge"}
+if last.eval.ok: 返回 {error: "当前资料已切题，无需改写"}
 push data-status{stage: "rewrite", text: "正在改写检索词…"}
 query = rewrite_after_retrieve(question, last.used_query, last.grade, last.raw_hits)
-if not query:         返回 {error, previousQuery, reason}
+if not query: 返回 {error, previousQuery, reason}
 返回 {query, previousQuery, reason, focus}
 ```
 
 #### `retrieve_graph(query: string)`
 
 ```
-keywords = [*plan.graph_queries, *(query 非空则加入)]   # plan 词 + 工具入参
+keywords = [*plan.graph_queries, *(query 非空则加入)] # plan 词 + 工具入参
 hit = graph_build_service.retrieve_for_chat(keywords, limit=8, scope=access_from_user(user))
-push data-graph(hit)                      # 给前端画关系
+push data-graph(hit) # 给前端画关系
 return {query, entities, relations, documents,
-        context: format_graph_context(hit),
-        insufficient: not entities and not relations}
+ context: format_graph_context(hit),
+ insufficient: not entities and not relations}
 ```
 - 只返回「实体关系 + 来源文档」，**不是制度原文**；系统提示明确要求仍用 `retrieve_knowledge` 取条文。
 - 入参是短实体名（空格 / `/` 分隔）；`plan.graph_queries` **仅在「本轮依赖上文、走了 LLM 改写」时有值**（作提示），自足轮次为空，靠模型自己抽。
@@ -209,18 +209,18 @@ _stream_writer()({"type": "data-eval", "data": result.eval.to_payload()})
 # SSE 生成器消费
 agent.astream(..., stream_mode=["messages", "updates", "custom"])
 async for mode, payload in agent_stream:
-    if mode == "custom":
-        yield UiMessageStreamWriter.write(payload)   # 原样转发
-    elif mode == "messages":
-        ...  # 正文 / 思考 / tool-*
-    else:  # updates
-        ...  # 工具结果 → tool-output-*
+ if mode == "custom":
+ yield UiMessageStreamWriter.write(payload) # 原样转发
+ elif mode == "messages":
+ ... # 正文 / 思考 / tool-*
+ else: # updates
+ ... # 工具结果 → tool-output-*
 ```
 
 > `_stream_writer()` 是安全包装：不在图内（如直接 invoke 工具测试）时 `get_stream_writer()` 会抛
 > `KeyError: '__pregel_runtime'`，退化为 no-op；事件是过程条增强，推不出去不影响作答。
 
-### 4.7 内部 LLM 隔离（对应 TS `invokeIsolated`）
+### 4.7 内部 LLM 隔离
 
 问题：工具里再 `invoke` 评估/改写模型，会**继承 agent 的 callbacks**，内部结构化 JSON 会进 `messages` 流、变成回答正文。
 
@@ -228,16 +228,16 @@ async for mode, payload in agent_stream:
 ```python
 KH_INTERNAL_TAG = "kh-internal"
 _INTERNAL_CALL_CONFIG = {
-    "callbacks": [],                    # 摘掉 StreamMessagesHandler（ensure_config 对 callbacks 是覆盖）
-    "tags": [KH_INTERNAL_TAG],          # 兜底：消费端按 tag 过滤
-    "metadata": {"khInternal": True},
+ "callbacks": [], # 摘掉 StreamMessagesHandler（ensure_config 对 callbacks 是覆盖）
+ "tags": [KH_INTERNAL_TAG], # 兜底：消费端按 tag 过滤
+ "metadata": {"khInternal": True},
 }
 # 应用到 _relevance_judge.ainvoke / _retry_writer.ainvoke
 ```
 消费端（`ai_stream.py`）：
 ```python
 if KH_INTERNAL_TAG in ((meta or {}).get("tags") or []):
-    continue
+ continue
 ```
 
 ### 4.8 落库与记忆写回（onFinish）
@@ -246,10 +246,10 @@ if KH_INTERNAL_TAG in ((meta or {}).get("tags") or []):
 answer = "".join(writer.text_parts).strip()
 used = {n for [n] in answer}
 cited = [s for s in persist_sources if s.index in used] if used else []
-append_turn(session, question, final_answer, cited)        # Postgres
-short_memory.append_turn(...)                              # Redis 热窗口
-_spawn(long_memory.remember_turn(...))                     # fire-and-forget
-_spawn(summary.fold(...))                                  # fire-and-forget
+append_turn(session, question, final_answer, cited) # Postgres
+short_memory.append_turn(...) # Redis 热窗口
+_spawn(long_memory.remember_turn(...)) # fire-and-forget
+_spawn(summary.fold(...)) # fire-and-forget
 ```
 
 ---
@@ -266,11 +266,11 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 返回：
 ```json
 {
-  "query": "实际检索词",
-  "items": [ { "index": 1, "documentId": "...", "documentTitle": "...", "heading": "...", "excerpt": "..." } ],
-  "context": "[1] 标题 / 章节\n正文…",
-  "insufficient": true,
-  "eval": { "ok": false, "reason": "irrelevant", "text": "...", "retried": false, "query": "...", "retryQuery": null }
+ "query": "实际检索词",
+ "items": [ { "index": 1, "documentId": "...", "documentTitle": "...", "heading": "...", "excerpt": "..." } ],
+ "context": "[1] 标题 / 章节\n正文…",
+ "insufficient": true,
+ "eval": { "ok": false, "reason": "irrelevant", "text": "...", "retried": false, "query": "...", "retryQuery": null }
 }
 ```
 - 切题时 `eval.ok=true`、`items/context` 有值；
@@ -322,13 +322,13 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 - `data-eval.ok` 语义是「资料切题」，不是「有条数」。
 - 多次检索时 `data-sources` 的 `index` 是**全局连续编号**（`offset = len(persist_sources)`），回答里的 `[n]` 与之一致。
 - ⚠️ AI SDK 对**无 id** 的 data part 是 **append** 而非 replace，所以多次检索会产生**多个** `data-sources`；前端必须取**最后一个**（全量快照）。取第一个会拿到首轮「不切题」时的空数组，导致引用区不显示。
-- 后端**不推** `data-retrieve`（对齐 TS `packRetrieveResult`）；检索词/命中由 `retrieve_knowledge` 工具卡展示。
+- 后端**不推** `data-retrieve`；检索词/命中由 `retrieve_knowledge` 工具卡展示。
 
 ---
 
 ## 7. 关键设计点 / 坑
 
-1. **push vs pull 流**：TS 的 `writer` 是 push 写端、可传进工具闭包；Python SSE 是 async generator（pull），工具没法 yield → 必须用 `get_stream_writer()` + `custom` 流。
+1. **push vs pull 流**：、可传进工具闭包；Python SSE 是 async generator（pull），工具没法 yield → 必须用 `get_stream_writer()` + `custom` 流。
 2. **内部 LLM 隔离**：`ensure_config` 对显式传入的 `callbacks` 是**覆盖**而非合并（`merge_configs` 才累加），所以 `callbacks: []` 能摘掉 `StreamMessagesHandler`；`tags` 是兜底过滤。**不做隔离，内部 JSON 会混进正文。**
 3. **引用编号全局累加**：`_pack_retrieve_result` 用 `offset = len(persist_sources)`，多次检索的命中编号连续，否则 `[n]` 会串。
 4. **最多两次**：`retrieve_count >= 2` 直接拦下；防止模型无限「改写-再查」。
@@ -337,7 +337,7 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 7. **TypeSafe 判别式**：意图/切题/是否改写走 TypeSafe `Choice`，改写/评估回退走 LLM。TypeSafe 不可用不影响主流程。
 8. **sources 落库**：只存回答中实际引用 `[n]` 的条目，未标注存空列表。
 9. **`data-sources` 取最后一个**：后端每次推全量、AI SDK 无 id 会 append；前端聚合时必须取最后一份快照。
-10. **评估上下文不能太短**：`summarize_hits` 送入评估器的正文截断用 `_RELEVANCE_SNIPPET_LEN`，**刻意比 TS `summarizeHits` 的 180 长（本项目 1200，覆盖实测最大 1016 字的 chunk）**。中文 chunk 约 700~1000 字，关键句常在中后段（实测「私车公用」在 759 字 chunk 的第 644 字）；截 180 会让评估器只看到 chunk 开头的「差旅管理办法」标题 → 误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。这是「文档搜得到、stream 查不到」的常见根因。
+10. **评估上下文不能太短**：`summarize_hits` 送入评估器的正文截断用 `_RELEVANCE_SNIPPET_LEN`，（本项目 1200，覆盖实测最大 1016 字的 chunk）**。中文 chunk 约 700~1000 字，关键句常在中后段（实测「私车公用」在 759 字 chunk 的第 644 字）；截 180 会让评估器只看到 chunk 开头的「差旅管理办法」标题 → 误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。这是「文档搜得到、stream 查不到」的常见根因。
 11. **前端 `API_BASE` 必须 import**：`ChatPage` 里拼 `DefaultChatTransport.api` 用到，漏 import 会构建失败 + 运行时 `ReferenceError`。
 
 ---
@@ -346,43 +346,43 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 
 ```
 backend/app/services/
-├── ai_stream.py              # 编排：会话/历史/意图/建 agent/流/落库；UiMessageStreamWriter
-│   ├── UiMessageStreamWriter #   AI SDK v6 SSE 编码器（自研）
-│   ├── system_for_plan       #   按意图写循环系统提示
-│   ├── _pack_retrieve_result #   命中→persist_sources + data-* 事件 + context
-│   └── AiStreamService
-│       ├── create_turn_agent     # 每轮建 agent，闭包挂四个工具
-│       └── stream_chat           # SSE 生成器
-├── chat_query_rewrite.py     # TypeSafe classify / gradeHits / rewriteAfterRetrieve
-│   ├── classify              # 意图 + 建议检索词 + 工具开关（检索前追问消解在这）
-│   ├── rewrite               # classify 的薄封装（只取 query + need_retrieve，非流式用）
-│   ├── grade_hits            # HitGrade（empty/relevant/irrelevant）
-│   └── rewrite_after_retrieve# 不足后改写（单一 RETRY_REWRITE_PROMPT，永不 None）
-├── agentic_retrieve.py       # retrieve_and_grade / retrieve_until_relevant / to_eval
-├── graph_build.py            # KG 构建 + retrieve_for_chat（图谱对话检索）/ format / merge
-└── retrieval.py              # 混合检索：embed + ES 关键词 + PG 向量 + RRF + rerank
+├── ai_stream.py # 编排：会话/历史/意图/建 agent/流/落库；UiMessageStreamWriter
+│ ├── UiMessageStreamWriter # AI SDK v6 SSE 编码器（自研）
+│ ├── system_for_plan # 按意图写循环系统提示
+│ ├── _pack_retrieve_result # 命中→persist_sources + data-* 事件 + context
+│ └── AiStreamService
+│ ├── create_turn_agent # 每轮建 agent，闭包挂四个工具
+│ └── stream_chat # SSE 生成器
+├── chat_query_rewrite.py # TypeSafe classify / gradeHits / rewriteAfterRetrieve
+│ ├── classify # 意图 + 建议检索词 + 工具开关（检索前追问消解在这）
+│ ├── rewrite # classify 的薄封装（只取 query + need_retrieve，非流式用）
+│ ├── grade_hits # HitGrade（empty/relevant/irrelevant）
+│ └── rewrite_after_retrieve# 不足后改写（单一 RETRY_REWRITE_PROMPT，永不 None）
+├── agentic_retrieve.py # retrieve_and_grade / retrieve_until_relevant / to_eval
+├── graph_build.py # KG 构建 + retrieve_for_chat（图谱对话检索）/ format / merge
+└── retrieval.py # 混合检索：embed + ES 关键词 + PG 向量 + RRF + rerank
 ```
 
 关键函数调用关系：
 
 ```
 stream_chat
-  → chat_query_rewrite_service.classify
-  → create_turn_agent
-       └─ retrieve_knowledge → retrieve_and_grade
-                                   → hybrid_retrieval_service.retrieve  (retrieval.py)
-                                   → chat_query_rewrite_service.grade_hits
-                                         → check_relevance (TypeSafe Choice → LLM 回退)
-       └─ rewrite_query      → chat_query_rewrite_service.rewrite_after_retrieve
-       └─ retrieve_graph     → graph_build_service.retrieve_for_chat
-       └─ web_search         → web_search_service.search
+ → chat_query_rewrite_service.classify
+ → create_turn_agent
+ └─ retrieve_knowledge → retrieve_and_grade
+ → hybrid_retrieval_service.retrieve (retrieval.py)
+ → chat_query_rewrite_service.grade_hits
+ → check_relevance (TypeSafe Choice → LLM 回退)
+ └─ rewrite_query → chat_query_rewrite_service.rewrite_after_retrieve
+ └─ retrieve_graph → graph_build_service.retrieve_for_chat
+ └─ web_search → web_search_service.search
 ```
 
 ---
 
-## 9. 与 TS 对照
+##
 
-| 机制 | TS | Python |
+
 |---|---|---|
 | agent | `createTurnAgent` 每轮建 | `create_turn_agent` 每轮建 |
 | 工具内推事件 | `writer.write`（闭包） | `get_stream_writer()` + `stream_mode="custom"` |
@@ -429,9 +429,9 @@ cd frontend && pnpm exec tsc -b && pnpm run build
 `POST {API_BASE}/ai/chat/stream`，body：
 ```json
 {
-  "messages": [ { "role": "user", "parts": [ { "type": "text", "text": "那谁审批？" } ] } ],
-  "sessionId": "可选，缺省新建", "topK": 5,
-  "id": "...", "trigger": "...", "messageId": "..."
+ "messages": [ { "role": "user", "parts": [ { "type": "text", "text": "那谁审批？" } ] } ],
+ "sessionId": "可选，缺省新建", "topK": 5,
+ "id": "...", "trigger": "...", "messageId": "..."
 }
 ```
 > `id` / `trigger` / `messageId` 是 `useChat` 透传字段，后端 schema 声明后放行、不使用。
@@ -490,8 +490,8 @@ cd frontend && pnpm exec tsc -b && pnpm run build
 2. 发 `data-intent`。
 3. 建 agent，挂 `retrieve_knowledge` + `rewrite_query`。
 4. 模型调 `retrieve_knowledge("差旅审批流程")` → `retrieve_and_grade` 检索 + 评估 → 发 `data-eval`。
-   - 切题 → 返回 `context`，模型作答并标 `[1]`。
-   - 不切题 → 返回 `insufficient`，模型调 `rewrite_query()` → 发 `data-status` → 拿新词 → 再调 `retrieve_knowledge`（第二次）。
-   - 两次仍不足 → `insufficient` → 模型按意图决定「说不知道」或 `web_search`。
+ - 切题 → 返回 `context`，模型作答并标 `[1]`。
+ - 不切题 → 返回 `insufficient`，模型调 `rewrite_query()` → 发 `data-status` → 拿新词 → 再调 `retrieve_knowledge`（第二次）。
+ - 两次仍不足 → `insufficient` → 模型按意图决定「说不知道」或 `web_search`。
 5. 发正文 `text-*` → `finish`。
 6. 落库（只存被 `[n]` 引用的 sources）+ 记忆 + 摘要 fold。

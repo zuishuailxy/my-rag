@@ -40,7 +40,7 @@ async def main() -> None:
         got: dict = {}
 
         async def handler(msg) -> None:
-            # handler 不负责 ack（由 RabbitMqService 包装器统一 ack/nack，与 TS 一致）
+            # handler 不负责 ack
             got["body"] = json.loads(msg.body.decode("utf-8"))
             received.set()
 

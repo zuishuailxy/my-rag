@@ -28,15 +28,15 @@ import sys
 
 sys.path.insert(0, ".")
 
-from app.db.es import es_service  # noqa: E402
-from app.db.session import async_session_factory  # noqa: E402
-from app.pipeline.types import to_search_index_doc  # noqa: E402
-from app.services.es_index import es_chunk_index_service  # noqa: E402
-from app.services.indexing import (  # noqa: E402
+from app.db.es import es_service # noqa: E402
+from app.db.session import async_session_factory # noqa: E402
+from app.pipeline.types import to_search_index_doc # noqa: E402
+from app.services.es_index import es_chunk_index_service # noqa: E402
+from app.services.indexing import ( # noqa: E402
     load_all_published_documents,
     reindex_document,
 )
-from app.services.search_index import search_index_service  # noqa: E402
+from app.services.search_index import search_index_service # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("ReindexAllChunks")
@@ -58,7 +58,7 @@ async def main(
         if dry_run:
             for doc in docs:
                 logger.info(
-                    "  [dry-run] id=%s title=%s isPublic=%s teamId=%s authorId=%s",
+                    " [dry-run] id=%s title=%s isPublic=%s teamId=%s authorId=%s",
                     doc.id,
                     doc.title,
                     doc.is_public,
@@ -86,7 +86,7 @@ async def main(
                     logger.info(
                         "chunk 重建完成：documentId=%s, chunks=%d", doc.id, count
                     )
-                except Exception as err:  # noqa: BLE001 —— 单篇失败不阻断其余文档
+                except Exception as err: # noqa: BLE001 —— 单篇失败不阻断其余文档
                     failed.add(str(doc.id))
                     logger.error("chunk 重建失败：documentId=%s, %s", doc.id, err)
             # ---- Search：按编排器同一份字段映射重灌 kh_document（补 teamId）
@@ -97,7 +97,7 @@ async def main(
                     )
                     indexed_docs += 1
                     logger.info("文档索引重建完成：documentId=%s", doc.id)
-                except Exception as err:  # noqa: BLE001
+                except Exception as err: # noqa: BLE001
                     failed.add(str(doc.id))
                     logger.error("文档索引重建失败：documentId=%s, %s", doc.id, err)
 

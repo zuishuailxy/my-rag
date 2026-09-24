@@ -9,7 +9,7 @@ schema 真相源：init-scripts/postgresql/init.sql（末尾「AI 会话」段�
 
 ⚠️ updated_at 必须同时写 server_default 与 onupdate：init.sql 无触发器，
 now() 只在 INSERT 生效，只写 server_default 会导致 UPDATE 不刷新时间戳。
-created_at 只有 server_default（对齐 TS @CreateDateColumn）。
+created_at 只有 server_default。
 """
 
 from datetime import datetime

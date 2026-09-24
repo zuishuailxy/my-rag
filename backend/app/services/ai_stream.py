@@ -1,4 +1,4 @@
-"""AI 流式对话服务（对应 TS ai/ai-stream.service.ts，逐段转写）
+"""AI 流式对话服务
 
 Agentic RAG 链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗口，miss 回填库）
 → 滚动摘要 → 意图识别（TypeSafe classify → data-intent）→ 长期记忆检索
@@ -9,28 +9,28 @@ Agentic RAG 链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗
 
 工具内用 LangGraph `get_stream_writer()` 推 `data-eval` / `data-sources` /
 `source-document` / `data-status`（custom 流）；SSE 生成器把 custom 帧原样转发。
-内部评估/改写 LLM 调用带 `kh-internal` tag 且清空 callbacks（对应 TS invokeIsolated），
+内部评估/改写 LLM 调用带 `kh-internal` tag 且清空 callbacks，
 消费端再按 metadata.tags 过滤，避免内部结构化 JSON 混进回答正文。
 
 短期记忆（Redis 热窗口）：`load_working_history` 先 `tryLoad`，miss 才查库回填；
 长期记忆（Mem0）：本轮 `search` 出 user/session 两层，拼成 SystemMessage 前置进
-messages；落库尾部 `remember_turn` 异步写回（不 await，对齐 TS fire-and-forget）。
+messages；落库尾部 `remember_turn` 异步写回。
 滚动摘要（ChatSessionSummaryService）：把滑出热窗口的旧历史增量折叠；作答时作为
 SystemMessage 前置，落库后后台 fold，不阻塞回答。
 
-🔴 刻意差异（与 TS）：
-- **协议编码器自研**（UiMessageStreamWriter）：TS 用 ai 包的 createUIMessageStream /
+🔴 刻意差异：
+- **协议编码器自研**（UiMessageStreamWriter）：
   toUIMessageStream，Python 无合适替代（候选包或要求高版本 fastapi、或丢 reasoning、
   或不支持 data-* / 流合并）。
-- **agent 流用 stream_mode=["messages","updates","custom"]**：TS streamMode=
+- **agent 流用 stream_mode=["messages","updates","custom"]**：
   ["messages","tools"]；Python 的 tools 等价物是 updates 取 ToolMessage，custom 是
-  工具内推 data-* 的通道（TS 直接把 writer 传进工具闭包，Python 用 get_stream_writer）。
-- **摘要不用 TS 的 summarizationMiddleware**：改由 ChatSessionSummaryService 做
+  工具内推 data-* 的通道。
+：改由 ChatSessionSummaryService 做
   **跨请求持久化**的滚动摘要（中间件只在 agent state 内、每轮重算、不持久）。
 - **mapReasoningStream 不需要**：DeepSeek reasoning_content 直接落在
   AIMessageChunk.additional_kwargs，这里直接映射 reasoning-* parts。
 
-落库语义（对齐 TS onFinish）：sources 只存回答中实际引用 [n] 的条目，未标注存空列表。
+落库语义：sources 只存回答中实际引用 [n] 的条目，未标注存空列表。
 """
 
 import asyncio
@@ -76,9 +76,9 @@ from app.services.web_search import web_search_service
 
 logger = logging.getLogger("AiStreamService")
 
-# 溯源摘录长度（对齐 TS EXCERPT_LEN）
+# 溯源摘录长度
 _EXCERPT_LEN = 200
-# 上下文里每条资料正文截断（对齐 TS slice(0, 800)）
+# 上下文里每条资料正文截断（)）
 _CONTEXT_SNIPPET_LEN = 800
 # 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")
@@ -86,7 +86,7 @@ _CITATION_RE = re.compile(r"\[(\d+)\]")
 # SSE 终止帧（AI SDK useChat / DefaultChatTransport 识别用）
 _SSE_DONE = "data: [DONE]\n\n"
 
-# 长期记忆写入是 fire-and-forget（对齐 TS 不 await 的 rememberTurn）。
+# 长期记忆写入是 fire-and-forget。
 # ⚠️ 必须持强引用：asyncio.create_task 生成的 Task 若无引用会被 GC 回收，
 # 记忆写入会静默丢失（异常也被吞掉只 WARN，很难发现）。
 _background_tasks: set[asyncio.Task[None]] = set()
@@ -112,16 +112,14 @@ def _stream_writer() -> Any:
     """
     try:
         return get_stream_writer()
-    except Exception:  # noqa: BLE001
+    except Exception: # noqa: BLE001
         return _noop_stream_writer
 
 
 class UiMessageStreamWriter:
     """UI Message Stream（AI SDK v6 协议）SSE 编码器
 
-    正文（text-*）与思考（reasoning-*）自动开合：首个 delta 前发 start，
-    收口时发 end——等价 TS 适配包内部做的协议状态机。text_parts 只收集正文，
-    对应 TS onFinish 里「取 responseMessage 的 text parts 拼回答」。
+    正文（text-*）与思考（reasoning-*）自动开合：首个 delta 前发 start。text_parts 只收集正文。
     """
 
     def __init__(self) -> None:
@@ -140,7 +138,7 @@ class UiMessageStreamWriter:
     def write(event: dict[str, Any]) -> str:
         return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-    # ---- 显式事件（逐条对齐 TS writer.write 调用）----
+    # ---- 显式事件----
 
     def start(self) -> str:
         return self.write({"type": "start"})
@@ -152,7 +150,7 @@ class UiMessageStreamWriter:
         return self.write({"type": "error", "errorText": error_text})
 
     def data(self, name: str, data: Any) -> str:
-        """自定义 data-* part（TS: data-session / data-status / data-intent / data-eval / data-sources）"""
+        """自定义 data-* part"""
         return self.write({"type": f"data-{name}", "data": data})
 
     def source_document(self, source_id: str, media_type: str, title: str) -> str:
@@ -197,7 +195,7 @@ class UiMessageStreamWriter:
         self._reasoning_id = None
         return event
 
-    # ---- 工具事件（对应 TS 适配包转出的 tool-* 事件）----
+    # ---- 工具事件----
 
     def tool_input_start(self, tool_call_id: str, tool_name: str) -> str:
         self._tool_input_started.add(tool_call_id)
@@ -220,7 +218,7 @@ class UiMessageStreamWriter:
         return self.write({"type": "tool-output-available", "toolCallId": tool_call_id, "output": output})
 
 
-# ---- 工具参数 schema（对齐 TS zod schema）----
+# ---- 工具参数 schema----
 
 class _WebSearchInput(BaseModel):
     """web_search 工具参数"""
@@ -270,7 +268,7 @@ async def _web_search(query: str, count: int = 5) -> dict[str, Any]:
 
 
 def _build_agent_llm() -> ChatDeepSeek | None:
-    """构建 agent 用 LLM（对应 TS 构造函数）；未配置 API Key 返回 None"""
+    """构建 agent 用 LLM；未配置 API Key 返回 None"""
     api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
     if not api_key:
         return None
@@ -279,7 +277,7 @@ def _build_agent_llm() -> ChatDeepSeek | None:
     model = settings.MODEL_NAME or settings.LLM_MODEL
     timeout_ms = settings.AI_CHAT_TIMEOUT_MS
     timeout_s = timeout_ms / 1000 if timeout_ms > 0 else 60.0
-    # TS: LLM_ENABLE_THINKING !== 'false' 时 enable_thinking；DeepSeek 用 thinking.type
+# 'false' 时 enable_thinking；DeepSeek 用 thinking.type
     thinking_enabled = settings.LLM_ENABLE_THINKING != "false"
 
     # 刻意差异：用 ChatDeepSeek 而非 ChatOpenAI。langchain-openai 1.6.0 明确不抽取
@@ -296,14 +294,14 @@ def _build_agent_llm() -> ChatDeepSeek | None:
         stream_usage=False,
         extra_body={
             "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
-            # 知识库 + 图谱需要同一步并行调用，显式打开并行 tool call（对齐 TS modelKwargs）
+            # 知识库 + 图谱需要同一步并行调用，显式打开并行 tool call
             "parallel_tool_calls": True,
         },
     )
 
 
 def system_for_plan(plan: ChatRoutePlan) -> str:
-    """按本轮意图写 agent 系统提示（对应 TS systemForPlan），规定 Agentic RAG 循环。"""
+    """按本轮意图写 agent 系统提示，规定 Agentic RAG 循环。"""
     prompt = (
         "你是企业知识库助手，必须按 Agentic RAG 循环作答，不要跳步。"
         "结合对话历史和记忆里的用户背景，但制度/流程以本轮检索资料为准。"
@@ -363,9 +361,7 @@ def _pack_retrieve_result(
     stream_writer: Any,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """命中写入 persist_sources 并推 data-sources；context 给模型，excerpt 给前端。
-
-    对应 TS packRetrieveResult：多次检索的命中用全局连续编号（offset = 已有条数），
+    """命中写入 persist_sources 并推 data-sources；context 给模型，excerpt 给前端。），
     每次推**全量** data-sources（前端覆盖），逐条发 source-document。
     """
     offset = len(persist_sources)
@@ -390,7 +386,7 @@ def _pack_retrieve_result(
         }
         for s in sources
     ]
-    # 只推 data-sources（全量快照）+ source-document，对齐 TS packRetrieveResult；
+    # 只推 data-sources（全量快照）+ source-document；
     # 不再单独推 data-retrieve —— query/items 由前端 retrieve_knowledge 工具卡展示。
     stream_writer({"type": "data-sources", "data": list(persist_sources)})
     for src in sources:
@@ -443,7 +439,7 @@ def _chunk_text(chunk: AIMessageChunk) -> str:
 
 
 def _iter_tool_messages(payload: Any) -> list[ToolMessage]:
-    """从 updates 流事件里取 ToolMessage（对应 TS 'tools' 流模式）"""
+    """从 updates 流事件里取 ToolMessage"""
     found: list[ToolMessage] = []
     if isinstance(payload, dict):
         for node_out in payload.values():
@@ -455,7 +451,7 @@ def _iter_tool_messages(payload: Any) -> list[ToolMessage]:
 
 
 def last_user_text(messages: list[Any] | None) -> str:
-    """取最后一条 user 消息的文本（对齐 TS lastUserText）"""
+    """取最后一条 user 消息的文本"""
     if not messages:
         return ""
     for msg in reversed(messages):
@@ -467,7 +463,7 @@ def last_user_text(messages: list[Any] | None) -> str:
 
 
 def excerpt(content: str) -> str:
-    """摘要：压缩空白 + 超长截断（对齐 TS excerpt）"""
+    """摘要：压缩空白 + 超长截断"""
     text = re.sub(r"\s+", " ", content).strip()
     if len(text) <= _EXCERPT_LEN:
         return text
@@ -479,7 +475,7 @@ class AiStreamService:
 
     def __init__(self) -> None:
         # 只建 LLM，agent/工具**每轮现建**（闭包持本轮 retrieve_count / last_retrieve /
-        # persist_sources），对应 TS createTurnAgent。
+        # persist_sources）。
         self._llm = _build_agent_llm()
 
     def create_turn_agent(
@@ -490,7 +486,7 @@ class AiStreamService:
         plan: ChatRoutePlan,
         question: str,
     ) -> Any | None:
-        """按本轮意图挂工具现建 agent（对应 TS createTurnAgent）
+        """按本轮意图挂工具现建 agent
 
         检索、改写、再检索由 agent 循环调度，每个工具只做一步。工具内的可变状态
         （retrieve_count / last_retrieve）与 persist_sources 由闭包捕获，天然按轮隔离。
@@ -656,7 +652,7 @@ class AiStreamService:
             "/".join(plan["graph_queries"]) or "-",
             [t.name for t in tools],
         )
-        # 单次 invoke 最多 8 次模型调用（对齐 TS modelCallLimitMiddleware）：避免循环打爆；
+        # 单次 invoke 最多 8 次模型调用：避免循环打爆；
         # 超限正常结束而非抛错。工具内部的评估/改写 LLM 调用已用 kh-internal 隔离、不计入。
         return create_agent(
             model=self._llm,
@@ -668,7 +664,7 @@ class AiStreamService:
     async def stream_chat(
         self, db: AsyncSession, dto: ChatStreamRequest, user: AuthUser
     ) -> AsyncIterator[str]:
-        """SSE 事件流生成器（对应 TS streamChat + createUIMessageStream execute）"""
+        """SSE 事件流生成器"""
         writer = UiMessageStreamWriter()
         question = last_user_text(dto.messages)
         top_k = dto.topK or 5
@@ -679,7 +675,7 @@ class AiStreamService:
         yield writer.start()
 
         if not question:
-            # 空问题不建会话不落库（对齐 TS 早退分支）
+            # 空问题不建会话不落库
             yield writer.text_delta("请输入问题。")
             yield writer.text_end()
             yield writer.finish()
@@ -723,7 +719,7 @@ class AiStreamService:
             },
         )
 
-        # 长期记忆检索（对齐 TS：用用户原问题，不用建议检索词）
+        # 长期记忆检索
         mem_hits = await chat_long_memory_service.search(
             user.user_id, persist_session_id, question
         )
@@ -752,7 +748,7 @@ class AiStreamService:
 
         try:
             # custom 流 = 工具内 get_stream_writer 推来的 data-*；messages = 模型 token/思考；
-            # updates = 工具结果（对应 TS 'tools' 流模式）。
+            # updates = 工具结果。
             agent_stream = agent.astream(
                 {"messages": messages},
                 stream_mode=["messages", "updates", "custom"],
@@ -765,7 +761,7 @@ class AiStreamService:
                     continue
                 if mode == "messages":
                     chunk, meta = payload
-                    # 内部评估/改写 LLM 的 token 不能进正文（对应 TS kh-internal 兜底过滤）
+                    # 内部评估/改写 LLM 的 token 不能进正文
                     if KH_INTERNAL_TAG in ((meta or {}).get("tags") or []):
                         continue
                     if not isinstance(chunk, AIMessageChunk):
@@ -789,7 +785,7 @@ class AiStreamService:
                                 str(call.get("name") or ""),
                                 call.get("args") or {},
                             )
-                else:  # updates：工具结果
+                else: # updates：工具结果
                     for msg in _iter_tool_messages(payload):
                         if msg.tool_call_id in writer._tool_input_sent:
                             yield writer.tool_output_available(
@@ -798,13 +794,13 @@ class AiStreamService:
             # 收口未闭合的 part（流正常结束时 adapter 由 sendFinish 收口，这里显式做）
             yield writer.reasoning_end()
             yield writer.text_end()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc: # noqa: BLE001
             logger.warning("LangChain 流失败：%s", exc)
 
         yield writer.finish()
         yield _SSE_DONE
 
-        # onFinish：落库（对齐 TS——sources 只存实际引用的 [n]，未标注存空列表）
+        # onFinish：落库
         answer = "".join(writer.text_parts).strip()
         used = {int(m.group(1)) for m in _CITATION_RE.finditer(answer)}
         cited = [s for s in persist_sources if s["index"] in used] if used else []
@@ -819,9 +815,9 @@ class AiStreamService:
             await chat_short_memory_service.append_turn(
                 user.user_id, persist_session_id, persist_history, question, final_answer
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc: # noqa: BLE001
             logger.warning("流式对话落库失败：%s", exc)
-        # 长期记忆写入不 await（对齐 TS 的 fire-and-forget）：分类器是一次额外 LLM 调用，
+        # 长期记忆写入不 await：分类器是一次额外 LLM 调用，
         # 不能让用户等它；remember_turn 内部已吞异常只 WARN。
         _spawn(
             chat_long_memory_service.remember_turn(
@@ -841,7 +837,7 @@ class AiStreamService:
     async def load_working_history(
         self, db: AsyncSession, user_id: str, session_id: str
     ) -> list[BaseMessage]:
-        """取本轮要用的历史：Redis 热窗口优先，miss 才查库回填（对应 TS loadWorkingHistory）
+        """取本轮要用的历史：Redis 热窗口优先，miss 才查库回填
 
         返回的 history 会前置进 agent 的 messages，并在落库时原样交给短期记忆
         追加本轮问答（否则只写本轮、丢掉窗口里已有的历史）。

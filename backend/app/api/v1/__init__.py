@@ -1,5 +1,5 @@
 """
-API v1 路由（对应 NestJS 各业务 Module 的路由装配）
+API v1 路由
 
 鉴权：所有子 router 用 auth_router()（= APIRouter(route_class=AuthRoute)），
 默认**全部需要登录**，公开接口在 endpoint 上标 @public()。

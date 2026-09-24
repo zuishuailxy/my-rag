@@ -1,21 +1,21 @@
-"""团队管理路由（对应 TS src/team/team.controller.ts）
+"""团队管理路由
 
-双层守卫（等价 TS 类级 @Roles(ADMIN) + 方法级 @RequirePermission('system:team')）：
+双层守卫（) + 方法级 @RequirePermission('system:team')）：
   - 类级 @Roles(ADMIN) → 每个端点 @roles(RoleCode.ADMIN)
   - 方法级 @RequirePermission(code) → dependencies=[Depends(require_permission(code))]
 
-唯一例外：GET /mine 在 TS 里**没有** @Roles / @RequirePermission（注释「当前用户所在
+唯一例外：（注释「当前用户所在
 团队（含担任负责人的），登录即可」）→ Python 只靠 auth_router 的默认登录拦截，
 不加 @roles(ADMIN)、也不挂 system:team。
 
-⚠️ 2026-09-15 订正：早期版本此处写「TS 的 /tree 标了 @Public()」，故 Python 只标
-@public()。对照 TS 最新源码，/tree **是** @Roles(RoleCode.ADMIN) +
+⚠️ 2026-09-15 订正：()」，故 Python 只标
+@public()。，/tree **是** @Roles(RoleCode.ADMIN) +
 @RequirePermission('system:team')，且整个 controller 未 import Public 装饰器
-（不存在被 @Public 放开的端点）→ 已按 TS 收紧为 ADMIN + system:team。
+（不存在被 @Public 放开的端点）。
 
 路由顺序：/page、/mine、/tree 是字面量段，必须注册在 /{team_id} 动态段之前。
 
-状态码：POST create / addMembers → 201（NestJS @Post 默认 201）；其余 200。
+状态码：POST create / addMembers → 201；其余 200。
 """
 
 from typing import Annotated
@@ -52,7 +52,7 @@ _TEAM_PERM = [Depends(require_permission("system:team"))]
 
 
 def _vo(t: Team) -> TeamResponse:
-    """实体 → 响应 VO（bigint 转字符串，对齐 TS 序列化口径）"""
+    """实体 → 响应 VO"""
     return TeamResponse(
         id=str(t.id),
         team_name=t.team_name,
@@ -112,10 +112,8 @@ async def list_my_teams(
     session: _DB,
     current_user: _CurrentUser,
 ) -> list[TeamResponse]:
-    """当前用户所在团队（含担任负责人的），登录即可
-
-    对应 TS `GET /teams/mine` → `teamService.listMine(user.userId)`：**不挂**
-    @roles(ADMIN) 与 system:team（TS 上该端点同样没有这两个装饰器），
+    """当前用户所在团队（含担任负责人的），登录即可)`：**不挂**
+    @roles(ADMIN) 与 system:team，
     只靠 auth_router 的默认登录拦截。结果按 sort ASC / created_at ASC 排序。
     """
     teams = await team_service.list_mine(session, current_user.user_id)
@@ -132,12 +130,12 @@ async def team_tree(
     session: _DB,
     root_only: Annotated[str | None, Query(alias="rootOnly")] = None,
 ) -> list[TeamTreeResponse]:
-    """团队树（ADMIN + system:team，对应 TS @Roles(ADMIN) + @RequirePermission('system:team')）
+    """团队树（ADMIN + system:team) + @RequirePermission('system:team')）
 
     rootOnly=true 只返回根节点。
     """
     nodes = await team_service.get_tree(session, root_only == "true")
-    # rootOnly 节点无 children 键 → 响应模型补默认空数组（TS 不带键，语义一致的刻意差异）
+    # rootOnly 节点无 children 键 → 响应模型补默认空数组
     return [TeamTreeResponse(**node) for node in nodes]
 
 

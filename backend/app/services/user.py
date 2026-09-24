@@ -1,13 +1,13 @@
 """
-用户服务（对应 TS src/user/user.service.ts）
+用户服务
 
-方法与 TS 一一对应，形参顺序保持一致；服务层无状态、不持会话，
+，形参顺序保持一致；服务层无状态、不持会话，
 `session: AsyncSession` 由路由层通过 `Depends(get_db_session)` 传入。
 
-TS 侧 id 经 bigintTransformer 是 string，Python 服务层同样收 `str`，
+，Python 服务层同样收 `str`，
 内部用 parse_bigint / require_bigint 转 int（见 app/common/bigint.py 的语义说明）。
 
-刻意偏离 TS 两处（均为防 500，TS 侧会静默截断或抛 5xx）：
+：
   1. register 前置校验密码 UTF-8 字节数 ≤ 72：bcryptjs 对超长密码**静默截断**到 72 字节
      （用户以为设了长密码，实际只有前 72 字节生效），Python bcrypt 5.0 直接抛 ValueError；
      此处显式 400，语义更安全。DTO 层的 max_length=72 是字符数粗筛，字节校验在这里兜底。
@@ -15,8 +15,8 @@ TS 侧 id 经 bigintTransformer 是 string，Python 服务层同样收 `str`，
      ValueError，此处按「用户名或密码错误」返回 401（超长密码不可能匹配任何账号），
      而不是让 500 冒出来。
 
-并发说明：register 的「查重 → 插入」与 TS 一样存在竞态（两请求同时注册同名会都通过
-exists 检查），最终由 partial unique index uk_kh_user_username 兜底——TS 侧撞索引是 500，
+并发说明：（两请求同时注册同名会都通过
+exists 检查），，
 Python 侧同样是 500，此缺陷两侧一致，未做收敛。
 """
 
@@ -46,7 +46,7 @@ from app.schemas.user import (
 from app.services.permission import permission_service
 from app.services.team import team_service
 
-# bcrypt 工作因子（TS bcryptjs.hash(password, 10) 的 10）
+# bcrypt 工作因子（(password, 10) 的 10）
 BCRYPT_ROUNDS = 10
 
 
@@ -68,18 +68,18 @@ class UserService:
     # ---------------------------------------------------------------- query
 
     async def find_by_username(self, session: AsyncSession, username: str) -> User | None:
-        """按用户名查未删除用户（对应 TS findByUsername）"""
+        """按用户名查未删除用户"""
         stmt = select(User).where(User.username == username, User.deleted.is_(False))
         return (await session.scalars(stmt)).first()
 
     async def find_by_email(self, session: AsyncSession, email: str) -> User | None:
-        """按邮箱查未删除用户（对应 TS findByEmail）；不做小写归一（TS 同款，
-        Redis 侧验证码 key 才 lower()，两处口径不同是 TS 原设计）"""
+        """按邮箱查未删除用户；不做小写归一（，
+        Redis 侧验证码 key 才 lower()，）"""
         stmt = select(User).where(User.email == email, User.deleted.is_(False))
         return (await session.scalars(stmt)).first()
 
     async def find_by_id_or_throw(self, session: AsyncSession, user_id: str) -> User:
-        """按 ID 查未删除用户，不存在抛 404「用户不存在」（对应 TS findByIdOrThrow）"""
+        """按 ID 查未删除用户，不存在抛 404「用户不存在」"""
         pk = parse_bigint(user_id)
         if pk is not None:
             stmt = select(User).where(User.id == pk, User.deleted.is_(False))
@@ -89,14 +89,14 @@ class UserService:
         raise HTTPException(status_code=404, detail="用户不存在")
 
     async def get_role_codes(self, session: AsyncSession, user_id: str) -> list[str]:
-        """用户的全部**启用**角色编码（对应 TS getRoleCodes）
+        """用户的全部**启用**角色编码
 
-        只 JOIN kh_role 且过滤 r.status = 1，与 TS 一致；用户没有角色时返回空列表。
+        只 JOIN kh_role 且过滤 r.status = 1；用户没有角色时返回空列表。
         """
         pk = parse_bigint(user_id)
         if pk is None:
             # 理论上只会被内部调用（JWT 里的 userId 已验签），非法值按「无角色」处理，
-            # 不复制 TS 侧 22P02 → 500 的缺陷路径
+            #
             return []
         stmt = (
             select(Role.role_code)
@@ -112,11 +112,10 @@ class UserService:
         permissions: list[str],
         team_ids: list[str] | None = None,
     ) -> AuthUser:
-        """实体 + 角色编码 + 权限码 + 团队 ID → AuthUser（对应 TS toAuthUser；不查库、不异步）
+        """实体 + 角色编码 + 权限码 + 团队 ID → AuthUser
 
-        permissions / team_ids 由调用方查好传入（TS 同构：buildAuthUser / validateCredentials
-        先调 permissionService.getUserPermissionCodes 与团队成员查询再传入）。
-        team_ids 用于文档检索可见性（对应 TS AuthUser.teamIds）。
+        permissions / team_ids 由调用方查好传入。
+        team_ids 用于文档检索可见性。
         """
         return AuthUser(
             user_id=str(user.id),
@@ -130,9 +129,7 @@ class UserService:
         )
 
     async def build_auth_user(self, session: AsyncSession, user_id: str) -> AuthUser:
-        """按 ID 组装当前登录用户（对应 TS buildAuthUser；JWT 校验后的依赖用）
-
-        与 TS 一致：status 校验后依次查角色码 + 合并权限码（PermissionService
+        """按 ID 组装当前登录用户：status 校验后依次查角色码 + 合并权限码（PermissionService
         getUserPermissionCodes）+ 所在团队（文档可见性用），登录 / refresh / me /
         每请求鉴权注入都走这里。
         """
@@ -151,9 +148,9 @@ class UserService:
     async def validate_credentials(
         self, session: AsyncSession, username: str, password: str
     ) -> AuthUser:
-        """用户名 + 密码校验（对应 TS validateCredentials）
+        """用户名 + 密码校验
 
-        注意与 TS 相同的防枚举顺序：用户不存在与密码错误返回**同一句**提示，
+        注意的防枚举顺序：用户不存在与密码错误返回**同一句**提示，
         不泄露「该用户名已注册」；账户禁用则明确提示。
         """
         user = await self.find_by_username(session, username)
@@ -188,32 +185,31 @@ class UserService:
         input_: RegisterRequest,
         require_email_verification: bool = False,
     ) -> dict[str, object]:
-        """注册（对应 TS register）：查重 → 建用户 → 授 USER 角色
+        """注册：查重 → 建用户 → 授 USER 角色
 
-        返回 { userId, emailVerificationRequired }（TS 返回体两键恒在，
-        emailVerificationRequired 是 boolean 而非可选键）。
+        返回 { userId, emailVerificationRequired }。
 
         邮箱验证分叉：needVerify = require_email_verification 且传了 email 时，
         建用户 status=0 + email_verified=0（激活后 activate_email 双双置 1）；
         注意未激活用户登录会在 validateCredentials 先命中 status 检查报
         「账户已禁用」——email_verified 检查在其后，按现注册流程不可达
-        （TS 同款顺序，刻意保留以保真）。
+。
 
-        事务边界与 TS 相同：建用户与授角色是**两次独立提交**（TS 是两次独立 save），
-        极端情况下可能出现「用户已建但授角色失败」，与 TS 行为一致，不额外包事务。
+        事务边界：建用户与授角色是**两次独立提交**，
+        极端情况下可能出现「用户已建但授角色失败」，，不额外包事务。
         """
         if await self.find_by_username(session, input_.username):
             raise HTTPException(status_code=409, detail="用户名已存在")
-        # 邮箱查重在用户名之后（TS 同款顺序）；只查未删除用户，软删用户的邮箱可复用
+        # 邮箱查重在用户名之后；只查未删除用户，软删用户的邮箱可复用
         if input_.email:
             if await self.find_by_email(session, str(input_.email)):
                 raise HTTPException(status_code=409, detail="邮箱已被使用")
-        # 刻意优于 TS：TS bcryptjs 静默截断超长密码，这里显式 400（见模块 docstring）
+        #，这里显式 400（见模块 docstring）
         if len(input_.password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
             raise HTTPException(status_code=400, detail="密码过长（最多 72 字节）")
 
         user_id = next_snowflake_id()
-        # TS needVerify = input.requireEmailVerification && !!input.email：
+        # 
         # 开了验证但没填邮箱 → 仍走免验证路径（立即可登录）
         need_verify = require_email_verification and input_.email is not None
         session.add(
@@ -237,9 +233,9 @@ class UserService:
     async def assign_role(
         self, session: AsyncSession, user_id: str, role_code: str
     ) -> None:
-        """授予角色（对应 TS assignRole）；角色不存在抛 404，已持有则幂等跳过"""
+        """授予角色；角色不存在抛 404，已持有则幂等跳过"""
         user_pk = require_bigint(user_id, "userId")
-        if user_pk is None:  # 仅当 user_id 为 None / 空串（非法值已被 require_bigint 抛 400）
+        if user_pk is None: # 仅当 user_id 为 None / 空串（非法值已被 require_bigint 抛 400）
             raise HTTPException(status_code=400, detail="Invalid userId: 空")
         role = (
             await session.scalars(select(Role).where(Role.role_code == role_code))
@@ -267,7 +263,7 @@ class UserService:
         await session.commit()
 
     async def touch_last_login(self, session: AsyncSession, user_id: str) -> None:
-        """更新最后登录时间（对应 TS touchLastLogin；updated_at 由 onupdate 同步刷新）"""
+        """更新最后登录时间"""
         pk = require_bigint(user_id, "userId")
         await session.execute(
             update(User).where(User.id == pk).values(last_login_at=_utcnow())
@@ -277,7 +273,7 @@ class UserService:
     async def get_user_ids_by_role_code(
         self, session: AsyncSession, role_code: str
     ) -> list[str]:
-        """某角色下全部**启用且未删除**的用户 ID（对应 TS getUserIdsByRoleCode）"""
+        """某角色下全部**启用且未删除**的用户 ID"""
         stmt = (
             select(User.id)
             .join(UserRole, UserRole.user_id == User.id)
@@ -291,7 +287,7 @@ class UserService:
         return [str(pk) for pk in (await session.scalars(stmt)).all()]
 
     async def activate_email(self, session: AsyncSession, user_id: str) -> str:
-        """邮箱激活（对应 TS activateEmail）；返回提示语给 verifyEmail 接口透出
+        """邮箱激活；返回提示语给 verifyEmail 接口透出
 
         已激活幂等返回（不重复写库）；未激活则 email_verified 与 status **双双置 1**
         （注册分叉时两者一起置 0，激活对称恢复），单次提交。
@@ -307,11 +303,11 @@ class UserService:
     async def reset_password_by_email(
         self, session: AsyncSession, email: str, new_password: str
     ) -> None:
-        """按邮箱重置密码（对应 TS resetPasswordByEmail）；验证码校验在 auth service"""
+        """按邮箱重置密码；验证码校验在 auth service"""
         user = await self.find_by_email(session, email)
         if not user:
             raise HTTPException(status_code=404, detail="该邮箱未注册")
-        # 刻意优于 TS：与 register 同款字节校验，防 bcrypt 5.0 对超长密码抛 ValueError 变 500
+        # 与 register 同款字节校验，防 bcrypt 5.0 对超长密码抛 ValueError 变 500
         if len(new_password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
             raise HTTPException(status_code=400, detail="密码过长（最多 72 字节）")
         user.password = _hash_password(new_password)
@@ -324,7 +320,7 @@ class UserService:
         return value.isoformat() if value is not None else None
 
     async def to_user_vo(self, session: AsyncSession, user: User) -> dict[str, object]:
-        """实体 + 角色码 → UserVO dict（对应 TS toUserVO；键名 camelCase）"""
+        """实体 + 角色码 → UserVO dict"""
         role_codes = await self.get_role_codes(session, str(user.id))
         return {
             "id": str(user.id),
@@ -340,25 +336,23 @@ class UserService:
         }
 
     async def get_user_vo(self, session: AsyncSession, user_id: str) -> dict[str, object]:
-        """用户详情 VO（对应 TS getUserVO；不存在 → 404「用户不存在」）"""
+        """用户详情 VO"""
         user = await self.find_by_id_or_throw(session, user_id)
         return await self.to_user_vo(session, user)
 
     async def create_user(self, session: AsyncSession, dto: CreateUserRequest) -> str:
-        """管理员创建用户（对应 TS createUser）；返回新用户 ID，VO 由控制器二次查询
-
-        与 TS 一致的行为要点：
+        """管理员创建用户；返回新用户 ID，VO 由控制器二次查询的行为要点：
         - **只查重 username**，不查 email（createUser 与 register 不同，邮箱重复
           两侧都是脏数据，与 update 同款口径）；
         - emailVerified 恒 1（管理员创建视为已验证，不走邮箱激活分叉）；
         - status 取 dto.status ?? 1（?? 只对 None 生效，传 0 照样落 0）；
-        - roleCodes 未传或传空数组都回退 [ROLE_USER]（TS `?.length ? :` 语义）；
-        - 授角色**复用 replaceRoles**（TS 同款调用），角色不存在 → 404
+        - roleCodes 未传或传空数组都回退 [ROLE_USER]；
+        - 授角色**复用 replaceRoles**，角色不存在 → 404
           「角色不存在: ...」；replaceRoles 先删后插，对新用户是无害空删；
         - **非事务边界**：用户先落库提交，replaceRoles 失败时用户仍留存
-          （无角色），与 TS 两次独立 save 的行为一致，不额外包事务。
+          （无角色），，不额外包事务。
 
-        刻意优于 TS：密码 > 72 字节显式 400（TS bcryptjs 静默截断，见模块 docstring）。
+：密码 > 72 字节显式 400。
         """
         if await self.find_by_username(session, dto.username):
             raise HTTPException(status_code=409, detail="用户名已存在")
@@ -379,7 +373,7 @@ class UserService:
             )
         )
         await session.commit()
-        # TS: dto.roleCodes?.length ? dto.roleCodes : [RoleCode.USER] —— 空数组同回退
+        #[RoleCode.USER] —— 空数组同回退
         role_codes: list[str] = (
             dto.role_codes if dto.role_codes else [RoleCode.USER.value]
         )
@@ -389,9 +383,7 @@ class UserService:
     async def update_user(
         self, session: AsyncSession, user_id: str, dto: UpdateUserRequest
     ) -> dict[str, object]:
-        """管理员更新用户（对应 TS updateUser；部分更新，未传字段不改动）
-
-        与 TS 一致：email 不做唯一性查重；status 无取值约束。
+        """管理员更新用户：email 不做唯一性查重；status 无取值约束。
         """
         user = await self.find_by_id_or_throw(session, user_id)
         if dto.email is not None:
@@ -409,9 +401,9 @@ class UserService:
         return await self.to_user_vo(session, user)
 
     async def delete_user(self, session: AsyncSession, user_id: str) -> None:
-        """软删除用户（对应 TS deleteUser：deleted=true，不做物理删除）
+        """软删除用户
 
-        注意：kh_user_role 的关联行**不清**（TS 同款，两个 FK 也无 CASCADE）；
+        注意：kh_user_role 的关联行**不清**；
         邮箱/用户名随 partial unique 索引（WHERE deleted=false）自动释放。
         """
         user = await self.find_by_id_or_throw(session, user_id)
@@ -421,11 +413,11 @@ class UserService:
     async def page_users(
         self, session: AsyncSession, query: UserPageQuery
     ) -> dict[str, object]:
-        """用户分页列表（对应 TS pageUsers）
+        """用户分页列表
 
         筛选：keyword 模糊匹配 username/real_name/email（trim 后为空则不筛）；
         status / roleCode 等值过滤。排序 created_at DESC。
-        total 与 TS getManyAndCount 同口径：带相同筛选条件计数（roleCode 走 JOIN，
+        total筛选条件计数（roleCode 走 JOIN，
         一个角色编码只对应一行 kh_role，JOIN 不会放大计数）。
         """
         conditions: list[ColumnElement[bool]] = [User.deleted.is_(False)]
@@ -476,16 +468,14 @@ class UserService:
     async def get_user_role_codes(
         self, session: AsyncSession, user_id: str
     ) -> list[str]:
-        """用户角色码（对应 TS getUserRoleCodes；先 404 校验再查角色）"""
+        """用户角色码"""
         await self.find_by_id_or_throw(session, user_id)
         return await self.get_role_codes(session, user_id)
 
     async def replace_roles(
         self, session: AsyncSession, user_id: str, role_codes: list[str]
     ) -> list[str]:
-        """全量替换用户角色（对应 TS replaceRoles）
-
-        与 TS 相同的校验口径：按 roleCode 查**启用**角色，数量不等即 404
+        """全量替换用户角色的校验口径：按 roleCode 查**启用**角色，数量不等即 404
         「角色不存在: ...」——注意保真 quirk：roleCodes 含重复项时（如 ['A','A']）
         In() 只命中 1 行，长度校验同样不等，但 missing 过滤后为空 → 报
         「角色不存在: 」（冒号后空），两侧一致不收敛。
@@ -519,7 +509,7 @@ class UserService:
     async def update_profile(
         self, session: AsyncSession, user_id: str, dto: ProfileUpdateRequest
     ) -> dict[str, object]:
-        """当前用户更新自己资料（对应 TS updateProfile；不含 status）"""
+        """当前用户更新自己资料"""
         user = await self.find_by_id_or_throw(session, user_id)
         if dto.email is not None:
             user.email = str(dto.email)
@@ -535,17 +525,17 @@ class UserService:
     async def change_password(
         self, session: AsyncSession, user_id: str, old_password: str, new_password: str
     ) -> None:
-        """修改密码（对应 TS changePassword；原密码错误 → 400「原密码错误」）"""
+        """修改密码"""
         user = await self.find_by_id_or_throw(session, user_id)
         try:
             ok = bcrypt.checkpw(
                 old_password.encode("utf-8"), user.password.encode("utf-8")
             )
         except ValueError:
-            ok = False  # 原密码超 72 字节不可能匹配（同 validate_credentials 口径）
+            ok = False # 原密码超 72 字节不可能匹配（同 validate_credentials 口径）
         if not ok:
             raise HTTPException(status_code=400, detail="原密码错误")
-        # 刻意优于 TS：bcrypt 5.0 对超长密码抛 ValueError 变 500，这里显式 400
+        # bcrypt 5.0 对超长密码抛 ValueError 变 500，这里显式 400
         if len(new_password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
             raise HTTPException(status_code=400, detail="密码过长（最多 72 字节）")
         user.password = _hash_password(new_password)
@@ -554,9 +544,9 @@ class UserService:
     async def reset_password(
         self, session: AsyncSession, user_id: str, new_password: str
     ) -> None:
-        """管理员重置密码（对应 TS resetPassword；不校验原密码）"""
+        """管理员重置密码"""
         user = await self.find_by_id_or_throw(session, user_id)
-        # 刻意优于 TS：同款字节校验
+        # 同款字节校验
         if len(new_password.encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
             raise HTTPException(status_code=400, detail="密码过长（最多 72 字节）")
         user.password = _hash_password(new_password)
@@ -565,12 +555,12 @@ class UserService:
     async def get_user_statistics(
         self, session: AsyncSession, user_id: str
     ) -> dict[str, int]:
-        """用户统计（对应 TS getUserStatistics：文档数 + 浏览/点赞/评论量合计，均筛 deleted=false）
+        """用户统计
 
-        SUM 走 COALESCE(..., 0)，无文档时全 0（TS 同款）。
+        SUM 走 COALESCE(..., 0)，无文档时全 0。
         """
         pk = parse_bigint(user_id)
-        if pk is None:  # find_by_id_or_throw 先行，正常不可达
+        if pk is None: # find_by_id_or_throw 先行，正常不可达
             raise HTTPException(status_code=404, detail="用户不存在")
         await self.find_by_id_or_throw(session, user_id)
         document_count = (

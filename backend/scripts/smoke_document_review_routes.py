@@ -6,7 +6,7 @@
 - 索引投递失败由 pipeline_publisher 兜底告警，不影响断言
 
 覆盖：路由是否注册正确（尤其 reviews/tasks 是否被 /{doc_id} 吃掉）、
-状态码（NestJS @Post 默认 201）、DTO 校验（422）、业务 400 / 404、
+状态码、DTO 校验（422）、业务 400 / 404、
 审核接口的 @Roles(REVIEWER, ADMIN) 守卫（无审核角色 → 403）、
 审核人取自 JWT 而非请求体（ReviewDecision 只有 reviewComment）。
 
@@ -55,7 +55,7 @@ def show(step: str, resp: httpx.Response) -> None:
         body = resp.json()
     except Exception:
         body = resp.text
-    print(f"{step:<52} {resp.status_code}  {str(body)[:110]}")
+    print(f"{step:<52} {resp.status_code} {str(body)[:110]}")
 
 
 async def cleanup(doc_id: str | None, content_oid: ObjectId | None) -> None:
@@ -98,12 +98,12 @@ async def main() -> None:
 
             # 2) 提交审核 → 201 + status=3
             # 注意：submit / approve / reject 返回的都是「文档」而非审核任务
-            # （与 TS submitForReview / approveReview 返回 DocumentEntity 一致），
+            # 
             # 因此任务 ID 必须从 GET /{id}/reviews/current 取。
             r = await client.post(f"{BASE}/{doc_id}/reviews/submit")
             show("2) POST /{id}/reviews/submit", r)
             ok &= r.status_code == 201 and r.json()["status"] == 3
-            ok &= r.json()["id"] == doc_id  # 返回的是文档本身
+            ok &= r.json()["id"] == doc_id # 返回的是文档本身
 
             # 3) 当前待审记录（路由未被 /{doc_id} 吃掉）
             r = await client.get(f"{BASE}/{doc_id}/reviews/current")
@@ -138,8 +138,8 @@ async def main() -> None:
             ok &= r.status_code == 400
 
             # 9) 驳回带意见 → 201 + status=0
-            #    请求体只有 reviewComment（TS ReviewDecisionDto 同款），
-            #    请求体里夹带 reviewerName 会被 Pydantic 忽略（extra=ignore）。
+            # 请求体只有 reviewComment，
+            # 请求体里夹带 reviewerName 会被 Pydantic 忽略（extra=ignore）。
             r = await client.post(
                 f"{BASE}/reviews/tasks/{task_id}/reject",
                 json={"reviewComment": "需补充来源", "reviewerName": "伪造的审核人"},
@@ -152,9 +152,9 @@ async def main() -> None:
             show("10) GET /{id}/reviews/history", r)
             ok &= r.status_code == 200 and r.json()[0]["reviewResult"] == 2
             ok &= r.json()[0]["reviewerId"] == SEED_ADMIN_ID
-            ok &= r.json()[0]["reviewerName"] == "系统管理员"  # realName ?? username
+            ok &= r.json()[0]["reviewerName"] == "系统管理员" # realName ?? username
             print(
-                "   审核人来自 JWT: reviewerId =",
+                " 审核人来自 JWT: reviewerId =",
                 r.json()[0]["reviewerId"],
                 "| reviewerName =",
                 r.json()[0]["reviewerName"],
@@ -175,7 +175,7 @@ async def main() -> None:
             show("12) POST approve", r)
             ok &= r.status_code == 201 and r.json()["status"] == 1
             r = await client.get(f"{BASE}/{doc_id}/reviews/history")
-            ok &= r.json()[0]["reviewerId"] == SEED_ADMIN_ID  # 请求体的 9001 被忽略
+            ok &= r.json()[0]["reviewerId"] == SEED_ADMIN_ID # 请求体的 9001 被忽略
             ok &= r.json()[0]["reviewerName"] == "系统管理员"
 
             # 13) 重复审核 → 400
@@ -194,7 +194,7 @@ async def main() -> None:
             ok &= r.status_code == 200 and r.json() is None
 
             # 16) 无审核角色（ROLE_USER）→ 403（@Roles(REVIEWER, ADMIN) 守卫）
-            #     403 发生在业务逻辑之前：这里 task_id 已结案，若守卫漏了会返回 400 而非 403
+            # 403 发生在业务逻辑之前：这里 task_id 已结案，若守卫漏了会返回 400 而非 403
             wrong_role = bearer_headers(SEED_USER_ID, SEED_USER_USERNAME)
             r = await client.get(f"{BASE}/reviews/tasks/pending-count", headers=wrong_role)
             show("16) GET pending-count（ROLE_USER）", r)
@@ -203,7 +203,7 @@ async def main() -> None:
             r = await client.post(
                 f"{BASE}/reviews/tasks/{task_id}/approve", json={}, headers=wrong_role
             )
-            show("    POST approve（ROLE_USER）", r)
+            show(" POST approve（ROLE_USER）", r)
             ok &= r.status_code == 403
 
             # 17) ROLE_REVIEWER → 放行（列表接口返回 200）

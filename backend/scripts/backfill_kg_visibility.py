@@ -62,7 +62,7 @@ async def _node_state(doc_id: str) -> dict | None:
                 await session.run(
                     "MATCH (d:KnowledgeDocument {id: $id}) "
                     "RETURN d.isPublic AS isPublic, d.teamId AS teamId, "
-                    "       d.authorId AS authorId",
+                    " d.authorId AS authorId",
                     id=doc_id,
                 )
             ).single()
@@ -94,20 +94,20 @@ async def main(dry_run: bool) -> None:
     targets = [
         (str(e.id), bool(e.is_public), e.team_id, e.author_id) for e in entities
     ]
-    print(f"   PG 已发布文档：{len(targets)} 篇")
+    print(f" PG 已发布文档：{len(targets)} 篇")
 
     ids = [t[0] for t in targets]
     before = await _missing_count(ids) if ids else 0
-    print(f"   回填前缺可见性属性的文档节点：{before} 个")
+    print(f" 回填前缺可见性属性的文档节点：{before} 个")
 
     touched = 0
     for doc_id, is_public, team_id, author_id in targets:
         state = await _node_state(doc_id)
         if state is None:
-            print(f"   - {doc_id}: 图中无节点，跳过（未建图）")
+            print(f" - {doc_id}: 图中无节点，跳过（未建图）")
             continue
         print(
-            f"   - {doc_id}: {state} → "
+            f" - {doc_id}: {state} → "
             f"{{'isPublic': {is_public}, 'teamId': {team_id!r}, 'authorId': {author_id!r}}}"
         )
         if dry_run:
@@ -119,11 +119,11 @@ async def main(dry_run: bool) -> None:
 
     if not dry_run:
         after = await _missing_count(ids) if ids else 0
-        print(f"   回填后缺可见性属性的文档节点：{after} 个（写入 {touched} 篇）")
+        print(f" 回填后缺可见性属性的文档节点：{after} 个（写入 {touched} 篇）")
         assert after == 0, f"仍有 {after} 个节点缺可见性属性，回填未完成"
-        print("   ✅ 回填完成：所有已发布文档的图谱节点均已带 isPublic/teamId/authorId")
+        print(" ✅ 回填完成：所有已发布文档的图谱节点均已带 isPublic/teamId/authorId")
     else:
-        print("   （dry-run 未写入；去掉 --dry-run 执行回填）")
+        print(" （dry-run 未写入；去掉 --dry-run 执行回填）")
 
     await graph_build_service.close()
 

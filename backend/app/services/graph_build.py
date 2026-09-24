@@ -1,5 +1,5 @@
 """
-KG 知识图谱构建（对应 TS GraphBuildService）
+KG 知识图谱构建
 
 图模型（简化）：
     (KnowledgeDocument)-[:HAS_CHUNK]->(DocumentChunk)-[:MENTIONS]->(KnowledgeEntity)
@@ -12,7 +12,7 @@ KG 知识图谱构建（对应 TS GraphBuildService）
 4. ExtractionService 抽实体关系 → MERGE 实体 / RELATED_TO / MENTIONS
 
 Neo4j 不可用时跳过写入（不抛错阻断发布消费）；
-生命周期经 main.py lifespan 调 start()/close()（对应 TS OnModuleInit/OnModuleDestroy）。
+生命周期经 main.py lifespan 调 start()/close()。
 
 唯一性约束：
     start() 幂等创建三个约束（KnowledgeDocument.id / DocumentChunk.chunkId /
@@ -46,7 +46,7 @@ from app.services.kg_extraction import extraction_service
 
 logger = logging.getLogger("GraphBuildService")
 
-# 唯一性约束 DDL（IF NOT EXISTS 幂等，重复启动安全）
+# 唯一性约束 DDL
 CONSTRAINT_STATEMENTS: tuple[str, ...] = (
     "CREATE CONSTRAINT knowledge_document_id IF NOT EXISTS "
     "FOR (d:KnowledgeDocument) REQUIRE d.id IS UNIQUE",
@@ -61,7 +61,7 @@ WRITE_MAX_ATTEMPTS = 3
 
 
 def _now_iso() -> str:
-    """当前时间 ISO-8601 字符串（对应 TS new Date().toISOString()）"""
+    """当前时间 ISO-8601 字符串（).toISOString()）"""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -109,7 +109,7 @@ def _opt_str(value: Any) -> str | None:
     return str(value)
 
 
-# ---- 对话 RAG 用的图谱命中（对应 TS GraphChatHit 及同文件工具函数）----
+# ---- 对话 RAG 用的图谱命中----
 
 
 class GraphChatEntity(TypedDict):
@@ -133,7 +133,7 @@ class GraphChatDocument(TypedDict):
 
 
 class GraphChatHit(TypedDict):
-    """对话 RAG 用的图谱命中：实体 + 关系类型 + 来源文档（对应 TS GraphChatHit）"""
+    """对话 RAG 用的图谱命中：实体 + 关系类型 + 来源文档"""
 
     query: str
     entities: list[GraphChatEntity]
@@ -156,7 +156,7 @@ def normalize_entity_name(name: str) -> str:
 
 
 def split_graph_keywords(keyword: str | list[str]) -> list[str]:
-    """把关键词拆成短名（对应 TS splitGraphKeywords）。
+    """把关键词拆成短名。
 
     模型常把「发票 报销」写成一项；图匹配要拆成短名，否则对不上节点。
     按空白 / `/` 拆分，去空、去重（大小写不敏感）；并去书名号（与实体名归一乎）。
@@ -178,7 +178,7 @@ def split_graph_keywords(keyword: str | list[str]) -> list[str]:
 
 
 def format_graph_context(hit: GraphChatHit) -> str:
-    """给模型看的图谱上下文：只写关系与来源，不当制度原文（对应 TS formatGraphContext）"""
+    """给模型看的图谱上下文：只写关系与来源，不当制度原文"""
     if not hit["entities"] and not hit["relations"]:
         return ""
     lines: list[str] = []
@@ -188,7 +188,7 @@ def format_graph_context(hit: GraphChatHit) -> str:
             line = f"- {rel['source']} → {rel['target']}（{rel['relation']}）"
             evidence = rel.get("evidence")
             if evidence:
-                line += f"\n  出处：{evidence}"
+                line += f"\n 出处：{evidence}"
             lines.append(line)
     else:
         lines.append("实体：" + "、".join(entity["name"] for entity in hit["entities"]))
@@ -200,7 +200,7 @@ def format_graph_context(hit: GraphChatHit) -> str:
 
 
 def format_graph_system_text(hit: GraphChatHit) -> str:
-    """带免责声明的图谱上下文（对应 TS formatGraphSystemText）"""
+    """带免责声明的图谱上下文"""
     body = format_graph_context(hit)
     if not body:
         return ""
@@ -211,7 +211,7 @@ def format_graph_system_text(hit: GraphChatHit) -> str:
 
 
 def merge_graph_hits(base: GraphChatHit, extra: GraphChatHit) -> GraphChatHit:
-    """合并两次图谱命中，按实体名 / 关系三元组 / 文档 id 去重（对应 TS mergeGraphHits）"""
+    """合并两次图谱命中，按实体名 / 关系三元组 / 文档 id 去重"""
     names = {entity["name"] for entity in base["entities"]}
     entities = list(base["entities"])
     for entity in extra["entities"]:
@@ -282,7 +282,7 @@ class GraphBuildService:
         await self._ensure_constraints()
 
     async def close(self) -> None:
-        """关闭驱动（对应 TS onModuleDestroy）"""
+        """关闭驱动"""
         if self._driver is not None:
             await self._driver.close()
             self._driver = None
@@ -306,7 +306,7 @@ class GraphBuildService:
                     # consume() 不可省：不消费则服务端报错不会被观察到
                     await (await session.run(statement)).consume()
             logger.info(
-                "Neo4j 唯一性约束已就绪：count=%d", len(CONSTRAINT_STATEMENTS)
+                "Neo4j 唯一性约束已就绪：count=%d", len
             )
         except Exception as err:
             logger.warning(
@@ -374,10 +374,10 @@ class GraphBuildService:
                 categoryId=doc.category_id,
                 authorId=_opt_str(doc.author_id),
                 teamId=_opt_str(doc.team_id),
-                # TS `isPublic: doc.isPublic ?? false`
+
                 isPublic=bool(doc.is_public),
                 status=doc.status,
-                # TS `tags: doc.tags ?? ''`（overview 的文档→标签边按逗号拆）
+# ''`（overview 的文档→标签边按逗号拆）
                 tags=doc.tags or "",
                 now=_now_iso(),
             )
@@ -466,7 +466,7 @@ class GraphBuildService:
         team_id: str | int | None,
         author_id: str | int | None,
     ) -> None:
-        """已发布文档只改公开 / 团队 / 作者时，就地刷文档节点属性（对应 TS updateVisibility）
+        """已发布文档只改公开 / 团队 / 作者时，就地刷文档节点属性
 
         与 es_index / search_index 的同名方法同口径（签名一致，document.py 三处并列调用）：
         免去重新抽实体建图，只改可见性字段。
@@ -475,7 +475,7 @@ class GraphBuildService:
         文档由公开转私有后若不同步，未授权用户在 /graph/nodes、/graph/search、
         /graph/edges、/graph/overview 仍能看到该文档及其提及的实体。
 
-        Neo4j 不可用或写入失败只告警，不抛错（对齐 TS，不阻断文档保存）。
+        Neo4j 不可用或写入失败只告警，不抛错。
         """
         if self._driver is None:
             logger.warning(
@@ -497,7 +497,7 @@ class GraphBuildService:
                     authorId=_opt_str(author_id),
                     now=_now_iso(),
                 )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning(
                 "图谱可见性更新失败：documentId=%s, %s", document_id, err
             )
@@ -553,7 +553,7 @@ class GraphBuildService:
                 continue
             aliases = list(entity.aliases)
             if entity.name != name and entity.name not in aliases:
-                aliases.append(entity.name)  # 原始写法（带《）进别名
+                aliases.append(entity.name) # 原始写法（带《）进别名
             await self._run_write(session,
                 """
                 MERGE (e:KnowledgeEntity {name: $name})
@@ -615,10 +615,10 @@ class GraphBuildService:
         limit: int = 200,
         scope: DocumentAccessScope | None = None,
     ) -> list[dict[str, Any]]:
-        """查询知识实体节点（对应 TS listNodes）。Neo4j 不可用时返回 []。
+        """查询知识实体节点。Neo4j 不可用时返回 []。
 
         可见性：实体只要被「当前用户可见的某篇文档」的某个块提及过即可见；
-        scope=None 表示不过滤（对齐 TS `scope?`，见 neo4j_access_params 的注释），
+        scope=None 表示不过滤，
         API 端点必须传 access_from_user(user)。
         """
         if self._driver is None:
@@ -663,11 +663,11 @@ class GraphBuildService:
     async def list_edges(
         self, limit: int = 500, scope: DocumentAccessScope | None = None
     ) -> list[dict[str, Any]]:
-        """查询实体间 RELATED_TO 边（对应 TS listEdges）。Neo4j 不可用时返回 []。
+        """查询实体间 RELATED_TO 边。Neo4j 不可用时返回 []。
 
         可见性：边的两端实体各自都要「被当前用户可见的某篇文档提及」；
         只遮挡一端会让画布出现指向不可见实体的悬空边。
-        scope=None 表示不过滤（对齐 TS `scope?`）。
+        scope=None 表示不过滤。
         """
         if self._driver is None:
             logger.warning("跳过图谱边查询（Neo4j 不可用）")
@@ -717,9 +717,7 @@ class GraphBuildService:
         limit: int = 50,
         scope: DocumentAccessScope | None = None,
     ) -> list[dict[str, Any]]:
-        """图谱关键词检索：匹配实体名/描述、文档标题/摘要、块标题/正文。
-
-        对应 TS searchGraph。Neo4j 不可用或关键词为空时返回 []。
+        """图谱关键词检索：匹配实体名/描述、文档标题/摘要、块标题/正文。。Neo4j 不可用或关键词为空时返回 []。
 
         可见性：按命中节点的 label 分别回溯所属文档 —— 文档节点自身判定；块节点回溯
         HAS_CHUNK 的文档；实体节点回溯「提及它的块所属文档」。scope=None 表示不过滤。
@@ -803,7 +801,7 @@ class GraphBuildService:
         limit: int = 8,
         scope: DocumentAccessScope | None = None,
     ) -> GraphChatHit:
-        """对话 RAG 图谱检索（对应 TS retrieveForChat）。
+        """对话 RAG 图谱检索。
 
         按短实体名找可见实体（相等 / 前缀 / 后缀 + 别名，**不用 CONTAINS**，避免「发票」
         命中整篇制度标题），再查这些实体之间的关系与来源文档。关系、文档用同一 session
@@ -986,7 +984,7 @@ class GraphBuildService:
         doc_limit: int | None = None,
         scope: DocumentAccessScope | None = None,
     ) -> dict[str, Any]:
-        """全景图：文档 + 被提及实体 + 标签 + 统计（对应 TS getOverview）。
+        """全景图：文档 + 被提及实体 + 标签 + 统计。
 
         不含 chunk（块太碎，不适合画布）。文档→实体为「提及」，
         实体→实体为 RELATED_TO 上的 relation，文档→标签为「标注」。
@@ -995,10 +993,10 @@ class GraphBuildService:
         可见性：**全部口径都按「当前用户可见的文档」计算** —— 文档数 / 实体数 /
         RELATED_TO 边数 / 提及次数、type 分布、Top 实体、最近文档、主查询、关键词
         补充查询，逐条 Cypher 都带 neo4j_document_access_where。scope=None 表示
-        不过滤（对齐 TS `scope?`），API 端点必须传 access_from_user(user)。
+        不过滤，API 端点必须传 access_from_user(user)。
 
         刻意差异：参数名 from_time/to_time —— from 是 Python 保留字；
-        HTTP 查询参数仍叫 from/to（API 层用 alias 对齐 TS）。
+        HTTP 查询参数仍叫 from/to。
         """
         empty: dict[str, Any] = {
             "nodes": [],
@@ -1025,7 +1023,7 @@ class GraphBuildService:
         etype = (entity_type or "").strip() or None
         date_from = (from_time or "").strip() or None
         date_to = (to_time or "").strip() or None
-        # 默认 24，夹取 1..80（对齐 TS Math.min(Math.max(params.docLimit ?? 24, 1), 80)）
+        # 默认 24，夹取 1..80（), 80)）
         limit = min(max(doc_limit if doc_limit is not None else 24, 1), 80)
         # 可见性参数（$unrestricted / $accessUserId / $accessTeamIds）
         vis = neo4j_access_params(scope)
@@ -1234,7 +1232,7 @@ class GraphBuildService:
                         }
 
                 def split_tags(raw: Any) -> list[str]:
-                    """逗号分隔标签串拆分（对齐 TS splitTags 的 /[,，]/）"""
+                    """逗号分隔标签串拆分"""
                     return [
                         t.strip() for t in str(raw or "").replace("，", ",").split(",")
                         if t.strip()
@@ -1323,7 +1321,7 @@ class GraphBuildService:
 
 
 def _to_number(value: Any, default: float) -> float:
-    """Neo4j 数值字段统一转 float（对齐 TS toNumber）。
+    """Neo4j 数值字段统一转 float。
 
     None/非数字回退 default；int/float 直接转 float。
     """

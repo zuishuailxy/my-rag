@@ -1,7 +1,7 @@
 """注册邮箱验证分叉 + 密码重置 冒烟验证（E2E）
 
-覆盖 auth.service.ts 的 register 分叉 / verifyEmail / sendResetCode /
-resetPasswordByEmail 全链路（对应 TS 行为逐条断言）：
+覆盖 的 register 分叉 / verifyEmail / sendResetCode /
+resetPasswordByEmail 全链路：
 
 - 注册分叉：REQUIRE_EMAIL_VERIFICATION=true 且带邮箱 → 建未激活用户
   （status=0 / email_verified=0）+ 发激活邮件（猴子补丁捕获，不真发 SMTP）；
@@ -10,9 +10,9 @@ resetPasswordByEmail 全链路（对应 TS 行为逐条断言）：
 - 密码重置：发送（冷却拦截）→ 错码 400 → 正确码重置 → 新旧密码登录验证
 - 邮箱查重：409「邮箱已被使用」
 
-⚠️ TS 保真点：未激活用户登录报「账户已禁用」而非「账户未激活」——
-TS register 把未激活用户 status 也置 0，validateCredentials 的 status 检查
-先于 email_verified 检查命中。本脚本按 TS 顺序锁定该行为。
+：未激活用户登录报「账户已禁用」而非「账户未激活」——
+，validateCredentials 的 status 检查
+先于 email_verified 检查命中。。
 
 前置条件：docker 的 PostgreSQL + Redis 运行中。脚本自建测试用户并在结束时
 硬删清理（含 user_role），Redis 键按前缀清理，不污染种子数据。
@@ -60,7 +60,7 @@ def _part_of(message: EmailMessage, content_type: str) -> str:
 
 
 def ok(step: str) -> None:
-    print(f"  ✅ {step}")
+    print(f" ✅ {step}")
 
 
 async def _expect_http(step: str, coro, status: int, detail: str) -> None:
@@ -81,7 +81,7 @@ async def _register(
     dto = RegisterRequest(
         username=username,
         password="oldpass123",
-        email=email,  # type: ignore[arg-type]
+        email=email, # type: ignore[arg-type]
         real_name="冒烟测试",
     )
     result = await auth_service.register(session, dto)
@@ -107,7 +107,7 @@ async def _cleanup() -> None:
         keys.extend([k async for k in client.scan_iter(match=pattern)])
     if keys:
         await redis_service.delete(*keys)
-        print(f"  🧹 已清理 Redis 键 {len(keys)} 个")
+        print(f" 🧹 已清理 Redis 键 {len(keys)} 个")
 
 
 async def main() -> bool:
@@ -118,7 +118,7 @@ async def main() -> bool:
 
     orig_send = email_service._send
     orig_require = settings.REQUIRE_EMAIL_VERIFICATION
-    email_service._send = _capture  # type: ignore[method-assign]
+    email_service._send = _capture # type: ignore[method-assign]
     try:
         # ============ 一、注册分叉（REQUIRE_EMAIL_VERIFICATION=true） ============
         settings.REQUIRE_EMAIL_VERIFICATION = True
@@ -142,7 +142,7 @@ async def main() -> bool:
             assert await redis_service.get(f"{USER_PREFIX}{user.id}") == token
             ok("激活邮件：链接含 64 位 hex token，Redis 双 key 落库")
 
-            # 3) 未激活登录 → 401（TS 保真：status 检查先命中，报「账户已禁用」）
+            # 3) 未激活登录 → 401
             await _expect_http(
                 "未激活登录",
                 auth_service.login(
@@ -151,7 +151,7 @@ async def main() -> bool:
                 401,
                 "账户已禁用",
             )
-            ok("未激活登录被拦（401 账户已禁用——TS 检查顺序保真）")
+            ok("未激活登录被拦")
 
             # 4) 无效 token → 400
             await _expect_http(
@@ -267,7 +267,7 @@ async def main() -> bool:
             assert login2.user_info.username == "smoke-flow-free"
             ok("密码重置生效：旧密码 401、新密码登录成功、验证码已删")
     finally:
-        email_service._send = orig_send  # type: ignore[method-assign]
+        email_service._send = orig_send # type: ignore[method-assign]
         settings.REQUIRE_EMAIL_VERIFICATION = orig_require
         await _cleanup()
         await redis_service.close()

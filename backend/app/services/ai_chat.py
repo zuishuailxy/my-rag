@@ -1,5 +1,5 @@
 """
-RAG 对话服务（对应 TS AiChatService：混合检索 → LLM 作答 → 溯源）
+RAG 对话服务
 
 链路：kh_chunk 混合检索（关键词 + 向量 + RRF + rerank）→ DeepSeek 生成回答 →
 抽取回答中的 [n] 编号，返回实际引用的资料摘录（ChatSource，可追溯）。
@@ -32,11 +32,11 @@ from app.services.retrieval import hybrid_retrieval_service
 
 logger = logging.getLogger("AiChatService")
 
-# 溯源摘录长度（对齐 TS EXCERPT_LEN）
+# 溯源摘录长度
 _EXCERPT_LEN = 200
-# 上下文里每条资料正文截断（对齐 TS slice(0, 800)）
+# 上下文里每条资料正文截断（)）
 _CONTEXT_SNIPPET_LEN = 800
-# 匹配回答中引用编号 [n]（对齐 TS CITATION_RE）
+# 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 _TEMPERATURE = 0.2
 
@@ -53,7 +53,7 @@ class AiChatService:
     """RAG 对话：混合检索召回 → DeepSeek 作答 → 抽取溯源"""
 
     def __init__(self) -> None:
-        # 未配置 API Key 时保持 None，chat() 里抛 503（对齐 TS 构造函数早退 + 503）
+        # 未配置 API Key 时保持 None，chat() 里抛 503
         self._llm: ChatOpenAI | None = _build_llm()
 
     async def chat(
@@ -67,14 +67,14 @@ class AiChatService:
         """对用户问题作答，返回 { sessionId, answer, sources }
 
         有 user 时问答落库（append_turn）：无 sessionId 新建会话，
-        标题仍为默认名时用首问覆盖（对齐 TS chat）。
+        标题仍为默认名时用首问覆盖。
         """
         trimmed = content.strip()
         if not trimmed:
-            # 空问题不落库，sessionId 原样透传（对齐 TS 早退分支）
+            # 空问题不落库，sessionId 原样透传
             return {"sessionId": session_id, "answer": "请输入问题。", "sources": []}
 
-        # 检索 + 切题评估（不切题 → 改写一次再查，对应 TS retrieveUntilRelevant）：
+        # 检索 + 切题评估：
         # 传 user 计算可见性范围；只有切题的 hits 会进上下文，无关资料不喂给 LLM。
         outcome = await retrieve_until_relevant(
             question=trimmed,
@@ -133,7 +133,7 @@ class AiChatService:
             len(sources),
             len(answer),
         )
-        # 问答落库（对齐 TS：user 存在时 append_turn，返回会话 id）
+        # 问答落库
         sess = (
             await chat_session_service.append_turn(
                 db, user.user_id, session_id, trimmed, answer, sources
@@ -172,7 +172,7 @@ class AiChatService:
 
     @staticmethod
     def excerpt(content: str) -> str:
-        """摘要：压缩空白 + 超长截断（对齐 TS excerpt）"""
+        """摘要：压缩空白 + 超长截断"""
         text = re.sub(r"\s+", " ", content).strip()
         if len(text) <= _EXCERPT_LEN:
             return text

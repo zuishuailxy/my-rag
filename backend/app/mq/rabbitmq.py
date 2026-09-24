@@ -1,5 +1,5 @@
 """
-RabbitMQ 服务（对应 TS rabbitmq.service，amqplib/amqp-connection-manager → aio-pika）
+RabbitMQ 服务
 
 - aio-pika robust 连接：断线自动重连，重连后自动重建拓扑（交换机/队列/绑定）与消费者
 - publish：JSON payload，persistent 消息，失败/不可用时返回 False 并记日志

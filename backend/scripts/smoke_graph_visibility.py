@@ -6,13 +6,13 @@ update_visibility（改可见性立即生效）。
 
 临时子图（直接用 driver 写，刻意不调 LLM / 不走 MQ）：
 
-    DOC_PUB    isPublic=True,  authorId=admin,   teamId=None        → ENT_PUB
-    DOC_OWN    isPublic=False, authorId=user003, teamId=None        → ENT_OWN
-    DOC_TEAM   isPublic=False, authorId=admin,   teamId=成员团队     → ENT_TEAM
-    DOC_OTHER  isPublic=False, authorId=admin,   teamId=非成员团队   → ENT_OTHER
+    DOC_PUB isPublic=True, authorId=admin, teamId=None → ENT_PUB
+    DOC_OWN isPublic=False, authorId=user003, teamId=None → ENT_OWN
+    DOC_TEAM isPublic=False, authorId=admin, teamId=成员团队 → ENT_TEAM
+    DOC_OTHER isPublic=False, authorId=admin, teamId=非成员团队 → ENT_OTHER
 
-    边：ENT_PUB -[RELATED_TO]-> ENT_TEAM       （user 视角两端可见 → 出边）
-        ENT_PUB -[RELATED_TO]-> ENT_OTHER      （user 视角一端不可见 → 不出边）
+    边：ENT_PUB -[RELATED_TO]-> ENT_TEAM （user 视角两端可见 → 出边）
+        ENT_PUB -[RELATED_TO]-> ENT_OTHER （user 视角一端不可见 → 不出边）
 
 断言：
   1. 服务层 list_nodes：user 视角恰含 3 个实体、不含 ENT_OTHER；admin 视角 4 个
@@ -108,8 +108,8 @@ async def _seed(member_team: str, other_team: str) -> None:
             await session.run(
                 "MERGE (d:KnowledgeDocument {id: $id}) "
                 "SET d.title = $title, d.summary = $summary, d.tags = '', "
-                "    d.authorId = $authorId, d.teamId = $teamId, d.isPublic = $isPublic, "
-                "    d.updatedAt = $now, d.createdAt = $now",
+                " d.authorId = $authorId, d.teamId = $teamId, d.isPublic = $isPublic, "
+                " d.updatedAt = $now, d.createdAt = $now",
                 id=doc_id,
                 title=f"{_TAG} 文档 {doc_id}",
                 summary=f"{_TAG} 摘要",
@@ -244,7 +244,7 @@ async def main() -> None:
     assert others, "库里只有一个团队，无法构造「非成员团队」用例"
     other_team = others[0]
     print(
-        f"   user(003) 团队={my_team_ids}，成员团队={member_team}，非成员团队={other_team}"
+        f" user(003) 团队={my_team_ids}，成员团队={member_team}，非成员团队={other_team}"
     )
 
     # 三种视角：普通用户（受限于三条可见路径）/ 管理员（不受限）/ 匿名（仅公开）
@@ -258,7 +258,7 @@ async def main() -> None:
 
     try:
         await _seed(member_team, other_team)
-        print(f"   准备：临时子图 docs={len(ALL_DOCS) - 1} chunks=4")
+        print(f" 准备：临时子图 docs={len(ALL_DOCS) - 1} chunks=4")
 
         # 1) 写入侧属性落盘（teamId / isPublic 必须实际写进节点）
         driver = graph_build_service._driver
@@ -268,7 +268,7 @@ async def main() -> None:
                     await session.run(
                         "MATCH (d:KnowledgeDocument {id: $id}) "
                         "RETURN d.teamId AS teamId, d.isPublic AS isPublic, "
-                        "       d.authorId AS authorId",
+                        " d.authorId AS authorId",
                         id=DOC_TEAM,
                     )
                 ).single()
@@ -440,8 +440,8 @@ async def main() -> None:
             check("未登录 401", r.status_code == 401, f"期望 401，实际 {r.status_code}")
 
         # 7) update_visibility：改到非成员团队后，user 视角立即不可见（admin 不受影响）
-        #    必须放在 HTTP 之后：一旦改走，user 视角连 (ENT_PUB, ENT_TEAM) 这条
-        #    双端可见边也会随之消失，前面的边断言会失去意义。
+        # 必须放在 HTTP 之后：一旦改走，user 视角连 (ENT_PUB, ENT_TEAM) 这条
+        # 双端可见边也会随之消失，前面的边断言会失去意义。
         await graph_build_service.update_visibility(
             DOC_TEAM, False, other_team, SEED_ADMIN_ID
         )
@@ -459,9 +459,9 @@ async def main() -> None:
         )
 
         # 8) 写入侧 build_for_document：文档节点必须落 authorId / teamId / isPublic / tags
-        #    抽取器换成桩（避免冒烟调 LLM），分块 / MERGE 文档节点 / HAS_CHUNK 走真实代码。
-        #    作者刻意选 admin（非 user003）且团队选非成员团队 → user 三条路径都不命中，
-        #    以此证明「写入侧落盘的 teamId 真的被查询侧用于过滤」。
+        # 抽取器换成桩（避免冒烟调 LLM），分块 / MERGE 文档节点 / HAS_CHUNK 走真实代码。
+        # 作者刻意选 admin（非 user003）且团队选非成员团队 → user 三条路径都不命中，
+        # 以此证明「写入侧落盘的 teamId 真的被查询侧用于过滤」。
         build_doc = PipelineDocument(
             id=DOC_BUILD,
             title=f"{BUILD_KW} 写入链路",
@@ -477,7 +477,7 @@ async def main() -> None:
         async def _stub_extract(*args: Any, **kwargs: Any) -> ExtractionResult:
             return ExtractionResult()
 
-        extraction_service.extract = _stub_extract  # type: ignore[method-assign]
+        extraction_service.extract = _stub_extract # type: ignore[method-assign]
         try:
             await graph_build_service.build_for_document(build_doc)
         finally:
@@ -489,7 +489,7 @@ async def main() -> None:
                     await session.run(
                         "MATCH (d:KnowledgeDocument {id: $id}) "
                         "RETURN d.teamId AS teamId, d.isPublic AS isPublic, "
-                        "       d.authorId AS authorId, d.tags AS tags",
+                        " d.authorId AS authorId, d.tags AS tags",
                         id=DOC_BUILD,
                     )
                 ).single()
@@ -544,17 +544,17 @@ async def main() -> None:
 
         print("\n知识图谱可见性 E2E 冒烟全部通过 ✅")
         for line in results:
-            print("   " + line)
+            print(" " + line)
     finally:
         await _clean()
         residue = await _residue()
-        print(f"   残留检查：{residue}")
+        print(f" 残留检查：{residue}")
         check(
             "零残留",
             residue == {"docs": 0, "chunks": 0, "ents": 0},
             f"{residue}",
         )
-        print("   ✅ 零残留: docs=0, chunks=0, ents=0")
+        print(" ✅ 零残留: docs=0, chunks=0, ents=0")
         await graph_build_service.close()
 
 
@@ -565,13 +565,13 @@ async def run() -> None:
     except Exception:
         print("冒烟测试失败", file=sys.stderr)
         for line in results:
-            print("   " + line, file=sys.stderr)
+            print(" " + line, file=sys.stderr)
         raise
     finally:
         try:
             await _clean()
             await graph_build_service.close()
-        except Exception:  # noqa: BLE001 —— 收尾失败不覆盖原始异常
+        except Exception: # noqa: BLE001 —— 收尾失败不覆盖原始异常
             pass
 
 

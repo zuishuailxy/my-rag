@@ -1,14 +1,13 @@
-"""细粒度权限守卫依赖（对应 TS @RequirePermission + PermissionsGuard）
+"""细粒度权限守卫依赖
 
-TS 用 SetMetadata(PERMISSIONS_KEY, codes) + PermissionsGuard 读取并放行：用户拥有
+(PERMISSIONS_KEY, codes) + PermissionsGuard 读取并放行：用户拥有
 codes 中任一 permission_code 即通过。ADMIN 角色由 getUserPermissionCodes 自动追加
-ADMIN_OPERATION_PERMISSIONS，因此**此处无需单独 blanket bypass 管理员**（与 TS 行为一致：
-管理员仅自动获得列表内的操作权限码，而非任意权限码）。
+ADMIN_OPERATION_PERMISSIONS，因此**此处无需单独 blanket bypass 管理员**。
 
 AuthRoute 已在进入路由前完成登录校验并把当前用户写入 request.state.user（含 roles），
 本依赖直接复用，不再重复验签。
 
-用法（与 @roles(ADMIN) 组合，等价 TS 类级 @Roles(ADMIN) + 方法级 @RequirePermission）：
+用法（与 @roles(ADMIN) 组合) + 方法级 @RequirePermission）：
     @router.get("/list", dependencies=[Depends(require_permission("system:permission"))])
     @roles(RoleCode.ADMIN)
 """

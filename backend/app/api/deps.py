@@ -1,5 +1,5 @@
 """
-当前登录用户依赖（对应 TS @CurrentUser()）
+当前登录用户依赖（)）
 
 真正的拦截在 app/api/auth_route.py 的 AuthRoute（等价 JwtAuthGuard + RolesGuard）：
 那里完成验签、查库、角色校验，并把结果写入 request.state.user。
@@ -21,7 +21,7 @@ __all__ = ["get_current_user"]
 
 
 async def get_current_user(request: Request) -> AuthUser:
-    """当前登录用户（等价 NestJS @CurrentUser()）
+    """当前登录用户（)）
 
     用于需要 userId 的路由（如 `GET /auth/me`）。路由必须挂在 AuthRoute 上，
     否则守卫不会执行，这里会回退为自行解析。

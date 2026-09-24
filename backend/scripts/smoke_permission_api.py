@@ -1,4 +1,4 @@
-"""权限模块管理端 E2E 冒烟（对应 TS PermissionController / PermissionService）
+"""权限模块管理端 E2E 冒烟
 
 覆盖 PermissionController 已接线端点（list / tree / page / children / :id / POST / PUT / DELETE）：
   401 未登录 → 403 普通用户 → list 非空 → tree 含嵌套 → page 分页 →

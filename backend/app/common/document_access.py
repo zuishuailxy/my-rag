@@ -1,5 +1,5 @@
 """
-文档 / 知识块可见性判定（对应 TS src/document/document-access.ts）
+文档 / 知识块可见性判定
 
 可见性模型（三条并列，命中任一即可读）：
   1. 公开（is_public = true）
@@ -22,14 +22,14 @@ ADMIN / REVIEWER 视为不受限（unrestricted），不加任何过滤。
   - kh_chunk（块级，snake_case）：CHUNK_VISIBILITY_FIELDS —— services/search.py 关键词通道
   - kh_document（文档级，camelCase）：DOC_VISIBILITY_FIELDS —— services/search_index.py 全文检索
 
-Neo4j 侧字段名与 TS 一致（文档节点属性是 camelCase：authorId / isPublic / teamId），
+Neo4j 侧字段名（文档节点属性是 camelCase：authorId / isPublic / teamId），
 由 neo4j_document_access_where 内的字符串字面量固定，不走 ES 那套常量表。
 
-刻意差异（相对 TS）：
-  - 本项目向量在 PG doc_chunk（TS 在 ES dense_vector），故向量通道的可见性用
+刻意差异：
+  - 本项目向量在 PG doc_chunk，故向量通道的可见性用
     JOIN kh_document 在 SQL 侧过滤，见 services/search.py 的 _vector_recall；
     本模块负责 ES 侧的 filter（kh_chunk 关键词通道 + kh_document 全文检索）。
-  - KG 侧的可见性（TS neo4jAccessParams / neo4jDocumentAccessWhere）已补齐：
+  - KG 侧的可见性已补齐：
     写入侧文档节点落 authorId / teamId / isPublic（services/graph_build.py），
     查询侧四个方法逐条 Cypher 都带 neo4j_document_access_where，本模块提供两个纯函数。
 """
@@ -72,7 +72,7 @@ class DocumentAccessScope:
 
 
 def access_from_user(user: AuthUser) -> DocumentAccessScope:
-    """AuthUser → DocumentAccessScope（对应 TS accessFromUser）
+    """AuthUser → DocumentAccessScope
 
     角色码取 ADMIN / REVIEWER 之一即不受限。team_ids 由鉴权层在构建 AuthUser 时
     查好注入（见 services/user.py build_auth_user），此处只做透传，不查库。
@@ -86,7 +86,7 @@ def access_from_user(user: AuthUser) -> DocumentAccessScope:
 
 
 def empty_scope() -> DocumentAccessScope:
-    """无登录用户时的兜底 scope（对应 TS `{ unrestricted: false, userId: '', teamIds: [] }`）
+    """无登录用户时的兜底 scope
 
     语义是「只能看到公开内容」：user_id 空字符串匹配不到任何作者，
     team_ids 为空表示没有团队可见范围。
@@ -98,10 +98,10 @@ def can_read_document(
     doc: object,
     scope: DocumentAccessScope,
 ) -> bool:
-    """单篇文档是否可读（对应 TS canReadDocument）
+    """单篇文档是否可读
 
     入参 doc 需具备 author_id / team_id / is_public / status 四个属性
-    （kh_document 实体或等价的 dict-like 快照）。判定顺序与 TS 一致：
+    （kh_document 实体或等价的 dict-like 快照）。判定顺序：
     不受限 → 作者本人 → 未发布一律不可读 → 公开 → 团队。
     """
     if scope.unrestricted:
@@ -119,17 +119,17 @@ def can_read_document(
 
 
 def can_write_document(doc: object, user: AuthUser) -> bool:
-    """单篇文档是否可写（对应 TS canWriteDocument）
+    """单篇文档是否可写
 
     **只有 ADMIN 或作者本人**可写 —— 这是与读侧（can_read_document）的关键区别：
     读侧 ADMIN / REVIEWER 都不受限，写侧 REVIEWER **不算**，因为审核员通过审核接口
     （approve / reject）处置他人文档，不需要、也不应该获得通用改写权。
 
-    入参是 AuthUser（与 TS `canWriteDocument(doc, user: AuthUser)` 同签名），
+    入参是 AuthUser（(doc, user: AuthUser)` 同签名），
     不是 DocumentAccessScope —— 此处要判的是「是不是 ADMIN」，而 scope 只有
     `unrestricted`（ADMIN 与 REVIEWER 合并后的标志位），分辨不出 ADMIN。
 
-    判定顺序与 TS 一致：ADMIN → 作者本人（authorId 真值判断 + 字符串比较）。
+    判定顺序：ADMIN → 作者本人（authorId 真值判断 + 字符串比较）。
     """
     if RoleCode.ADMIN in (user.roles or []):
         return True
@@ -140,16 +140,16 @@ def can_write_document(doc: object, user: AuthUser) -> bool:
     return str(author_id) == user.user_id
 
 
-# kh_chunk 的可见性字段名（snake_case；TS ES_CHUNK_VISIBILITY_FIELDS）
+# kh_chunk 的可见性字段名
 CHUNK_VISIBILITY_FIELDS: dict[str, str] = {
     "is_public": "is_public",
     "author_id": "author_id",
     "team_id": "team_id",
 }
 
-# kh_document 的可见性字段名（camelCase；TS ES_DOC_VISIBILITY_FIELDS）
+# kh_document 的可见性字段名
 #
-# 与 kh_chunk 的区别：文档级索引整篇一条记录，字段名沿用 TS
+# 与 kh_chunk 的区别：文档级索引整篇一条记录，
 # DocumentPipelinePublisher.buildSearchIndexData 的 camelCase 风格
 # （见 services/search_index.py 的 DOCUMENT_MAPPINGS），故这里 value 是 camelCase。
 # dict 的 key 保持 snake_case 语义名，便于 es_visibility_filter 两种索引共用同一实现。
@@ -164,7 +164,7 @@ def es_visibility_filter(
     scope: DocumentAccessScope,
     fields: dict[str, str],
 ) -> dict | None:
-    """Elasticsearch 可见性 filter（只筛不打分，对应 TS esVisibilityFilter）
+    """Elasticsearch 可见性 filter
 
     返回 bool.should + minimum_should_match=1 的子句；不受限时返回 None，
     调用方据此不加过滤。不判断 status —— 假定未发布文档不会进索引。
@@ -185,7 +185,7 @@ def wrap_es_query(
     query: dict,
     visibility_filter: dict | None,
 ) -> dict:
-    """相关性查询放 must、可见性放 filter（对应 TS wrapEsQuery）
+    """相关性查询放 must、可见性放 filter
 
     可见性条件不参与打分，避免权限过滤影响 BM25 排序；filter 为 None 时原样返回。
     """
@@ -198,15 +198,15 @@ def wrap_es_query(
 
 
 def neo4j_access_params(scope: DocumentAccessScope | None) -> dict[str, Any]:
-    """Neo4j 查询参数（对应 TS neo4jAccessParams）
+    """Neo4j 查询参数
 
-    返回 Cypher 里要用的三个参数（名字与 TS 完全一致，Cypher 片段里直接引用）：
+    返回 Cypher 里要用的三个参数：
       - $unrestricted：True 时可见性条件短路（管理员 / 审核员）
       - $accessUserId：当前用户 ID（空串匹配不到任何 authorId）
       - $accessTeamIds：所在团队 ID 列表（空列表时 IN 恒不命中）
 
     ⚠️ scope 为 None 时 unrestricted=True —— 即「**不传 scope = 不过滤**」，
-    这是刻意对齐 TS 的 `unrestricted: !scope || scope.unrestricted`，
+    这是刻意，
     与 es_visibility_filter / search_documents(scope=None) 的 None 语义保持一致。
     因此生产链路（api/v1/graph.py 四个端点）**必须**传 access_from_user(user)，
     否则等于放开全部可见性；脚本 / 内部调用若确需全库视图才可省略。
@@ -221,7 +221,7 @@ def neo4j_access_params(scope: DocumentAccessScope | None) -> dict[str, Any]:
 
 
 def neo4j_document_access_where(alias: str = "d") -> str:
-    """Cypher 片段：别名 alias 的文档节点是否对当前用户可见（对应 TS neo4jDocumentAccessWhere）
+    """Cypher 片段：别名 alias 的文档节点是否对当前用户可见
 
     四个条件与 ES 侧 es_visibility_filter 同口径（作者 / 公开 / 团队 + 不受限短路）：
         ($unrestricted OR {alias}.authorId = $accessUserId
@@ -229,7 +229,7 @@ def neo4j_document_access_where(alias: str = "d") -> str:
 
     调用方必须把 neo4j_access_params(scope) 一并作为查询参数传入，否则 $unrestricted
     等占位符无值会直接报错（Neo4j 缺参会抛，不会静默放行）。
-    文档节点属性名沿用 TS 的 camelCase（authorId / isPublic / teamId）。
+（authorId / isPublic / teamId）。
     """
     return (
         f"($unrestricted OR {alias}.authorId = $accessUserId "

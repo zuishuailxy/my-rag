@@ -42,7 +42,7 @@ step = 0
 
 
 def ok(msg: str) -> None:
-    print(f"  ✓ {msg}")
+    print(f" ✓ {msg}")
 
 
 async def main() -> None:
@@ -134,7 +134,7 @@ async def main() -> None:
             session.add(User(id=9000000000000000003, username="smoke-dup", password="x"))
             await session.flush()
             ok("软删后同名再注册 → 放行")
-        await session.rollback()  # 丢弃本步全部写入
+        await session.rollback() # 丢弃本步全部写入
 
     # ---------- 5) 重复授权被拒 ----------
     step += 1

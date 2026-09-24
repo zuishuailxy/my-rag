@@ -1,16 +1,13 @@
-"""知识图谱检索接口（对应 TS graph/graph.controller.ts）
+"""知识图谱检索接口
 
 GET /api/v1/graph/overview：全景图（文档/实体/标签 + 统计，供前端力导向图）
 GET /api/v1/graph/search：关键词检索实体/文档/块节点
 GET /api/v1/graph/nodes：知识实体节点列表
-GET /api/v1/graph/edges：实体间 RELATED_TO 边列表
-
-对齐 TS 类级 @RequirePermission(PermissionCode.search)：全部端点挂
-require_permission("search")（2026-09-07 TS 加类级权限码后同步收紧；
-此前 TS 无装饰器、Python 对齐为「仅登录」）。USER 角色种子里已有
+GET /api/v1/graph/edges：实体间 RELATED_TO 边列表)：全部端点挂
+require_permission("search")。USER 角色种子里已有
 search 权限码（400000000000000003），普通用户不受影响。
 
-可见性（对齐 TS 每个方法都传 accessFromUser(user)）：四个端点都注入当前用户并换算成
+可见性（)）：四个端点都注入当前用户并换算成
 DocumentAccessScope，交由 services/graph_build.py 在各条 Cypher 里按
 「公开 ∪ 本人 ∪ 所在团队」过滤文档节点；ADMIN / REVIEWER 不受限。
 
@@ -36,7 +33,7 @@ from app.services.graph_build import graph_build_service
 
 router = auth_router()
 
-# 当前用户依赖（可见性过滤用；对应 TS @CurrentUser() user: AuthUser）
+# 当前用户依赖（可见性过滤用；) user: AuthUser）
 _USER = Annotated[AuthUser, Depends(get_current_user)]
 
 

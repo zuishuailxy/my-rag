@@ -11,9 +11,9 @@
   - Mem0 session 层：从对话里抽出的**事实**（任务/待办/偏好），不是对话摘要。
 
 存储（双写，与短期记忆同款「Redis 优先 / DB 兜底」）：
-  Redis     key  `{PREFIX}:{userId}:{sessionId}:summary`
-            值   JSON `{"summary": "...", "covered_until_message_id": 123}`
-  Postgres  `kh_ai_session_summary`（独立表，删会话 CASCADE 自动清）
+  Redis key `{PREFIX}:{userId}:{sessionId}:summary`
+            值 JSON `{"summary": "...", "covered_until_message_id": 123}`
+  Postgres `kh_ai_session_summary`（独立表，删会话 CASCADE 自动清）
 
 折叠水位 `covered_until_message_id`：已折叠进摘要的**最大消息 id**。
 每次只折叠 `id > 水位 且 id < 热窗口最旧消息 id` 的消息。
@@ -158,7 +158,7 @@ class ChatSessionSummaryService:
                             parsed.get("covered_until_message_id") or 0
                         ),
                     )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("会话摘要 Redis 读取失败，改走数据库：%s", err)
 
         try:
@@ -170,7 +170,7 @@ class ChatSessionSummaryService:
                     summary=row.summary or "",
                     covered_until_message_id=int(row.covered_until_message_id or 0),
                 )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("会话摘要读取失败：%s", err)
             return None
 
@@ -187,7 +187,7 @@ class ChatSessionSummaryService:
         )
         try:
             await redis_service.set(self._key(user_id, session_id), payload, self._ttl)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("会话摘要 Redis 写入失败：%s", err)
 
         try:
@@ -199,14 +199,14 @@ class ChatSessionSummaryService:
                 row.summary = state.summary
                 row.covered_until_message_id = state.covered_until_message_id
                 await db.commit()
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("会话摘要落库失败：%s", err)
 
     async def clear(self, user_id: str, session_id: str) -> None:
         """删除会话摘要（会话删除时调用；Redis 与 DB 都清，失败只 WARN）"""
         try:
             await redis_service.delete(self._key(user_id, session_id))
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("会话摘要 Redis 删除失败：%s", err)
         try:
             async with async_session_factory() as db:
@@ -216,7 +216,7 @@ class ChatSessionSummaryService:
                     )
                 )
                 await db.commit()
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("会话摘要删除失败：%s", err)
 
     async def fold(self, user_id: str, session_id: str, window_size: int) -> None:
@@ -231,7 +231,7 @@ class ChatSessionSummaryService:
         async with lock:
             try:
                 await self._fold_locked(user_id, session_id, window_size)
-            except Exception as err:  # noqa: BLE001
+            except Exception as err: # noqa: BLE001
                 logger.warning(
                     "会话摘要折叠失败：sessionId=%s, err=%s", session_id, err
                 )
@@ -256,11 +256,11 @@ class ChatSessionSummaryService:
             )
             window = list((await db.scalars(stmt)).all())
             if len(window) < limit:
-                return  # 消息还没超过窗口，没有东西可折叠
+                return # 消息还没超过窗口，没有东西可折叠
             # desc 的最后一个 = 窗口最旧；比它更旧的才是「滑出窗口」的
             window_start_id = window[-1].id
             if window_start_id <= state.covered_until_message_id:
-                return  # 没有新的滑出（已折叠到窗口边界）
+                return # 没有新的滑出（已折叠到窗口边界）
 
             older_stmt = (
                 select(AiMessage)
@@ -291,7 +291,7 @@ class ChatSessionSummaryService:
     async def _summarize(
         self, old_summary: str, messages: list[AiMessage]
     ) -> str:
-        assert self._llm is not None  # 调用方 fold 已判空
+        assert self._llm is not None # 调用方 fold 已判空
         transcript = "\n".join(
             f"{'用户' if m.role == MESSAGE_ROLE_USER else '助手'}：{(m.content or '').strip()}"
             for m in messages

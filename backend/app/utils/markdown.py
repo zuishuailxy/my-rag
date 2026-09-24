@@ -1,5 +1,5 @@
 """
-Markdown 工具（对应 TS utils/markdown.util）
+Markdown 工具
 """
 import re
 

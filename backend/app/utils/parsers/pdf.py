@@ -1,5 +1,5 @@
 """
-PDF 解析为 Markdown（对应 TS utils/parsers/pdf.ts，底层 pdf-parse → PyMuPDF）
+PDF 解析为 Markdown
 
 整体流程：
 1. 按页提取文本（page.get_text）；
@@ -20,7 +20,7 @@ from app.utils.markdown import clean_markdown, to_markdown_table
 
 logger = logging.getLogger(__name__)
 
-# 图片上传回调：bytes → URL（对应 TS ImageUploader，由调用方注入，如 RustFS）
+# 图片上传回调：bytes → URL
 ImageUploader = Callable[[bytes, str, str], Awaitable[str]]
 
 
@@ -35,7 +35,7 @@ async def parse_pdf(
 
     try:
         # ---------- 1. 文本：按页取出 ----------
-        page_texts: list[tuple[int, str]] = []  # (页码, 文本)
+        page_texts: list[tuple[int, str]] = [] # (页码, 文本)
         for page in doc.pages():
             page_texts.append(_page_number_and_text(page))
 
@@ -186,7 +186,7 @@ def sniff_image_content_type(data: bytes) -> str:
 
 
 def normalize_pdf_table(raw: Any) -> list[list[str]]:
-    """将表格提取结果统一成二维字符串数组（对应 TS normalizePdfTable）
+    """将表格提取结果统一成二维字符串数组
 
     兼容形态：
     - list[list[str]]：已是行列结构；

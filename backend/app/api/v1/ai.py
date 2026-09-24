@@ -1,14 +1,14 @@
-"""RAG 检索 / 对话 / 会话接口（对应 TS AiController）
+"""RAG 检索 / 对话 / 会话接口
 
 - POST /api/v1/rag/search：RAG 混合检索（BM25 + 向量 → RRF → rerank），不调 LLM
 - POST /api/v1/ai/chat：RAG 对话（混合检索后再由 DeepSeek 作答，写入本人会话）
 - GET|POST /api/v1/ai/sessions：会话分页 / 新建
 - GET /api/v1/ai/sessions/{id}/messages：会话消息列表
 - PATCH|DELETE /api/v1/ai/sessions/{id}：改名 / 删除
-均需 `search` 权限（对齐 TS 类级 @RequirePermission(PermissionCode.search)）。
+均需 `search` 权限（)）。
 
-状态码刻意差异：/rag/search 与 /ai/chat 是查询类 POST，本项目统一返回 200（TS 的
-`@Post()` 为 NestJS 默认 201）；口径与理由见 api/v1/search.py 模块注释。
+状态码刻意差异：/rag/search 与 /ai/chat 是查询类 POST，本项目统一返回 200（
+`@Post()）；口径与理由见 api/v1/search.py 模块注释。
 """
 from typing import Annotated, Any, cast
 
@@ -41,7 +41,7 @@ from app.services.ai_stream import ai_stream_service
 from app.services.chat_session import chat_session_service
 from app.services.retrieval import hybrid_retrieval_service
 
-# 两个独立前缀（对齐 TS：AiController.search 在 /rag，chat 在 /ai）
+# 两个独立前缀
 router = auth_router()
 rag_router: APIRouter = auth_router()
 
@@ -50,7 +50,7 @@ _USER = Annotated[AuthUser, Depends(get_current_user)]
 
 
 def _session_vo(s: AiSession) -> SessionResponse:
-    """实体 → 响应 VO（bigint 转字符串，对齐 TS bigintTransformer 序列化口径）"""
+    """实体 → 响应 VO"""
     return SessionResponse(
         id=str(s.id),
         userId=str(s.user_id),
@@ -84,7 +84,7 @@ def _message_vo(m: AiMessage) -> MessageResponse:
 async def rag_search(dto: RagSearchRequest, user: _USER) -> list[HybridChunkItem]:
     """RAG 混合检索：只召回不生成回答，返回 kh_chunk 命中详情
 
-    传当前用户计算可见性范围（对应 TS search(dto, @CurrentUser() user)）。
+    传当前用户计算可见性范围（) user)）。
     """
     items = await hybrid_retrieval_service.retrieve(
         dto.query.strip(), top_k=dto.topK, user=user
@@ -109,7 +109,7 @@ async def ai_chat(dto: ChatRequest, user: _USER, db: _DB) -> ChatResponse:
 async def ai_chat_stream(dto: ChatStreamRequest, user: _USER, db: _DB) -> StreamingResponse:
     """流式对话：agent 流式作答，UI Message Stream（AI SDK v6 SSE 协议）
 
-    响应头对齐 TS pipeUIMessageStreamToResponse（content-type 由
+    响应头
     media_type 提供，协议版本头前端 DefaultChatTransport 校验用）。
     """
     return StreamingResponse(
@@ -187,6 +187,6 @@ async def rename_session(
     dependencies=[Depends(require_permission("search"))],
 )
 async def remove_session(session_id: str, user: _USER, db: _DB) -> SessionDeleteResponse:
-    """删除会话及其全部消息（先删消息再删会话，对齐 TS）"""
+    """删除会话及其全部消息"""
     result = await chat_session_service.remove(db, user.user_id, session_id)
     return SessionDeleteResponse(**result)

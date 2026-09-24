@@ -1,14 +1,14 @@
-"""角色管理接口 E2E 冒烟（对应 TS RoleController / RoleService）
+"""角色管理接口 E2E 冒烟
 
 覆盖：
   - 类级 @Roles(ADMIN) → 全部接口：无 token 401、user/reviewer 403、admin 放行
-  - GET  /roles/list        启用角色升序、不含 status 键、不含已禁用角色
-  - GET  /roles/{id}        详情含 status；不存在/非法 id → 404「角色不存在」
-  - POST /roles             201 不含 status 键；roleCode 重复 409
-  - PUT  /roles/{id}        部分更新（含禁用后从 list 消失的联动断言）
-  - DELETE /roles/{id}      有关联用户 400；解绑后 200「删除成功」；再查 404
-  - GET  /roles/{id}/permissions   细粒度守卫 system:role（reviewer 403 / admin 200）
-  - PUT  /roles/{id}/permissions   全量替换角色权限（空数组清空、再授予、假 id 404）
+  - GET /roles/list 启用角色升序、不含 status 键、不含已禁用角色
+  - GET /roles/{id} 详情含 status；不存在/非法 id → 404「角色不存在」
+  - POST /roles 201 不含 status 键；roleCode 重复 409
+  - PUT /roles/{id} 部分更新（含禁用后从 list 消失的联动断言）
+  - DELETE /roles/{id} 有关联用户 400；解绑后 200「删除成功」；再查 404
+  - GET /roles/{id}/permissions 细粒度守卫 system:role（reviewer 403 / admin 200）
+  - PUT /roles/{id}/permissions 全量替换角色权限（空数组清空、再授予、假 id 404）
 
 种子角色（admin/reviewer/user）只读不改不删；临时角色与临时用户结束时硬删。
 运行：PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/smoke_role_api.py
@@ -57,7 +57,7 @@ SEED_ROLE_IDS = {
 
 
 def show(step: str, resp: httpx.Response) -> None:
-    print(f"  {step}: {resp.status_code} {resp.text[:120]}")
+    print(f" {step}: {resp.status_code} {resp.text[:120]}")
 
 
 async def cleanup() -> None:
@@ -148,7 +148,7 @@ async def main() -> None:
         show("6b get 非法 id", resp)
         assert resp.status_code == 404, resp.text
 
-        # 7) create → 201，返回不含 status 键（对齐 TS 内联对象）
+        # 7) create → 201，返回不含 status 键
         resp = await client.post(
             f"{API}/roles",
             headers=admin_h,
@@ -238,10 +238,10 @@ async def main() -> None:
         assert resp.json()["detail"] == "权限不足", resp.text
 
         # 14) admin 读种子角色(user)的权限 → 200，且含 8 个权限 ID
-        #     init.sql 预置 6 个（dashboard/document 菜单 + document:list/create + search/profile 菜单），
-        #     ae2f893「文档端点逐接口权限码对齐 + 权限种子补齐」再由
-        #     seed_role_permission_matrix.py 补 document:edit(…013) / document:delete(…014)。
-        #     ⚠️ 该提交当时漏改本断言 → 只要种子矩阵刷过就会误报，2026-09-15 订正。
+        # init.sql 预置 6 个（dashboard/document 菜单 + document:list/create + search/profile 菜单），
+        # ae2f893「文档端点逐接口权限码对齐 + 权限种子补齐」再由
+        # seed_role_permission_matrix.py 补 document:edit(…013) / document:delete(…014)。
+        # ⚠️ 该提交当时漏改本断言 → 只要种子矩阵刷过就会误报，2026-09-15 订正。
         resp = await client.get(
             f"{API}/roles/2000000000000000003/permissions", headers=admin_h
         )

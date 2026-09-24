@@ -66,7 +66,7 @@ def main() -> None:
             assert data["wordCount"] > 0 and data["publishTime"] is None
             assert data["status"] == 0
             # authorId / createBy / updateBy 三者**均恒取 JWT 中的操作者**
-            # （TS `authorId: actor.userId` / `createBy: actor.userId` / `updateBy: actor.userId`）
+            # 
             # —— 请求体里的 authorId=600 / createBy=700 全被服务层忽略，伪造不了
             assert data["authorId"] == SEED_ADMIN_ID
             assert data["createBy"] == SEED_ADMIN_ID
@@ -96,7 +96,7 @@ def main() -> None:
             print("4) PATCH /documents/{id}:", resp.status_code)
             assert resp.status_code == 200, resp.text
             assert resp.json()["title"] == "API测试文档v2"
-            # updateBy 恒取 JWT 操作者（TS `doc.updateBy = actor.userId`）——
+            # updateBy 恒取 JWT 操作者——
             # 请求体里的 updateBy=800 被服务层忽略
             assert resp.json()["updateBy"] == SEED_ADMIN_ID
 

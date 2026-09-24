@@ -1,10 +1,10 @@
 """对话长期记忆（Mem0 托管平台）冒烟测试
 
-验证点（对应 TS ai/chat-long-memory.service.ts）：
+验证点：
 1. 降级路径：未配置 MEM0_API_KEY 时 enabled=False、search 返回空的 user/session 两层、
    remember_turn / clear_session 静默返回不抛 —— 「记忆不可用不能阻断对话」
 2. _pick_memories：平台响应的 5 种形态（正常 / 缺 results / results 为 None / 非 dict /
-   条目非 dict 或 memory 为空）都不炸，空串被过滤（对齐 TS `.filter(Boolean)`）
+   条目非 dict 或 memory 为空）都不炸，空串被过滤（)`）
 3. build_system_message：两层皆空返回 None（调用方据此跳过注入）
 4. build_system_message：拼接格式（【用户长期记忆】/【当前会话记忆】+ `- ` 条目 + 免责句）
 5. 分类器：**真实调用 LLM**（本项目 = deepseek-v4-flash），三条样例的 write_user /
@@ -36,8 +36,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.core.config import settings
 from app.services.chat_long_memory import (
     CLASSIFIER_PROMPT,
-    _build_classifier,  # noqa: PLC2701  冒烟需要直接验证分类器（不经过 client 门禁）
-    _pick_memories,  # noqa: PLC2701
+    _build_classifier, # noqa: PLC2701 冒烟需要直接验证分类器（不经过 client 门禁）
+    _pick_memories, # noqa: PLC2701
     chat_long_memory_service,
 )
 
@@ -56,14 +56,14 @@ async def cleanup() -> None:
     不出 JSON → 400「At least one filter ... is required」，也就是**一条都没删**却只看到
     一行 WARN。这条是实测踩出来的，见 services/chat_long_memory.py 模块注释。
     """
-    client = chat_long_memory_service._client  # noqa: SLF001
+    client = chat_long_memory_service._client # noqa: SLF001
     if client is None:
         return
     try:
         await client.delete_all(user_id=USER_ID)
-        print("   (cleanup: 已提交删除本次临时 user 层的全部记忆)", file=sys.stderr)
-    except Exception as err:  # noqa: BLE001
-        print(f"   (cleanup 跳过：{err})", file=sys.stderr)
+        print(" (cleanup: 已提交删除本次临时 user 层的全部记忆)", file=sys.stderr)
+    except Exception as err: # noqa: BLE001
+        print(f" (cleanup 跳过：{err})", file=sys.stderr)
 
 
 async def _poll_until(label: str, call, ok, tries: int = 12, delay: float = 3.0):
@@ -80,7 +80,7 @@ async def _poll_until(label: str, call, ok, tries: int = 12, delay: float = 3.0)
         result = await call()
         if ok(result):
             if attempt > 1:
-                print(f"      ({label}：第 {attempt} 次轮询命中，共等约 {(attempt - 1) * delay:.0f}s)")
+                print(f" ({label}：第 {attempt} 次轮询命中，共等约 {(attempt - 1) * delay:.0f}s)")
             return result
         if attempt < tries:
             await asyncio.sleep(delay)
@@ -90,7 +90,7 @@ async def _poll_until(label: str, call, ok, tries: int = 12, delay: float = 3.0)
 async def main() -> None:
     has_key = bool(settings.MEM0_API_KEY)
     print(
-        f"   · 配置：MEM0_API_KEY={'已配置' if has_key else '未配置'}、"
+        f" · 配置：MEM0_API_KEY={'已配置' if has_key else '未配置'}、"
         f"MEM0_TOP_K={settings.MEM0_TOP_K}、"
         f"MEM0_HOST={settings.MEM0_HOST or '(默认 https://api.mem0.ai)'}"
     )
@@ -100,14 +100,14 @@ async def main() -> None:
         "enabled 必须与「是否配置 MEM0_API_KEY」一致，否则后面的降级断言会假绿"
     )
     if has_key:
-        print("   1) 已配置 MEM0_API_KEY → 降级断言跳过（第 6 步走真实链路）")
+        print(" 1) 已配置 MEM0_API_KEY → 降级断言跳过（第 6 步走真实链路）")
     else:
         hits = await chat_long_memory_service.search(USER_ID, SESSION_ID, "任意查询")
         assert hits == {"user": [], "session": []}, f"降级应返回两层空列表，实际 {hits}"
         # 不抛即通过（记忆不可用不能阻断对话）
         await chat_long_memory_service.remember_turn(USER_ID, SESSION_ID, "问", "答")
         await chat_long_memory_service.clear_session(USER_ID, SESSION_ID)
-        print("   1) 未配置 key → enabled=False、search 空、写/清静默跳过 ✓")
+        print(" 1) 未配置 key → enabled=False、search 空、写/清静默跳过 ✓")
 
     # 2) _pick_memories：五种响应形态
     pick_cases: list[tuple[Any, list[str]]] = [
@@ -130,13 +130,13 @@ async def main() -> None:
     for raw, expected in pick_cases:
         got = _pick_memories(raw)
         assert got == expected, f"输入 {raw!r} 应得 {expected}，实际 {got}"
-    print("   2) _pick_memories ✓ 5 种响应形态都不炸，空串被过滤")
+    print(" 2) _pick_memories ✓ 5 种响应形态都不炸，空串被过滤")
 
     # 3) 两层皆空 → None
     assert chat_long_memory_service.build_system_message({"user": [], "session": []}) is None, (
         "两层都空时应返回 None（调用方据此跳过注入）"
     )
-    print("   3) build_system_message 空输入 ✓ 返回 None")
+    print(" 3) build_system_message 空输入 ✓ 返回 None")
 
     # 4) 拼接格式
     only_user = chat_long_memory_service.build_system_message(
@@ -158,9 +158,9 @@ async def main() -> None:
     both_text = both.content
     assert isinstance(both_text, str)
     assert both_text.index("【用户长期记忆】") < both_text.index("【当前会话记忆】"), (
-        "user 层应排在 session 层之前（对齐 TS blocks 顺序）"
+        "user 层应排在 session 层之前"
     )
-    print("   4) build_system_message ✓ 标题 / `- ` 条目 / 免责句 / user 在前")
+    print(" 4) build_system_message ✓ 标题 / `- ` 条目 / 免责句 / user 在前")
 
     # 5) 分类器：真实 LLM 调用
     classifier = _build_classifier()
@@ -185,7 +185,7 @@ async def main() -> None:
         results.append((question, bool(parsed.write_user), bool(parsed.write_session), parsed.reason))
 
     for question, w_user, w_session, reason in results:
-        print(f"      · 「{question}」→ user={w_user} session={w_session}｜{reason}")
+        print(f" · 「{question}」→ user={w_user} session={w_session}｜{reason}")
 
     greet = results[0]
     assert not greet[1] and not greet[2], (
@@ -195,23 +195,23 @@ async def main() -> None:
     assert prefer[1], (
         f"长期偏好（「以后回答短一点」）应写 user 层，实际 user={prefer[1]}｜{prefer[3]}"
     )
-    print("   5) 分类器真实调用 ✓ 寒暄不写、长期偏好写 user 层（结构化输出可用）")
+    print(" 5) 分类器真实调用 ✓ 寒暄不写、长期偏好写 user 层（结构化输出可用）")
 
     # 6) 真实 Mem0 链路（需 MEM0_API_KEY）
     if not has_key:
         print(
-            "   6) 真实 Mem0 链路 ⋯ SKIP（未配置 MEM0_API_KEY）"
+            " 6) 真实 Mem0 链路 ⋯ SKIP（未配置 MEM0_API_KEY）"
             "⚠️ SKIP 不算通过，配置 key 后必须重跑"
         )
     else:
-        client = chat_long_memory_service._client  # noqa: SLF001
+        client = chat_long_memory_service._client # noqa: SLF001
         assert client is not None
-        await cleanup()  # 先清干净，保证「search 落空」这一步可信
-        await asyncio.sleep(5)  # 删除同样是异步的，等它落地再断言「清理后为空」
+        await cleanup() # 先清干净，保证「search 落空」这一步可信
+        await asyncio.sleep(5) # 删除同样是异步的，等它落地再断言「清理后为空」
         hits_before = await chat_long_memory_service.search(USER_ID, SESSION_ID, "偏好")
         if hits_before != {"user": [], "session": []}:
             # 检索失败也会返回空，所以这里只能作参考，不作断言
-            print(f"   ⚠️ 清理后仍能搜到记忆（前次删除可能未落地）：{hits_before}")
+            print(f" ⚠️ 清理后仍能搜到记忆（前次删除可能未落地）：{hits_before}")
 
         # 6a) 真实写入路径：分类器 → add（user 层）→ 轮询等异步抽取完成
         await chat_long_memory_service.remember_turn(
@@ -231,8 +231,8 @@ async def main() -> None:
         )
 
         # 6b) 直接写一条 session 层记忆（不经分类器），让「清会话层」这条断言有实际约束力：
-        #     否则若分类器把本轮判成 user 层，session 层本来就是空的，
-        #     clear_session 后断言"为空"会**假绿**（什么都没删也会过）
+        # 否则若分类器把本轮判成 user 层，session 层本来就是空的，
+        # clear_session 后断言"为空"会**假绿**（什么都没删也会过）
         await client.add(
             [{"role": "user", "content": f"这次要看的文档编号是 42（会话 {SESSION_ID}）"}],
             user_id=USER_ID,
@@ -268,7 +268,7 @@ async def main() -> None:
             "过滤没有隔离，需改用 memory_id 逐条删除）"
         )
         print(
-            f"   6) 真实 Mem0 链路 ✓ user 层 {len(after['user'])} 条；"
+            f" 6) 真实 Mem0 链路 ✓ user 层 {len(after['user'])} 条；"
             "会话层写入→清除已闭环；清会话层未误伤 user 层"
         )
 

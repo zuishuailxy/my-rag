@@ -1,7 +1,5 @@
 """
-chunk 级混合检索召回（方案 B：关键词 ES kh_chunk + 语义 PG doc_chunk，RRF 融合）
-
-对应 TS VectorIndexService.searchHybrid（向量 + 关键词 → RRF 粗融合）：
+chunk 级混合检索召回（方案 B：关键词 ES kh_chunk + 语义 PG doc_chunk，RRF 融合））：
 - 关键词通道：ES kh_chunk multi_match（document_title^2 + content，IK ik_smart）top-N
 - 语义通道：doc_chunk.embedding（PG，HNSW 余弦）top-N
 - 两路并行发起（asyncio.gather，对齐 Promise.all）
@@ -9,8 +7,7 @@ chunk 级混合检索召回（方案 B：关键词 ES kh_chunk + 语义 PG doc_c
   每条附各通道原始分（bm25Score / vectorScore，对齐 ChunkHit）
 
 返回每条带 PG 全量行（content / heading / document_title 等）。
-任一路不可用 / 为空时单路降级不抛错；query 向量化失败只走关键词（对齐 TS embedQuery 容错，
-真正的 embed 调用通常在编排层 HybridRetrievalService 完成并注入 query_vector）。
+任一路不可用 / 为空时单路降级不抛错；query 向量化失败只走关键词。
 
 文档级全文检索（ES kh_document）见 services/search_index.py；
 rerank 精排在上层 services/retrieval.py（HybridRetrievalService）。
@@ -56,8 +53,8 @@ async def _vector_recall(
 ) -> list[tuple[str, float]]:
     """PG doc_chunk 余弦召回 → [(chunk_id, cosine_similarity)]（<=> 为余弦距离）
 
-    可见性：本项目向量在 PG（TS 在 ES），故这里 JOIN kh_document 按可见性过滤
-    （对齐 TS canReadDocument 的判定：作者本人 ∪ 已发布且(公开 ∪ 所在团队)）。
+    可见性：本项目向量在 PG，故这里 JOIN kh_document 按可见性过滤
+    （)）。
     用 JOIN 而非在 doc_chunk 冗余 is_public，好处是文档改权限立即生效、无需同步。
     """
     where_sql, vis_params = _visibility_sql(scope)
@@ -77,7 +74,7 @@ async def _vector_recall(
 def _visibility_sql(scope: DocumentAccessScope | None) -> tuple[str, dict[str, Any]]:
     """可见性 WHERE 子句 + 绑定参数（PG 向量通道用）
 
-    scope 为 None 或 unrestricted → 不加限制（对齐 TS searchHybrid：scope 不传则不过滤）。
+    scope 为 None 或 unrestricted → 不加限制。
     否则：作者本人放行；其余要求 status=1(已发布) 且 (公开 或 团队命中)。
     deleted=false 恒加（兜底：软删文档的残留块不应被召回）。
     """
@@ -176,7 +173,7 @@ async def hybrid_search(
       RAG_HYBRID_TOP_K / RAG_RRF_C；
     - query_vector 不传（哨兵）时内部尝试 embed，失败仅走关键词；显式传 None 直接跳过
       向量通道（如编排层已 embed 失败降级）；
-    - scope 为可见性范围（两条通道都按它过滤）。**不传 = 不过滤**，与 TS searchHybrid
+    - scope 为可见性范围（两条通道都按它过滤）。**不传 = 不过滤**，
       的 `scope?: DocumentAccessScope` 语义一致；生产链路请走 services/retrieval.py，
       那里会用 access_from_user / empty_scope 保证始终有 scope。
     每条结果附 bm25Score / vectorScore（各通道原始分），对齐 ChunkHit。
@@ -245,10 +242,10 @@ async def hybrid_search(
 
 
 async def _embed_query(query: str) -> list[float] | None:
-    """query 向量化；失败仅走关键词（对齐 TS HybridRetrievalService.embedQuery 容错）"""
+    """query 向量化；失败仅走关键词"""
     try:
         return (await embedding_provider.embed_texts([query]))[0]
-    except Exception as err:  # noqa: BLE001
+    except Exception as err: # noqa: BLE001
         message = str(err)
         logger.warning("查询向量化失败，仅走关键词：%s", message)
         return None
@@ -264,7 +261,7 @@ def _to_camel_row(row: dict, channels: dict[str, float]) -> dict:
     """PG 行（snake_case + datetime/bigint）→ camelCase dict（schema 输出用）
 
     bigint 字段（documentId/categoryId/authorId/teamId）转字符串，
-    与 document_to_dict 同约定（对应 TS bigintTransformer，防 JS Number 精度丢失）。
+    与 document_to_dict 同约定。
     """
     out: dict = {
         "score": round(channels["rrf"], 6),

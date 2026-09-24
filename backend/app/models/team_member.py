@@ -1,14 +1,14 @@
 """
 团队-成员关联模型（PostgreSQL kh_team_member）
 
-已对照 TS src/team/entities/team-member.entity.ts 逐字段核验一致（2026-09-03）：
+（2026-09-03）：
 id / teamId / userId / memberRole(varchar 20, default 'member') / createdAt。
-**无 updatedAt**（TS 实体同样只有 @CreateDateColumn），不要补。
+**无 updatedAt**，不要补。
 
 schema 真相源：init-scripts/postgresql/init.sql。两个外键无 ON DELETE CASCADE，
 删团队 / 删用户前需先解绑本表关联（与 kh_user_role 一致）。
 
-⚠️ TS 实体未声明 FK / 唯一约束（TypeORM 同步自数据库）；Python 侧在 ORM 层显式声明
+（TypeORM 同步自数据库）；Python 侧在 ORM 层显式声明
 （ForeignKey + uk_kh_team_member + idx_kh_team_member_user_id），与 user_role.py 同款处理。
 """
 

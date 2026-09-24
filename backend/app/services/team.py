@@ -1,31 +1,30 @@
-"""团队管理服务（对应 TS src/team/team.service.ts）
+"""团队管理服务
 
-与 TS 的仓库/工具对应：
-  teamRepo   → Team        (app/models/team.py)
-  memberRepo → TeamMember  (app/models/team_member.py)
-  userRepo   → User        (app/models/user.py)
+：
+  teamRepo → Team (app/models/team.py)
+  memberRepo → TeamMember (app/models/team_member.py)
+  userRepo → User (app/models/user.py)
   nextSnowflakeId → app.common.snowflake.next_snowflake_id
 
-关键保真点（逐条对齐 TS，便于后续反查）：
+关键保真点：
   - create 默认值：parentId 缺省 '0'（根）、sort 0、status 1、其余可空字段 None；
-    **不校验 leaderId / parentId 是否存在**（TS create 同样不查，悬空引用如实保留）。
+    **不校验 leaderId / parentId 是否存在**。
   - update：parentId 传自身 ID → 400「父团队不能是自己」；其余字段未传不改动。
-    刻意优于 TS：parentId 传非法雪花串时 Python 抛 400「父团队 ID 非法」，TS 会
+：parentId 传非法雪花串时 Python 抛 400「父团队 ID 非法」，
     直接写进 bigint 列撞 PG 22003 → 500（同 bigint.py 的既有硬化口径）。
   - delete：有未删子团队 → 400「存在子团队，无法删除」；软删 team 后**硬删**成员关联
-    （TS memberRepo.delete 同款）。TS 是 save + delete 两步各自生效，Python 合并为
+。，Python 合并为
     单事务提交（语义一致，原子性更强，刻意差异）。
   - getTree：只取 status=1 且未删，按 sort ASC / created_at ASC 排序；
-    rootOnly=true 返回根节点列表（TS 不带 children 键，Python 响应模型统一补
-    children: []，语义一致）。
+    rootOnly=true 返回根节点列表。
   - addMembers：先校验团队存在，再校验用户全部存在且未删（缺 → 404「部分用户不存在」）；
-    已存在的关联跳过（幂等），新建 memberRole='member'。TS 逐个 findOne + save
+    已存在的关联跳过（幂等），新建 memberRole='member'。
     （N 次查询），Python 同款逐个查（保真，不合并批量）。
-  - removeMembers：In(userIds) 批量删；空数组时 TS TypeORM In([]) 不删任何行，
+  - removeMembers：In(userIds) 批量删；([]) 不删任何行，
     SQLAlchemy in_([]) 同样生成恒假条件，行为一致。
   - listMembers：inner join 未删用户，返回 userId / memberRole / username / realName。
   - listAccessibleTeamIds → list_user_team_ids：成员表 ∪ 负责人，**再按 kh_team.deleted=false
-    过滤**（TS 是两步：先并集，再 `find({id: In(ids), deleted: false})`）；同一结果既喂
+    过滤**（：先并集，再 `find({id: In(ids), deleted: false})`）；同一结果既喂
     AuthUser.teamIds（文档可见性）又喂 listMine。
   - listMine：登录即可的「我的团队」列表，按 sort ASC / created_at ASC 排序。
 """
@@ -52,13 +51,13 @@ class TeamService:
     # ---------------- 基础查询 ----------------
 
     async def find_by_id_or_throw(self, session: AsyncSession, team_id: str) -> Team:
-        """按 ID 查未删团队（对应 TS findByIdOrThrow）；非法/不存在/已删 → 404「团队不存在」"""
+        """按 ID 查未删团队；非法/不存在/已删 → 404「团队不存在」"""
         pk = parse_bigint(team_id)
         if pk is None:
             raise HTTPException(status_code=404, detail="团队不存在")
         team = (
             await session.scalars(
-                select(Team).where(Team.id == pk, Team.deleted == False)  # noqa: E712
+                select(Team).where(Team.id == pk, Team.deleted == False) # noqa: E712
             )
         ).first()
         if not team:
@@ -66,7 +65,7 @@ class TeamService:
         return team
 
     async def get_detail(self, session: AsyncSession, team_id: str) -> tuple[Team, int]:
-        """团队详情 + 成员数（对应 TS getDetail 返回 { ...team, memberCount }）"""
+        """团队详情 + 成员数"""
         team = await self.find_by_id_or_throw(session, team_id)
         member_count = (
             await session.scalar(
@@ -76,10 +75,10 @@ class TeamService:
         return team, int(member_count)
 
     async def page(self, session: AsyncSession, query: QueryTeamRequest) -> dict:
-        """分页 + keyword 模糊（对应 TS page）；keyword 去空格后 ILIKE 团队名 / 编码两列"""
+        """分页 + keyword 模糊；keyword 去空格后 ILIKE 团队名 / 编码两列"""
         page = query.page or 1
         page_size = query.page_size or 20
-        conditions = [Team.deleted == False]  # noqa: E712
+        conditions = [Team.deleted == False] # noqa: E712
         if query.keyword and query.keyword.strip():
             kw = f"%{query.keyword.strip()}%"
             conditions.append((Team.team_name.ilike(kw)) | (Team.team_code.ilike(kw)))
@@ -95,7 +94,7 @@ class TeamService:
                 await session.scalars(
                     select(Team)
                     .where(*conditions)
-                    # TS：orderBy sort ASC, created_at DESC（与 permission 的 ASC 不同，保真）
+                    # orderBy sort ASC, created_at DESC（与 permission 的 ASC 不同，保真）
                     .order_by(Team.sort.asc(), Team.created_at.desc())
                     .offset((page - 1) * page_size)
                     .limit(page_size)
@@ -105,16 +104,16 @@ class TeamService:
         return {"items": items, "total": int(total), "page": page, "page_size": page_size}
 
     async def get_tree(self, session: AsyncSession, root_only: bool = False) -> list[dict]:
-        """团队树（对应 TS getTree）；只含启用团队，根 parent_id=0 递归展开 children
+        """团队树；只含启用团队，根 parent_id=0 递归展开 children
 
-        rootOnly=True 时返回根节点本身（TS 不带 children 键）；此处节点字典不含
+        rootOnly=True 时返回根节点本身；此处节点字典不含
         children 键，由响应模型统一补默认空数组。
         """
         teams = list(
             (
                 await session.scalars(
                     select(Team)
-                    .where(Team.deleted == False, Team.status == 1)  # noqa: E712
+                    .where(Team.deleted == False, Team.status == 1) # noqa: E712
                     .order_by(Team.sort.asc(), Team.created_at.asc())
                 )
             ).all()
@@ -139,7 +138,7 @@ class TeamService:
     # ---------------- 写操作 ----------------
 
     async def create(self, session: AsyncSession, dto: CreateTeamRequest) -> Team:
-        """创建团队（对应 TS create）；parentId 缺省根 '0'，不校验 leader/parent 存在"""
+        """创建团队；parentId 缺省根 '0'，不校验 leader/parent 存在"""
         team = Team(
             id=next_snowflake_id(),
             team_name=dto.team_name,
@@ -158,10 +157,10 @@ class TeamService:
     async def update(
         self, session: AsyncSession, team_id: str, dto: UpdateTeamRequest
     ) -> Team:
-        """更新团队（对应 TS update）；全字段可选，未传不改
+        """更新团队；全字段可选，未传不改
 
-        刻意差异：TS 对显式传 null 的可空字段会写入 NULL（IsOptional 放行 null），
-        Python 按 None=未传不改动处理；清空字段请传空字符串 ""（与 TS 空串写入一致）。
+        刻意差异：（IsOptional 放行 null），
+        Python 按 None=未传不改动处理；清空字段请传空字符串 ""。
         """
         team = await self.find_by_id_or_throw(session, team_id)
         if dto.team_name is not None:
@@ -188,19 +187,19 @@ class TeamService:
         return team
 
     async def delete(self, session: AsyncSession, team_id: str) -> None:
-        """删除团队（对应 TS delete）；有未删子团队 → 400，软删后硬删成员关联"""
+        """删除团队；有未删子团队 → 400，软删后硬删成员关联"""
         team = await self.find_by_id_or_throw(session, team_id)
         child_count = (
             await session.scalar(
                 select(func.count())
                 .select_from(Team)
-                .where(Team.parent_id == team.id, Team.deleted == False)  # noqa: E712
+                .where(Team.parent_id == team.id, Team.deleted == False) # noqa: E712
             )
         ) or 0
         if child_count > 0:
             raise HTTPException(status_code=400, detail="存在子团队，无法删除")
         team.deleted = True
-        # TS 分两步（save → delete）；Python 合并单事务提交，语义一致
+        #（save → delete）；Python 合并单事务提交，语义一致
         await session.execute(delete(TeamMember).where(TeamMember.team_id == team.id))
         await session.commit()
 
@@ -209,7 +208,7 @@ class TeamService:
     async def add_members(
         self, session: AsyncSession, team_id: str, user_ids: list[str]
     ) -> bool:
-        """批量添加成员（对应 TS addMembers）；用户缺一 → 404「部分用户不存在」"""
+        """批量添加成员；用户缺一 → 404「部分用户不存在」"""
         team = await self.find_by_id_or_throw(session, team_id)
         int_ids = [parse_bigint(u) for u in user_ids]
         found: list[int] = []
@@ -219,14 +218,14 @@ class TeamService:
                     await session.scalars(
                         select(User.id).where(
                             User.id.in_([i for i in int_ids if i is not None]),
-                            User.deleted == False,  # noqa: E712
+                            User.deleted == False, # noqa: E712
                         )
                     )
                 ).all()
             )
         if len(found) != len(user_ids):
             raise HTTPException(status_code=404, detail="部分用户不存在")
-        # TS 逐个 findOne + save（已存在跳过）；Python 同款逐个查，保真不合并
+        #（已存在跳过）；Python 同款逐个查，保真不合并
         for uid in int_ids:
             assert uid is not None
             exists = (
@@ -252,11 +251,11 @@ class TeamService:
     async def remove_members(
         self, session: AsyncSession, team_id: str, user_ids: list[str]
     ) -> bool:
-        """批量移除成员（对应 TS removeMembers）；空数组 / 未关联的 ID 均静默跳过"""
+        """批量移除成员；空数组 / 未关联的 ID 均静默跳过"""
         team = await self.find_by_id_or_throw(session, team_id)
         int_ids = [parse_bigint(u) for u in user_ids]
         if any(i is None for i in int_ids):
-            # 非法 ID 不会命中任何行，与 TS In() 查不到即无操作一致
+            # 非法 ID 不会命中任何行，() 查不到即无操作一致
             int_ids = [i for i in int_ids if i is not None]
         if int_ids:
             await session.execute(
@@ -268,13 +267,13 @@ class TeamService:
         return True
 
     async def list_members(self, session: AsyncSession, team_id: str) -> list[dict]:
-        """成员列表（对应 TS listMembers）；inner join 未删用户，返回 4 字段 raw 行"""
+        """成员列表；inner join 未删用户，返回 4 字段 raw 行"""
         team = await self.find_by_id_or_throw(session, team_id)
         rows = (
             await session.execute(
                 select(TeamMember.user_id, TeamMember.member_role, User.username, User.real_name)
                 .join(User, User.id == TeamMember.user_id)
-                .where(TeamMember.team_id == team.id, User.deleted == False)  # noqa: E712
+                .where(TeamMember.team_id == team.id, User.deleted == False) # noqa: E712
             )
         ).all()
         return [
@@ -290,13 +289,11 @@ class TeamService:
     # ---------------- 内部辅助 ----------------
 
     async def list_user_team_ids(self, session: AsyncSession, user_id: str) -> list[str]:
-        """用户所属团队 ID（含担任负责人的团队）——文档检索可见性用
-
-        对应 TS `listAccessibleTeamIds(userId)`：
+        """用户所属团队 ID（含担任负责人的团队）——文档检索可见性用)`：
           1) kh_team_member 里的成员关系 ∪ kh_team.leader_id 指向本人的团队（去重）
-          2) **再按 kh_team.deleted = false 过滤**（TS 第 3 步 `find({ id: In(ids),
+          2) **再按 kh_team.deleted = false 过滤**（({ id: In(ids),
              deleted: false })`）——成员记录可能仍指向已软删团队，不过滤会让
-             「已删团队」继续授予文档可见性（TS 不会）。
+             「已删团队」继续授予文档可见性。
         只按 bigint 数字列比较（user_id 非法或不存在时返回空列表，不抛错——
         鉴权链路不应因团队成员数据异常而整体失败）。
         """
@@ -308,21 +305,21 @@ class TeamService:
             select(TeamMember.team_id).where(TeamMember.user_id == uid)
         )
         leader_rows = await session.execute(
-            select(Team.id).where(Team.leader_id == uid, Team.deleted == False)  # noqa: E712
+            select(Team.id).where(Team.leader_id == uid, Team.deleted == False) # noqa: E712
         )
         # 去重（兼任负责人且同时在成员表时只保留一个）
         ids: set[int] = {r for (r,) in member_rows.all() if r is not None}
         ids.update(r for (r,) in leader_rows.all() if r is not None)
         if not ids:
             return []
-        # TS 第 3 步：成员记录可能指向已软删团队，这里统一过滤（保真，勿省）
+        # 成员记录可能指向已软删团队，这里统一过滤（保真，勿省）
         alive = await session.scalars(
-            select(Team.id).where(Team.id.in_(ids), Team.deleted == False)  # noqa: E712
+            select(Team.id).where(Team.id.in_(ids), Team.deleted == False) # noqa: E712
         )
         return [str(i) for i in sorted(alive.all())]
 
     async def list_mine(self, session: AsyncSession, user_id: str) -> list[Team]:
-        """当前用户所在团队（含担任负责人的），对应 TS `listMine(userId)`
+        """当前用户所在团队（含担任负责人的）)`
 
         先取可访问团队 ID（`list_user_team_ids`，与 AuthUser.teamIds 同源），
         再无 ID 时短路返回空列表、有则按 sort ASC / created_at ASC 排序查实体。
@@ -332,7 +329,7 @@ class TeamService:
             return []
         teams = await session.scalars(
             select(Team)
-            .where(Team.id.in_([int(i) for i in ids]), Team.deleted == False)  # noqa: E712
+            .where(Team.id.in_([int(i) for i in ids]), Team.deleted == False) # noqa: E712
             .order_by(Team.sort.asc(), Team.created_at.asc())
         )
         return list(teams.all())

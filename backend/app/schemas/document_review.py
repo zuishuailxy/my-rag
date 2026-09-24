@@ -1,16 +1,15 @@
 """
-文档审核 DTO（对应 TS dto/review.dto.ts）
+文档审核 DTO
 
 - QueryReviewTasksDto → ReviewTaskQuery
-- ReviewDecisionDto   → ReviewDecision（通过 / 驳回共用）
+- ReviewDecisionDto → ReviewDecision（通过 / 驳回共用）
 
 请求体字段为 camelCase（reviewComment），响应同样输出 camelCase。
 
-审核人信息**不在请求体里**（TS ReviewDecisionDto 只有 reviewComment，注释写明
-「审核人信息从 JWT 取，不在 body 传」）：路由层从 @CurrentUser() 取 userId 与
+审核人信息**不在请求体里**：路由层从 @CurrentUser() 取 userId 与
 `realName ?? username`，再传给 DocumentReviewService（参数必填）。
 
-⚠️ 刻意偏离 TS 一处：status 用 Literal 而非自由字符串。TS 只有 @IsString()（无 @IsIn），
+：status 用 Literal 而非自由字符串。()（无 @IsIn），
 传入非枚举值时 listTasks 三个分支都不命中 → 不加 WHERE → 返回全部记录。此处由
 Pydantic 直接 422 拦截，不把该缺陷带过来。
 """
@@ -21,12 +20,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-# 审核任务筛选值（TS 的联合字面量类型；路由层直接用它做查询参数校验）
+# 审核任务筛选值
 ReviewTaskStatus = Literal["pending", "approved", "rejected"]
 
 
 class ReviewTaskQuery(BaseModel):
-    """审核任务列表查询参数（对应 TS QueryReviewTasksDto）"""
+    """审核任务列表查询参数"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -34,27 +33,26 @@ class ReviewTaskQuery(BaseModel):
     )
 
     # pending=待审 / approved=已通过 / rejected=已驳回
-    # 不传（或传 pending）都按待审处理，与 TS `query.status === 'pending' || !query.status` 一致
+    # 不传（或传 pending）都按待审处理，
     status: ReviewTaskStatus | None = Field(
         default=None, description="审核状态过滤（默认 pending）"
     )
 
-    # 页码，从 1 开始（TS 只有 @Min(1)，无上限，此处同样不设 le）
+    # 页码，从 1 开始（(1)，无上限，此处同样不设 le）
     page: int = Field(default=1, ge=1, description="页码，从 1 开始")
 
-    # 每页条数（TS @Min(1) @Max(100)，与项目 DocumentQuery 约定一致）
+    # 每页条数（(1) @Max(100)，与项目 DocumentQuery 约定一致）
     page_size: int = Field(default=20, ge=1, le=100, description="每页条数")
 
 
 class ReviewDecision(BaseModel):
-    """审核通过 / 驳回请求体（对应 TS ReviewDecisionDto）
+    """审核通过 / 驳回请求体
 
-    只有一个字段：审核意见。审核人信息从 JWT 取（TS 注释：「审核人信息从 JWT 取，
-    不在 body 传」），因此这里**不要**再加 reviewerId / reviewerName —— 前端伪造
+    只有一个字段：审核意见。审核人信息从 JWT 取，因此这里**不要**再加 reviewerId / reviewerName —— 前端伪造
     审核人身份的空间就是从这种 DTO 里漏出来的。
 
     「驳回意见必填」由 DocumentReviewService.reject_review 校验并抛
-    400「驳回意见不能为空」（与 TS 一致，TS 也未在 DTO 层标必填）。
+    400「驳回意见不能为空」。
     """
 
     model_config = ConfigDict(

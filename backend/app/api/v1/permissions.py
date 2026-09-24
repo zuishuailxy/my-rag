@@ -1,6 +1,6 @@
-"""权限管理路由（对应 TS src/user/permission.controller.ts）
+"""权限管理路由
 
-双层守卫（等价 TS 类级 @Roles(ADMIN) + 方法级 @RequirePermission）：
+双层守卫（) + 方法级 @RequirePermission）：
   - 类级 @Roles(ADMIN) → 每个端点 @roles(RoleCode.ADMIN)
   - 方法级 @RequirePermission(code) → 对应端点加
     dependencies=[Depends(require_permission(code))]
@@ -8,7 +8,7 @@
 路由顺序：/list、/tree、/page、/:id/children 是字面量或特殊段，必须注册在
 /:permission_id 动态段之前（与 role / document 路由约定一致，否则被动态路径吞掉）。
 
-状态码：POST create → 201；其余 200（NestJS @Post 默认 201，其余默认 200）。
+状态码：POST create → 201；其余 200。
 """
 
 from typing import Annotated
@@ -37,7 +37,7 @@ _DB = Annotated[AsyncSession, Depends(get_db_session)]
 
 
 def _vo(p: Permission) -> PermissionVOResponse:
-    """实体 → 响应 VO（bigint 转字符串，对齐 TS 序列化口径）"""
+    """实体 → 响应 VO"""
     return PermissionVOResponse(
         id=str(p.id),
         parent_id=str(p.parent_id),

@@ -5,8 +5,7 @@
   旧密 401 / 新密登录）→ 分页筛选（keyword/status/roleCode）→ 详情 VO →
   角色码 → 替换角色（404 / 空数组 422 / 生效验证）→ 管理员部分更新 →
   重置密码 → 软删除（404 / 分页消失 / 登录 401）→ 创建用户（403 / 默认
-  ROLE_USER / 409 查重 / 空数组回退 / 未知角色 404 且用户留存（TS 非事务
-  边界 quirk）/ 全字段 + 禁用 / 新用户可登录）→ 用户权限接口（GET/PUT
+  ROLE_USER / 409 查重 / 空数组回退 / 未知角色 404 且用户留存/ 全字段 + 禁用 / 新用户可登录）→ 用户权限接口（GET/PUT
   /users/{id}/permissions：空权限 / 403 普通用户 / 401 匿名 / 授权生效 /
   空数组清空 / 非法 id 404 / 普通用户 403）。
 
@@ -118,8 +117,8 @@ async def login(client: httpx.AsyncClient, username: str, password: str) -> http
 
 async def main() -> None:
     user_id, username = await create_temp_user()
-    admin_headers = bearer_headers()  # 种子 admin（ADMIN+REVIEWER）
-    user_headers = bearer_headers(SEED_USER_ID, SEED_USER_USERNAME)  # 仅 USER 角色
+    admin_headers = bearer_headers() # 种子 admin（ADMIN+REVIEWER）
+    user_headers = bearer_headers(SEED_USER_ID, SEED_USER_USERNAME) # 仅 USER 角色
     temp_headers = bearer_headers(user_id, username)
 
     transport = httpx.ASGITransport(app=app)
@@ -217,7 +216,7 @@ async def main() -> None:
             r.status_code == 200
             and body["roleCodes"] == ["ROLE_USER"]
             and "password" not in body
-            and body["lastLoginAt"] is not None,  # 第 6.2 步登录写过 last_login_at
+            and body["lastLoginAt"] is not None, # 第 6.2 步登录写过 last_login_at
             f"GET /users/{{id}} → roleCodes={body.get('roleCodes')}",
         )
 
@@ -251,7 +250,7 @@ async def main() -> None:
         )
         check(10.2, user_id not in [it["id"] for it in r.json()["items"]], "roleCode=ROLE_USER 不再命中")
 
-        # 11. 未知角色 404（保真 TS 文案：冒号 + 逗号分隔）
+        # 11. 未知角色 404
         r = await client.put(
             f"/users/{user_id}/roles",
             headers=admin_headers,
@@ -259,7 +258,7 @@ async def main() -> None:
         )
         check(11, r.status_code == 404 and "角色不存在" in r.json()["detail"], f"未知角色 → {r.status_code}")
 
-        # 12. 空数组 422（TS ArrayNotEmpty → 400，FastAPI 刻意 422，见 schemas/user.py）
+        # 12. 空数组 422
         r = await client.put(
             f"/users/{user_id}/roles", headers=admin_headers, json={"roleCodes": []}
         )
@@ -274,7 +273,7 @@ async def main() -> None:
             13,
             r.status_code == 200
             and body["status"] == 0
-            and body["realName"] == "冒烟改名",  # 未传字段不改动
+            and body["realName"] == "冒烟改名", # 未传字段不改动
             f"PUT /users/{{id}} status=0 → realName={body.get('realName')}",
         )
 
@@ -327,7 +326,7 @@ async def main() -> None:
             json={"username": new_username, "password": created_password},
         )
         body = r.json()
-        new_user_id = body["id"]  # 供下方权限接口用例复用（未被删除，仅 ROLE_USER）
+        new_user_id = body["id"] # 供下方权限接口用例复用（未被删除，仅 ROLE_USER）
         check(
             18,
             r.status_code == 201
@@ -337,11 +336,11 @@ async def main() -> None:
             and body["email"] is None
             and body["realName"] is None
             and "password" not in body
-            and "emailVerified" not in body,  # UserVO 本就不含该字段
+            and "emailVerified" not in body, # UserVO 本就不含该字段
             f"POST /users 最小字段 → {r.status_code} roleCodes={body.get('roleCodes')}",
         )
 
-        # 18.1 用户名重复 409（createUser 只查 username，不查 email——TS 同款）
+        # 18.1 用户名重复 409
         r = await client.post(
             "/users",
             headers=admin_headers,
@@ -353,7 +352,7 @@ async def main() -> None:
             f"重复用户名 → {r.status_code} {r.json()}",
         )
 
-        # 18.2 空数组回退默认 ROLE_USER（TS `?.length ? : ` 语义）
+        # 18.2 空数组回退默认 ROLE_USER
         r = await client.post(
             "/users",
             headers=admin_headers,
@@ -365,8 +364,7 @@ async def main() -> None:
             f"roleCodes=[] → {r.status_code} roleCodes={r.json().get('roleCodes')}",
         )
 
-        # 18.3 未知角色 404，且用户已留存（TS 非事务边界：先 save 后 replaceRoles，
-        # replaceRoles 抛异常用户不回滚）——锁定该 quirk
+        # 18.3 未知角色 404，且用户已留存——锁定该 quirk
         r = await client.post(
             "/users",
             headers=admin_headers,
@@ -382,7 +380,7 @@ async def main() -> None:
             r.status_code == 200
             and len(orphan) == 1
             and orphan[0]["roleCodes"] == [],
-            "角色校验失败的用户仍留存（无角色，TS 两次独立 save 同款）",
+            "角色校验失败的用户仍留存",
         )
 
         # 18.5 全字段创建：status=0 / 指定角色 / email+realName+avatar 均落库

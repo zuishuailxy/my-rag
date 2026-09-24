@@ -29,7 +29,7 @@ BASE = "http://testserver/api/v1"
 _TYPE = "SmokeGraphType"
 _NAME = f"SmokeGraphEntity_{uuid.uuid4().hex[:8]}"
 _DESC = f"{_NAME} 描述文本用于检索命中验证"
-_KEYWORD = _NAME  # 用实体名作为关键词，稳定命中
+_KEYWORD = _NAME # 用实体名作为关键词，稳定命中
 
 _results: list[str] = []
 
@@ -78,7 +78,7 @@ async def main() -> None:
 
     # 1) 写入临时实体
     await _seed_entity()
-    print(f"   准备：写入 Neo4j 临时实体 {_NAME} / type={_TYPE}")
+    print(f" 准备：写入 Neo4j 临时实体 {_NAME} / type={_TYPE}")
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

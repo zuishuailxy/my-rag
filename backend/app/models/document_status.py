@@ -1,5 +1,5 @@
 """
-文档状态与流转规则（对应 TS document-status.ts）
+文档状态与流转规则
 
 状态值与 kh_document.status 一致：
 - 0 Draft：草稿，不可被检索
@@ -16,10 +16,10 @@ from enum import IntEnum
 class DocumentStatus(IntEnum):
     """文档状态（与 kh_document.status 对齐）"""
 
-    DRAFT = 0  # 草稿
-    PUBLISHED = 1  # 已发布
-    ARCHIVED = 2  # 已归档：不会作为知识被检索
-    PENDING_REVIEW = 3  # 待审核（提交发布后、审核完成前）
+    DRAFT = 0 # 草稿
+    PUBLISHED = 1 # 已发布
+    ARCHIVED = 2 # 已归档：不会作为知识被检索
+    PENDING_REVIEW = 3 # 待审核（提交发布后、审核完成前）
 
 
 # 各状态中文名，供列表/详情展示

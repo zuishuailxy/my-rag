@@ -1,7 +1,7 @@
 """
 bigint（雪花 ID / 外键 ID）解析工具
 
-背景：TS 侧实体的 id / categoryId / teamId / authorId 等列都是 PostgreSQL BIGINT，
+背景：，
 经 bigintTransformer 在 DTO 与响应中以字符串表示（避免 JS Number 精度丢失）。
 Python 侧同样在 DTO 用 `str`，落库前需要转 `int`。
 

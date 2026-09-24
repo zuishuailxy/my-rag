@@ -1,12 +1,10 @@
-"""文档列表 / 详情可见性 E2E 冒烟（真实 PG + Mongo；裸 FastAPI app + ASGITransport）
-
-对应 TS `DocumentService.findAll(query, user)` 与 `findOne(id, true, user)`：
+"""文档列表 / 详情可见性 E2E 冒烟（真实 PG + Mongo；裸 FastAPI app + ASGITransport）)` 与 `findOne(id, true, user)`：
 普通用户只能看到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」，
 ADMIN / REVIEWER 不受限。
 
 覆盖：
-  1) GET /documents       HTTP 视角：user / admin / reviewer 三份可见集合
-  2) GET /documents/{id}  HTTP 视角：可读 200，不可读 403
+  1) GET /documents HTTP 视角：user / admin / reviewer 三份可见集合
+  2) GET /documents/{id} HTTP 视角：可读 200，不可读 403
   3) 服务层 find_all / find_one 与 HTTP 同口径（scope=None = 不过滤、
      unrestricted = 全量），防止「端点接线对但服务层漏判」
   4) 可见性变更（公开转私有 + 换到非成员团队）后列表 / 详情立即失效 ——
@@ -14,14 +12,14 @@ ADMIN / REVIEWER 不受限。
   5) 零残留
 
 数据准备（标题共用唯一前缀，便于精确断言，不受库里既有语料干扰）：
-  PUB         is_public=true,  status=1, author=admin
-  OWN         is_public=false, status=1, author=user(003)   → 仅本人可见
-  OWN_DRAFT   is_public=false, status=0, author=user(003)   → 自己的草稿也要可见
-  TEAM_IN     is_public=false, status=1, author=admin, team=user 所在团队
-  TEAM_OUT    is_public=false, status=1, author=admin, team=user 不在的团队
-  OTHER_DRAFT is_public=false, status=0, author=admin       → 他人的草稿不可见
+  PUB is_public=true, status=1, author=admin
+  OWN is_public=false, status=1, author=user(003) → 仅本人可见
+  OWN_DRAFT is_public=false, status=0, author=user(003) → 自己的草稿也要可见
+  TEAM_IN is_public=false, status=1, author=admin, team=user 所在团队
+  TEAM_OUT is_public=false, status=1, author=admin, team=user 不在的团队
+  OTHER_DRAFT is_public=false, status=0, author=admin → 他人的草稿不可见
 
-注意：document.create 恒以登录者为作者（对齐 TS，防伪造 authorId），
+注意：document.create 恒以登录者为作者，
 故「本人」用例必须用该用户自己的 token 创建，不能由 admin 代建。
 
 用法：
@@ -34,22 +32,22 @@ import time
 
 sys.path.insert(0, ".")
 
-import httpx  # noqa: E402
-from sqlalchemy import delete, text  # noqa: E402
+import httpx # noqa: E402
+from sqlalchemy import delete, text # noqa: E402
 
-from app.common.document_access import access_from_user  # noqa: E402
-from app.core.config import settings  # noqa: E402
-from app.db.mongo import get_document_content_collection  # noqa: E402
-from app.db.session import async_session_factory, engine  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models.document import DocumentEntity  # noqa: E402
-from app.schemas.auth import AuthUser  # noqa: E402
-from app.schemas.document import DocumentQuery  # noqa: E402
-from app.services.document import DocumentService  # noqa: E402
-from app.services.team import team_service  # noqa: E402
+from app.common.document_access import access_from_user # noqa: E402
+from app.core.config import settings # noqa: E402
+from app.db.mongo import get_document_content_collection # noqa: E402
+from app.db.session import async_session_factory, engine # noqa: E402
+from app.main import app # noqa: E402
+from app.models.document import DocumentEntity # noqa: E402
+from app.schemas.auth import AuthUser # noqa: E402
+from app.schemas.document import DocumentQuery # noqa: E402
+from app.services.document import DocumentService # noqa: E402
+from app.services.team import team_service # noqa: E402
 
 sys.path.insert(0, "scripts")
-from smoke_auth import (  # noqa: E402
+from smoke_auth import ( # noqa: E402
     SEED_ADMIN_ID,
     SEED_ADMIN_USERNAME,
     SEED_REVIEWER_ID,
@@ -161,7 +159,7 @@ async def main() -> None:
     others = [t for t in all_team_ids if t not in my_team_ids]
     assert others, "库里只有一个团队，无法构造「非成员团队」用例"
     other_team = others[0]
-    print(f"   user(003) 团队={my_team_ids}，成员团队={member_team}，非成员团队={other_team}")
+    print(f" user(003) 团队={my_team_ids}，成员团队={member_team}，非成员团队={other_team}")
 
     doc_ids: list[str] = []
     try:
@@ -199,7 +197,7 @@ async def main() -> None:
                 client, f"{prefix}-OTHERDRAFT", False, 0, headers=admin_headers
             )
             doc_ids = [pub, own, own_draft, team_in, team_out, other_draft]
-            print(f"   准备：6 篇文档 pub={pub} own={own} ownDraft={own_draft} "
+            print(f" 准备：6 篇文档 pub={pub} own={own} ownDraft={own_draft} "
                   f"in={team_in} out={team_out} otherDraft={other_draft}")
 
             # 2) 列表可见性矩阵（HTTP）
@@ -299,7 +297,7 @@ async def main() -> None:
             query = DocumentQuery(title=prefix, page=1, page_size=50)
             async with async_session_factory() as session:
                 scoped = await svc.find_all(session, query, access_from_user(user_auth))
-                unscoped = await svc.find_all(session, query)  # scope=None → 不过滤
+                unscoped = await svc.find_all(session, query) # scope=None → 不过滤
                 admin_scoped = await svc.find_all(
                     session, query, access_from_user(admin_auth)
                 )
@@ -332,7 +330,7 @@ async def main() -> None:
                         session, team_out, scope=access_from_user(user_auth)
                     )
                     denied = False
-                except Exception as err:  # noqa: BLE001 —— 期望 403
+                except Exception as err: # noqa: BLE001 —— 期望 403
                     denied = getattr(err, "status_code", None) == 403
             check(
                 "服务层 find_one（可读）",
@@ -342,7 +340,7 @@ async def main() -> None:
             check(
                 "服务层 find_one（scope=None 不判权）",
                 detail_unscoped["id"] == team_out,
-                "None 语义是不判权（对齐 TS `user?: AuthUser`），"
+                "None 语义是不判权，"
                 f"实际 {detail_unscoped.get('id')}",
             )
             check("服务层 find_one（不可读 → 403）", denied, "应抛 403 无权查看该文档")
@@ -384,7 +382,7 @@ async def main() -> None:
             res["pg_doc"] == 0 and res["pg_chunk"] == 0 and res["mongo"] == 0,
             f"残留 {res}",
         )
-        print(f"   清理：6 篇文档已移除，残留检查 {res}")
+        print(f" 清理：6 篇文档已移除，残留检查 {res}")
 
     print()
     for line in _results:

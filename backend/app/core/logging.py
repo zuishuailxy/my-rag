@@ -23,12 +23,12 @@ uvicorn 是在 `import_from_string(app)` **之前** 完成它自己那份 dictCo
 所以这里配置的 root 不会被 uvicorn 覆盖；反过来 `--reload` 子进程重新 import 时
 也会重新走一遍本函数（dictConfig 是替换语义，不会叠加 handler）。
 
-## 相对 TS 的刻意差异及原因
+## 设计说明
 
-- **级别由 `LOG_LEVEL` 配置项控制**：NestJS 默认 INFO、没有这个开关；Python 侧
-  加开关是为了排查时不用改代码（`LOG_LEVEL=DEBUG` 即可）。
-- **uvicorn 自身日志并入统一格式**：TS 只有一个进程一套日志；Python 这边若不管，
-  启动日志会是 uvicorn 自己的 `INFO:     Started server process` 样式，与业务日志
+- **级别由 `LOG_LEVEL` 配置项控制**：默认 INFO，加开关是为了排查时不用改代码
+  （`LOG_LEVEL=DEBUG` 即可）。
+- **uvicorn 自身日志并入统一格式**：Python 这边若不统一，
+  启动日志会是 uvicorn 自己的 `INFO: Started server process` 样式，与业务日志
   两种风格混排，排查时很难读。
 """
 
@@ -37,16 +37,15 @@ import logging.config
 
 from app.core.config import settings
 
-# 输出格式：`2026-09-18 21:00:00 INFO  [DocumentService] 中文消息 key=value`
+# 输出格式：`2026-09-18 21:00:00 INFO [DocumentService] 中文消息 key=value`
 # logger 名即类名（项目约定 `getLogger("DocumentService")`），所以 `[%(name)s]`
-# 天然就是 TS 侧的 `[ClassName]` 前缀，无需额外字段。
+# 天然就是 `[ClassName]` 前缀，无需额外字段。
 _LOG_FORMAT = "%(asctime)s %(levelname)-5s [%(name)s] %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # 第三方库降噪：它们在 INFO 级别按「每个请求一行」写日志（httpx 发一次、ES 客户端
 # 再来一次、mem0 内部还一次），会把业务日志淹掉。业务 logger 不在此名单内，一律
 # 继承 root 的 LOG_LEVEL。名单只收「日志噪声确定大于价值」的库。
-#
 # ⚠️ 刻意**不含 sqlalchemy**：SQL 输出由引擎侧的 `DB_ECHO` 控制（见 config.py / db/session.py）。
 # 把 `sqlalchemy.engine` 放进来会是个**假开关** —— SQLAlchemy 的 echo 为真时，
 # `InstanceLogger.log()` 直接取 `_echo_map[echo]`（True→INFO）作为判定级别并调
@@ -113,7 +112,7 @@ def setup_logging() -> None:
             "root": {"handlers": ["console"], "level": level},
             "loggers": {
                 # uvicorn 三个 logger 原本各挂自己的 handler 与 formatter
-                # （启动日志形如 `INFO:     Uvicorn running on ...`）。这里清掉 handler
+                # （启动日志形如 `INFO: Uvicorn running on ...`）。这里清掉 handler
                 # 并打开向 root 的传播，让它们并入统一格式。
                 # ⚠️ 刻意**不写 level**：dictConfig 省略 level 时保持日志器原值，这样
                 # 命令行的 `uvicorn --log-level` 依然生效；写了就会把它静默覆盖掉。

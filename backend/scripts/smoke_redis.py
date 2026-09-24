@@ -1,4 +1,4 @@
-"""Redis 服务冒烟验证（app/db/redis.py，对应 TS src/redis/redis.service.ts）
+"""Redis 服务冒烟验证
 
 逐方法验证 get / set（含 TTL）/ delete / ttl 的语义与 ioredis 版一致：
 - 无 TTL 写入 → ttl = -1
@@ -24,7 +24,7 @@ PREFIX = "smoke:redis:"
 
 
 def ok(step: str) -> None:
-    print(f"  ✅ {step}")
+    print(f" ✅ {step}")
 
 
 async def main() -> bool:
@@ -57,7 +57,7 @@ async def main() -> bool:
 
         # ---------- 4) delete 返回删除个数 ----------
         n1 = await redis_service.delete(key1)
-        n2 = await redis_service.delete(key1)  # 再删一次：0
+        n2 = await redis_service.delete(key1) # 再删一次：0
         assert n1 == 1 and n2 == 0, f"delete 返回值异常：{n1}, {n2}"
         assert await redis_service.get(key1) is None
         ok("delete 1 → 0 + 删除后 get=None")
@@ -82,7 +82,7 @@ async def main() -> bool:
         keys = [k async for k in client.scan_iter(match=f"{PREFIX}*")]
         if keys:
             await redis_service.delete(*keys)
-            print(f"  🧹 已清理冒烟键 {len(keys)} 个")
+            print(f" 🧹 已清理冒烟键 {len(keys)} 个")
         await redis_service.close()
 
     print(f"\n全部通过 ✅（Redis {settings.REDIS_HOST}:{settings.REDIS_PORT} db={settings.REDIS_DB}）")

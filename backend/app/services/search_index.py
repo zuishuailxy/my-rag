@@ -1,5 +1,5 @@
 """
-文档级全文搜索索引（对应 TS SearchIndexService，写入 Elasticsearch `kh_document`）
+文档级全文搜索索引
 
 与 RAG 向量索引的区别：
 - 这里「整篇文档」一条记录（标题 / 摘要 / 正文），给关键词搜索用
@@ -8,7 +8,7 @@
 <p>仅写入 Elasticsearch；ES 不可用时跳过写入并打日志（不抛错），
 避免检索故障拖垮发布链路。</p>
 
-客户端复用 app.db.es 单例（对应 TS 各 service 各自 new Client）。
+客户端复用 app.db.es 单例。
 """
 import logging
 from collections.abc import Mapping
@@ -36,8 +36,8 @@ DOCUMENT_INDEX_SETTINGS: dict[str, Any] = {
     "number_of_replicas": 0,
 }
 
-# 字段名保持 camelCase：与 TS DocumentPipelinePublisher.buildSearchIndexData 一致
-# （已有索引 / TS 侧数据可平滑复用）。
+# 字段名保持 camelCase：
+# 
 # 中文正文走 IK 分词（镜像自带 analysis-ik）：索引期细粒度 ik_max_word，查询期 ik_smart。
 DOCUMENT_MAPPINGS: dict[str, Any] = {
     "properties": {
@@ -51,7 +51,7 @@ DOCUMENT_MAPPINGS: dict[str, Any] = {
         "categoryId": {"type": "keyword"},
         "authorId": {"type": "keyword"},
         # 可见性过滤用（公开 ∪ 本人 ∪ 所在团队）；必须显式 keyword，
-        # 否则动态映射会把它建成 text，`terms` 查询语义会不对（对齐 TS mapping）
+        # 否则动态映射会把它建成 text，`terms` 查询语义会不对
         "teamId": {"type": "keyword"},
         "viewCount": {"type": "integer"},
         "likeCount": {"type": "integer"},
@@ -68,7 +68,7 @@ class SearchIndexService:
     """文档级全文搜索索引（ES kh_document）"""
 
     async def ensure_es_index(self) -> None:
-        """索引不存在则创建 mapping（幂等，对应 TS ensureEsIndex）"""
+        """索引不存在则创建 mapping"""
         await es_service.ensure_index(
             DOCUMENT_INDEX,
             settings_body=DOCUMENT_INDEX_SETTINGS,
@@ -98,7 +98,7 @@ class SearchIndexService:
                 },
             )
             return True
-        except Exception as err:  # noqa: BLE001 —— 索引不存在等情形均降级
+        except Exception as err: # noqa: BLE001 —— 索引不存在等情形均降级
             logger.warning("kh_document 可见性 mapping 更新失败：%s", err)
             return False
 
@@ -114,7 +114,7 @@ class SearchIndexService:
         chunk 侧 es_chunk_index_service.update_visibility 的文档级版本：文档由公开转
         私有后若不同步，未授权用户仍能通过 POST /search 搜到该文档的标题与摘要。
 
-        与 TS search-index.service.ts:updateVisibility 同口径：按 _id（= 文档 ID）
+：按 _id（= 文档 ID）
         **单条 update**，不是 update_by_query —— 差别在「文档不在索引里」时的表现：
         update 会抛 document_missing_exception → 落到 WARN 分支；update_by_query 则是
         updated=0 静默返回 True，会把「这篇文档压根没进过索引」这种异常伪装成成功。
@@ -141,7 +141,7 @@ class SearchIndexService:
             )
             logger.info("文档可见性已更新：documentId=%s", document_id)
             return True
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             message = str(err)
             # 索引不存在 = 没有可更新的文档，视作已同步（与 chunk 侧同一约定）
             if "index_not_found" in message:
@@ -185,7 +185,7 @@ class SearchIndexService:
             logger.debug("ES 文档不存在，跳过删除：documentId=%s", doc_id)
             return
         except Exception as err:
-            # 对齐 TS：删除失败不阻断下架流程，只记日志
+            # 只记日志
             logger.warning("ES 删除失败：documentId=%s, %s", doc_id, err)
             return
         logger.info("搜索索引已删除：documentId=%s", doc_id)
@@ -200,7 +200,7 @@ class SearchIndexService:
         author_id: str | None = None,
         scope: DocumentAccessScope | None = None,
     ) -> dict[str, Any]:
-        """关键词全文检索（对应 TS SearchIndexService.searchDocuments）
+        """关键词全文检索
 
         命中 kh_document 的 title / summary / content（IK 分词）；支持按分类 / 作者过滤，
         返回关键词高亮片段（ES 默认 <em> 包裹）。ES 不可用时返回空分页（不抛错）。
@@ -209,10 +209,10 @@ class SearchIndexService:
         ADMIN / REVIEWER 的 scope.unrestricted 时不加过滤。scope 缺省按
         empty_scope 兜底（只能看公开），**不会**退化成不过滤。
         """
-        # 可见性字段取 DOC_VISIBILITY_FIELDS（camelCase），与 TS ES_DOC_VISIBILITY_FIELDS 对应。
+        # 可见性字段取 DOC_VISIBILITY_FIELDS（camelCase）。
         # 字段缺失或未回填的历史记录会因 term 不命中而对外不可见（偏保守，不泄露）。
         scope = scope or empty_scope()
-        # TS: Math.min(params.pageSize ?? 10, 50) —— schema 已限 50，这里双保险
+        #(params.pageSize ?? 10, 50) —— schema 已限 50，这里双保险
         page_size = min(page_size, 50)
         from_ = (page - 1) * page_size
 
@@ -221,7 +221,7 @@ class SearchIndexService:
             logger.warning("跳过搜索查询（ES 不可用）")
             return {"items": [], "total": 0, "page": page, "pageSize": page_size}
 
-        # 刻意差异（TS searchDocuments 无此行）：先确保索引存在再搜。ensure_index 幂等，
+        # 刻意差异：先确保索引存在再搜。ensure_index 幂等，
         # 代价仅一次 HEAD/GET；好处是首个空库上搜索不会因 index_not_found 被 catch 吞成
         # 「搜索查询失败」告警。行为等价（都返回空分页），无副作用。
         await self.ensure_es_index()
@@ -291,8 +291,7 @@ class SearchIndexService:
                     "categoryId": src.get("categoryId"),
                     "tags": src.get("tags"),
                     "authorId": src.get("authorId"),
-                    # 可见性字段一并回传（对齐 TS `teamId: src.teamId ?? null` /
-                    # `isPublic: src.isPublic ?? null`）：前端据此展示「公开 / 团队 / 私有」
+                    # 可见性字段一并回传：前端据此展示「公开 / 团队 / 私有」
                     # 标签，也是排查「为什么这条我能搜到」的依据
                     "teamId": src.get("teamId"),
                     "isPublic": src.get("isPublic"),
@@ -311,7 +310,7 @@ class SearchIndexService:
 
 
 def _utc_iso() -> str:
-    """ES date 字段用的 UTC ISO-8601（对应 TS new Date().toISOString()）"""
+    """ES date 字段用的 UTC ISO-8601（).toISOString()）"""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 

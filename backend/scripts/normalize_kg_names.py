@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, ".")
 
-from app.services.graph_build import graph_build_service  # noqa: E402
+from app.services.graph_build import graph_build_service # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("NormalizeKgNames")

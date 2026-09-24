@@ -26,7 +26,7 @@ def build_test_xlsx() -> bytes:
     ws.append(["指标", "数值", "备注"])
     ws.append(["A", 100, True])
     ws.append(["B", 1.5, "小数"])
-    ws.append(["C", 100.0, None])          # 整数浮点 → "100"；稀疏行：末列空
+    ws.append(["C", 100.0, None]) # 整数浮点 → "100"；稀疏行：末列空
     ws.append(["D", datetime.datetime(2026, 1, 2, 3, 4, 5), "日期"])
     wb.create_sheet("空表")
     buf = io.BytesIO()
@@ -41,7 +41,7 @@ def main() -> None:
     assert cell_to_string(True) == "True"
     assert cell_to_string(100) == "100"
     assert cell_to_string(1.5) == "1.5"
-    assert cell_to_string(100.0) == "100"                      # 整数浮点去 .0
+    assert cell_to_string(100.0) == "100" # 整数浮点去 .0
     assert cell_to_string(datetime.datetime(2026, 1, 2, 3, 4, 5)) == "2026-01-02T03:04:05.000"
     assert cell_to_string(object()) == str(object())
     print("1) cell_to_string OK")
@@ -57,7 +57,7 @@ def main() -> None:
     assert "| --- | --- | --- |" in md, "表头分隔行丢失"
     assert "| A | 100 | True |" in md, "整数/布尔单元格异常"
     assert "| B | 1.5 | 小数 |" in md, "小数单元格异常"
-    assert "| C | 100 |  |" in md, "整数浮点或稀疏行对齐异常"
+    assert "| C | 100 | |" in md, "整数浮点或稀疏行对齐异常"
     assert "| D | 2026-01-02T03:04:05.000 | 日期 |" in md, "日期单元格异常"
     # 空表后应有空行分隔（空 sheet 保留标题与空行）
     assert "## 空表" in md and md.rstrip().endswith("## 空表")

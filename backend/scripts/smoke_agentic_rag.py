@@ -1,4 +1,4 @@
-"""Agentic RAG 冒烟（对应 TS ai/ai-stream.service.ts createTurnAgent / packRetrieveResult）
+"""Agentic RAG 冒烟
 
 覆盖（**不依赖 ES/PG/Redis 网络**；工具逻辑用假 retrieval/rewrite/graph 注入）：
 1. system_for_plan：5 路意图的循环指令 / 工具禁用语都在（含 retrieve_graph 并行提示）
@@ -164,7 +164,7 @@ async def main() -> None:
     # kb（allowRetrieve && allowGraph）走「并行首次调用」分支；web 走禁用语
     assert "并行调用" in p_kb and "图谱建议检索词「差旅 / 审批」" in p_kb, p_kb
     assert "并行调用" not in p_web and "不要调用 retrieve_graph" in p_web, p_web
-    print("   1) system_for_plan ✓ 5 路意图指令/禁用语齐全（含 retrieve_graph 并行）")
+    print(" 1) system_for_plan ✓ 5 路意图指令/禁用语齐全（含 retrieve_graph 并行）")
 
     # 2) _pack_retrieve_result：全局编号 + 事件 + context
     persist: list[dict] = []
@@ -183,7 +183,7 @@ async def main() -> None:
         "source-document",
     ], w2.events
     assert w2.events[1]["title"] == "[2] 文档-B", w2.events[1]
-    print("   2) _pack_retrieve_result ✓ 全局编号 1→2,3、events、context [n]")
+    print(" 2) _pack_retrieve_result ✓ 全局编号 1→2,3、events、context [n]")
 
     # 3) create_turn_agent 按 plan 挂工具
     saved_llm = ai_stream_service._llm
@@ -209,7 +209,7 @@ async def main() -> None:
             agent = ai_stream_service.create_turn_agent(None, 5, [], _plan(intent), "问题")
             got = set(_agent_tools(agent).keys())
             assert got == expected, f"{intent}: 期望 {expected}，实际 {got}"
-        print("   3) create_turn_agent ✓ 5 路意图工具挂载正确")
+        print(" 3) create_turn_agent ✓ 5 路意图工具挂载正确")
     finally:
         ai_stream_service._llm = saved_llm
 
@@ -251,7 +251,7 @@ async def main() -> None:
         assert res3["insufficient"] is True and "最多检索两次" in res3.get("error", ""), res3
         # top_k 未传时应回退请求默认值 5（防「工具参数遮蔽外层默认值」回归）
         assert fake_retr.calls == [("差旅审批", 5), ("差旅审批-改写", 5)], fake_retr.calls
-        print("   4) retrieve_knowledge ✓ 首轮 insufficient、改写再查切题、最多两次、top_k 回退默认")
+        print(" 4) retrieve_knowledge ✓ 首轮 insufficient、改写再查切题、最多两次、top_k 回退默认")
     finally:
         ai_stream_mod.hybrid_retrieval_service = saved_retr
         ai_stream_mod.chat_query_rewrite_service = saved_rewr
@@ -271,7 +271,7 @@ async def main() -> None:
         assert KH_INTERNAL_TAG in cfg["tags"], "应带 kh-internal tag 供兜底过滤"
     finally:
         var_child_runnable_config.reset(tok)
-    print("   5) 隔离配置 ✓ 空 callbacks + kh-internal tag（对应 TS invokeIsolated）")
+    print(" 5) 隔离配置 ✓ 空 callbacks + kh-internal tag")
 
     # 6) retrieve_graph 工具 + 图谱纯函数
     # 6a) 纯函数（split / format / merge）
@@ -322,7 +322,7 @@ async def main() -> None:
         assert res["insufficient"] is False, res
         # keywords = plan.graph_queries（差旅/审批）+ 工具入参（发票）
         assert fake_graph.calls == [(["差旅", "审批", "发票"], 8)], fake_graph.calls
-        print("   6) retrieve_graph ✓ 纯函数 + 工具（plan 词 + 入参、关系/来源/context）")
+        print(" 6) retrieve_graph ✓ 纯函数 + 工具（plan 词 + 入参、关系/来源/context）")
     finally:
         ai_stream_mod.graph_build_service = saved_graph
         ai_stream_service._llm = saved_llm

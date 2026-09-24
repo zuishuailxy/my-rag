@@ -1,13 +1,11 @@
 """
-权限模型（PostgreSQL kh_permission）
-
-对应 TS src/user/entities/permission.entity.ts（字段逐字对齐）。
+权限模型（PostgreSQL kh_permission））。
 schema 真相源：init-scripts/postgresql/init.sql；应用启动 create_all 只建不 ALTER。
 
-权限类型：1 菜单 2 按钮 3 接口（TS entity 为 number，保持 int + 模块常量）。
+权限类型：1 菜单 2 按钮 3 接口。
 permission_code 是运行时校验用的唯一编码（如 document:create、system:user）。
 
-⚠️ TS 实体的 id / parentId 经 bigintTransformer 在应用层是 string；Python ORM 层用 int
+；Python ORM 层用 int
 （BigInteger），转 string 的职责在 DTO / 响应层（与 role / user 模型同款约定，
 见 app/models/role.py 注释）。DB 列类型必须与 init.sql 的 BIGINT 一致，不能在 ORM 层
 改成 String。
@@ -86,9 +84,9 @@ class Permission(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
-    # onupdate 系推断补齐（2026-09-03）：TS permission.entity.ts 本会话无原文可核，
+    # onupdate 系推断补齐（2026-09-03）：，
     # 但 ① init.sql 只有 DEFAULT NOW() 无触发器；② 同表族 document/user/team 的
-    # updated_at 均为 @UpdateDateColumn。若与 TS 实体不符再回退。
+    # updated_at 均为 @UpdateDateColumn。。
     # ⚠️ commit 后读本属性会触发惰性刷新 → MissingGreenlet，先 await session.refresh(实体)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

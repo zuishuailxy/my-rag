@@ -21,7 +21,7 @@ from app.models.base import Base
 
 
 class DocChunk(Base):
-    """文档分片（含文本向量，支撑语义检索；对应 TS VectorIndexService 的 kh_chunk）"""
+    """文档分片"""
 
     __tablename__ = "doc_chunk"
 

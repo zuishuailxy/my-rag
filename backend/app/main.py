@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import models  # noqa: F401  确保所有 ORM 模型注册到 Base.metadata
+from app import models # noqa: F401 确保所有 ORM 模型注册到 Base.metadata
 from app.api.auth_route import auth_router, check_route_classes, public
 from app.api.v1 import api_router
 from app.core.config import settings
@@ -74,12 +74,12 @@ async def lifespan(app: FastAPI):
     await _init_database_with_retry()
     # ES：健康检查，不可用只降级不阻断启动（索引写入时跳过）
     await es_service.start()
-    # kh_chunk 可见性字段补齐（对应 TS VectorIndexService.ensureVisibilityMapping）：
+    # kh_chunk 可见性字段补齐：
     # 老索引 mapping 没有 is_public，检索可见性过滤依赖该字段，启动时增量补上
     from app.services.es_index import es_chunk_index_service
 
     await es_chunk_index_service.ensure_visibility_mapping()
-    # kh_document 同理（对应 TS SearchIndexService 侧）：老索引 mapping 没有 teamId，
+    # kh_document 同理：老索引 mapping 没有 teamId，
     # 而文档级全文检索的可见性过滤用 `terms teamId` —— 若靠动态映射建成 text 会静默失效
     from app.services.search_index import search_index_service
 
@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
     await graph_build_service.start()
     # Redis：验证码等短时存储；连接失败只告警不阻断启动（后续命令自动重连）
     await redis_service.start()
-    # MQ：先注册消费者再连接；连接失败抛错 → 应用启动失败（与 TS onModuleInit 一致）
+    # MQ：先注册消费者再连接；连接失败抛错 → 应用启动失败
     register_consumers()
     await _start_rabbitmq_with_retry(rabbitmq_service)
     # 鉴权自检：告警「route_class 非 AuthRoute 因而不受保护」的路由（漏写会静默裸奔）
@@ -112,14 +112,14 @@ def _inject_bearer_security_scheme(app: FastAPI) -> None:
 
     def custom_openapi() -> dict[str, Any]:
         if app.openapi_schema:
-            return app.openapi_schema  # type: ignore[return-value]
+            return app.openapi_schema # type: ignore[return-value]
         schema = original_openapi()
         schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
         schemes.setdefault("HTTPBearer", {"type": "http", "scheme": "bearer"})
         app.openapi_schema = schema
         return schema
 
-    app.openapi = custom_openapi  # type: ignore[method-assign]
+    app.openapi = custom_openapi # type: ignore[method-assign]
 
 
 def create_app() -> FastAPI:

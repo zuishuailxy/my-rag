@@ -1,12 +1,12 @@
 """
-文档端点权限冒烟（逐接口 @RequirePermission 对齐 TS 后的回归验证）
+文档端点权限冒烟
 
 验证点：
-  1  USER（补齐 document:edit / document:delete 种子后）可创建 / 列表 / 更新 / 删除文档
+  1 USER（补齐 document:edit / document:delete 种子后）可创建 / 列表 / 更新 / 删除文档
      —— 证明新增的 document:edit(13) / document:delete(14) 种子生效。
-  2  REVIEWER（仅有 document:list / document:review，无 document:create）POST /documents
+  2 REVIEWER（仅有 document:list / document:review，无 document:create）POST /documents
      → 403「权限不足」—— 证明 require_permission 守卫在路由层拦截。
-  3  REVIEWER GET /documents → 200（仍有 document:list，无回归）。
+  3 REVIEWER GET /documents → 200（仍有 document:list，无回归）。
 
 登录态：直接用种子账号签发 JWT（smoke_auth.bearer_headers），不依赖登录接口。
 
@@ -80,7 +80,7 @@ def main() -> None:
             r = client.delete(f"/api/v1/documents/{doc_id}")
             print("4) USER DELETE /documents/{id}:", r.status_code)
             assert r.status_code == 200 and r.json()["deleted"] is True
-            doc_id = None  # 已软删，cleanup 不再物理删
+            doc_id = None # 已软删，cleanup 不再物理删
 
         # ② REVIEWER 无 document:create → 创建被守卫 403
         with TestClient(

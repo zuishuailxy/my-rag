@@ -1,5 +1,5 @@
 """
-文档分块服务（对应 TS ChunkingService，基于 LangChain RecursiveCharacterTextSplitter）
+文档分块服务
 
 分块策略：
 1. Markdown 感知分隔符（标题 / 代码块 / 水平线 / 段落…）递归切分；
@@ -24,10 +24,10 @@ logger = logging.getLogger("ChunkingService")
 # token → 字符粗略换算（中英混合保守值：约 1 token ≈ 2 字符）
 CHARS_PER_TOKEN = 2.0
 
-# 匹配块内 Markdown ATX 标题行（对应 TS HEADING_LINE）
+# 匹配块内 Markdown ATX 标题行
 HEADING_LINE = re.compile(r"^(#{1,6})\s+(.+)$", re.M)
 
-# TS 在 markdown 内置分隔符前补 '\n# '（一级标题），保持同样顺序
+#'\n# '（一级标题），保持同样顺序
 SEPARATORS = [
     "\n# ",
     *RecursiveCharacterTextSplitter.get_separators_for_language(Language.MARKDOWN),

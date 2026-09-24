@@ -7,7 +7,7 @@
   4. ES 层验证 kh_chunk 已含该文档 chunk（双写落盘）
   5. 管理员混合检索唯一关键词 → 200 命中该文档 chunk；
      回归锁定 `_to_camel_row`：documentId/categoryId/authorId/teamId/chunkId 一律 str
-     （对齐 TS bigintTransformer，防 JS Number 精度丢失），score 为 float，content 非空；
+，score 为 float，content 非空；
      两路都召回 → bm25Score / vectorScore 均 > 0（对齐 ES ChunkHit 通道原始分）
   6. 空串 query → 200 items=[]（service 空查询短路，不 500）
   7. 清理：ES kh_chunk（delete_by_query）→ PG 物理删文档（级联 doc_chunk）→ Mongo content
@@ -64,7 +64,7 @@ def check(step: str, ok: bool, detail: str) -> None:
 async def _create_roleless_user(client: httpx.AsyncClient, tag: str) -> tuple[str, str]:
     """创建临时用户并清空其角色关联 → 零权限码（403 用例用，零污染由 cleanup 负责）
 
-    CreateUserRequest.roleCodes 空数组会回退 ROLE_USER（对齐 TS），
+    CreateUserRequest.roleCodes 空数组会回退 ROLE_USER，
     AssignRolesRequest.roleCodes 又 min_length=1 拒空数组，故建用户后直连 DB 删角色行。
     """
     username = f"{tag}{int(time.time() * 1000)}"
@@ -118,7 +118,7 @@ async def cleanup(doc_id: str | None) -> None:
         # kh_document 物理删除 → doc_chunk FK ON DELETE CASCADE 级联清理
         await conn.execute(delete(DocumentEntity).where(DocumentEntity.id == int(doc_id)))
     await get_document_content_collection().delete_one({"documentId": str(doc_id)})
-    print("   清理：ES kh_chunk + PG 文档（级联 doc_chunk）+ Mongo content 已移除")
+    print(" 清理：ES kh_chunk + PG 文档（级联 doc_chunk）+ Mongo content 已移除")
 
 
 async def main() -> None:
@@ -159,7 +159,7 @@ async def main() -> None:
             )
             check("创建文档", r.status_code == 201, f"期望 201，实际 {r.status_code} body={r.text[:200]}")
             doc_id = r.json()["id"]
-            print(f"   准备：文档 {doc_id} 已发布")
+            print(f" 准备：文档 {doc_id} 已发布")
 
             r = await client.post(
                 f"{BASE}/documents/{doc_id}/index",
@@ -172,7 +172,7 @@ async def main() -> None:
                 f"期望 200 chunkCount>=2，实际 {r.status_code} body={body}",
             )
             chunk_count = body["chunkCount"]
-            print(f"   POST /index → chunkCount={chunk_count}")
+            print(f" POST /index → chunkCount={chunk_count}")
 
             # 4) ES 层验证 kh_chunk 已落盘该文档 chunk（关键词通道数据就绪）
             raw = await es_service.client.search(
@@ -235,7 +235,7 @@ async def main() -> None:
             # 6) 空串 query → 200 items=[]（service 空查询短路）
             r = await client.post(
                 f"{BASE}/search/hybrid",
-                json={"query": "   "},
+                json={"query": " "},
                 headers=bearer_headers(),
             )
             body = r.json()

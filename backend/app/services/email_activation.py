@@ -1,11 +1,11 @@
 """
-邮箱激活令牌（对应 TS src/auth/email-activation.service.ts）
+邮箱激活令牌
 
 双 key 设计（Redis 存储，24 小时有效）：
 - token → userId：用户点激活链接时，用 token 查出要激活的账号
 - userId → token：同一用户只保留一个有效 token，重发时先按 userId 找到并作废旧的
 
-token 用 secrets.token_hex(32)（等价 TS randomBytes(32).toString('hex')，64 个 hex 字符）。
+token 用 secrets.token_hex(32)（).toString('hex')，64 个 hex 字符）。
 消费即失效：consumeToken 校验通过后两侧 key 一起删除，一次性使用。
 """
 import logging
@@ -18,7 +18,7 @@ logger = logging.getLogger("EmailActivationService")
 TOKEN_PREFIX = "email:activation:token:"
 USER_PREFIX = "email:activation:user:"
 
-# 激活令牌有效期（24 小时；导出常量与 TS 一致，供注册流程/测试引用）
+# 激活令牌有效期
 ACTIVATION_TOKEN_TTL_SECONDS = 24 * 3600
 
 
@@ -34,7 +34,7 @@ class EmailActivationService:
         return f"{USER_PREFIX}{user_id}"
 
     async def create_token(self, user_id: str) -> str:
-        """为用户生成激活令牌；重发时作废旧令牌（对应 TS createToken）"""
+        """为用户生成激活令牌；重发时作废旧令牌"""
         existing = await redis_service.get(self._user_key(user_id))
         if existing:
             await redis_service.delete(self._token_key(existing))

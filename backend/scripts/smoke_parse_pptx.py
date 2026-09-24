@@ -27,7 +27,7 @@ def build_test_pptx() -> bytes:
     prs = Presentation()
 
     # 第 1 页：标题 + 正文
-    slide1 = prs.slides.add_slide(prs.slide_layouts[1])  # Title and Content
+    slide1 = prs.slides.add_slide(prs.slide_layouts[1]) # Title and Content
     slide1.shapes.title.text = "产品介绍"
     slide1.placeholders[1].text = "这是第一页的正文内容。"
 

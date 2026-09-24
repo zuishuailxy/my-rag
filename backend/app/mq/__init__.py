@@ -1,1 +1,1 @@
-"""RabbitMQ 消息封装（对应 TS mq 模块）"""
+"""RabbitMQ 消息封装"""

@@ -66,9 +66,7 @@ class DocumentQuery(BaseModel):
 
 
 class DocumentUpdate(BaseModel):
-    """更新文档（字段均可选，对应 TypeORM UpdateDocumentDto）
-
-    等价于 NestJS 的 PartialType(OmitType(CreateDocumentDto, ['createBy']))：
+    """更新文档（字段均可选，对应 TypeORM UpdateDocumentDto）))：
     取 CreateDocumentDto 除 createBy 外的全部字段并改为可选，另加 updateBy。
     注意：新增字段时需与 DocumentCreate 保持同步。
 
@@ -221,7 +219,7 @@ class DocumentRemoveResponse(BaseModel):
 
 
 class UploadParseDto(BaseModel):
-    """上传解析元数据（multipart form-data 字段，对应 TS UploadParseDto）"""
+    """上传解析元数据"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 

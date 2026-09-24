@@ -49,7 +49,7 @@ from scripts.smoke_auth import (
 BASE = "http://testserver/api/v1"
 
 _TAG = f"SmokeSess_{uuid.uuid4().hex[:8]}"
-_SESSION_IDS: list[int] = []  # 所有新建会话 id，finally 兜底清理
+_SESSION_IDS: list[int] = [] # 所有新建会话 id，finally 兜底清理
 # 写过 Redis 热窗口的会话 id（第 9 步回填用）：断言中途失败也要清，
 # 否则 key 会活满 TTL（86400s），下次跑冒烟时「回填前 miss」断言会假红
 _MEM_SESSION_IDS: list[str] = []
@@ -96,7 +96,7 @@ async def _redis_ready() -> bool:
     try:
         await client.ping()
         return True
-    except Exception:  # noqa: BLE001
+    except Exception: # noqa: BLE001
         return False
 
 
@@ -119,7 +119,7 @@ async def main() -> None:
     # 不可用时这两步 SKIP 且不算通过——PG 才是本脚本的硬前置。
     redis_ok = await _redis_ready()
     if not redis_ok:
-        print("   (Redis 不可用：删除清缓存 / 回填链路两步将 SKIP，不计入通过)")
+        print(" (Redis 不可用：删除清缓存 / 回填链路两步将 SKIP，不计入通过)")
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -182,7 +182,7 @@ async def main() -> None:
         # 6) 改名：trim 生效
         r = await client.patch(
             f"{BASE}/ai/sessions/{a['id']}",
-            json={"title": f"  {_TAG} 改名  "},
+            json={"title": f" {_TAG} 改名 "},
             headers=user_headers,
         )
         check("改名 200", r.status_code == 200, f"期望 200，实际 {r.status_code}")
@@ -212,7 +212,7 @@ async def main() -> None:
 
         # 10) 删除：200 + 删后再查 404
         # 10a) 删除前先往该会话的 Redis 热窗口塞一条，用于验证「删除会清缓存」
-        #      （对齐 TS remove → shortMemory.clear）
+        # 
         if redis_ok:
             await chat_short_memory_service.save(
                 SEED_USER_ID, b["id"], [HumanMessage(f"{_TAG} 待清理的热窗口")]
@@ -236,9 +236,9 @@ async def main() -> None:
         check("删后查询 404", r.status_code == 404, f"期望 404，实际 {r.status_code}")
 
         # 10b) 删除会话同时清掉 Redis 热窗口：只删库不清缓存的话，已被删除的会话
-        #      内容会在 TTL 内继续被当作「历史记忆」召回（表现为删了还在影响回答）
+        # 内容会在 TTL 内继续被当作「历史记忆」召回（表现为删了还在影响回答）
         if not redis_ok:
-            print("   SKIP: Redis 未连接，「删除清热窗口」未验证（不算通过）")
+            print(" SKIP: Redis 未连接，「删除清热窗口」未验证（不算通过）")
         else:
             check(
                 "删除清热窗口",
@@ -323,7 +323,7 @@ async def main() -> None:
             f"count={len(rows)}",
         )
 
-    # ---- 服务层 list_recent_messages 边界直测（对应 TS listRecentMessages）----
+    # ---- 服务层 list_recent_messages 边界直测----
     print("=== list_recent_messages 边界直测 ===")
     async with async_session_factory() as db:
         sess3 = await chat_session_service.create(
@@ -354,8 +354,8 @@ async def main() -> None:
             f"contents={[m.content for m in recent]}",
         )
 
-        # 15) limit 边界：<=0 兜底 1 条（对齐 TS take: Math.max(limit,1)，
-        #     绝不退化成「不限量」）；超过总数时返回全部
+        # 15) limit 边界：<=0 兜底 1 条（)，
+        # 绝不退化成「不限量」）；超过总数时返回全部
         for bad_limit in (0, -7):
             one = await chat_session_service.list_recent_messages(
                 db, SEED_USER_ID, sid3, bad_limit
@@ -393,9 +393,9 @@ async def main() -> None:
 
 
 # 延迟导入别名（保持 import 区整洁，同时避免与 schemas 混淆）
-from app.models.ai_session import AiMessage as _AiMessage  # noqa: E402
-from app.models.ai_session import AiSession as _AiSession  # noqa: E402
-from app.schemas.ai import CreateSessionRequest as _CreateSession  # noqa: E402
+from app.models.ai_session import AiMessage as _AiMessage # noqa: E402
+from app.models.ai_session import AiSession as _AiSession # noqa: E402
+from app.schemas.ai import CreateSessionRequest as _CreateSession # noqa: E402
 
 
 async def _backfill_roundtrip(redis_ok: bool) -> None:
@@ -409,7 +409,7 @@ async def _backfill_roundtrip(redis_ok: bool) -> None:
     也不让本冒烟整体失败（主前置只有 postgres）。
     """
     if not redis_ok:
-        print("   SKIP: Redis 未连接，本步未验证（不算通过）")
+        print(" SKIP: Redis 未连接，本步未验证（不算通过）")
         return
 
     async with async_session_factory() as db:

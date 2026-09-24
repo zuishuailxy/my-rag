@@ -1,13 +1,13 @@
 """
 用户模型（PostgreSQL kh_user）
 
-已对照 TS src/user/entities/user.entity.ts 逐字段核验一致（2026-09-01）：
+（2026-09-01）：
 id / username(50) / password(255) / email?(100) / realName?(50) / avatar?(500) /
 email_verified(smallint, default 1) / status(smallint, default 1) / lastLoginAt? /
 createdAt / updatedAt / deleted(default false)。
-TS 实体的 id 经 bigintTransformer 在应用层是 string；Python ORM 层用 int，
+；Python ORM 层用 int，
 转 string 的职责在 DTO / 响应层（与 document 模型同款约定）。
-TS 实体未声明 username 唯一约束——它在 DDL 里是 partial unique index（见下方 __table_args__），
+（见下方 __table_args__），
 TypeORM 同步自数据库，Python 侧在 ORM 层显式声明以保证 create_all 语义完整。
 
 REQUIRE_EMAIL_VERIFICATION=false（默认）时注册立即可登录；true 且带邮箱注册时
@@ -42,7 +42,7 @@ from app.models.base import Base
 __all__ = ["User"]
 
 # 用户状态：0 禁用 1 启用
-# TS user.entity.ts 的 status 是 `number`（无枚举），此处保持 int + 模块常量，与 TS 对齐
+#（无枚举），此处保持 int + 模块常量，
 USER_STATUS_DISABLED = 0
 USER_STATUS_ENABLED = 1
 

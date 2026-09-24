@@ -1,5 +1,5 @@
 """
-管线共用类型定义（对应 TS src/pipeline/types/pipeline.types.ts）
+管线共用类型定义
 
 这些结构在 MQ 消息体、分块结果之间流转。
 """
@@ -28,8 +28,7 @@ class DocumentChunk:
     author_id: str | None = None
     team_id: str | None = None
     doc_status: int | None = None
-    # 是否公开（冗余自 kh_document，供 ES kh_chunk 可见性过滤用；
-    # 对应 TS DocumentChunk.isPublic → ES is_public）
+    # 是否公开
     is_public: bool = False
     publish_time: str | None = None
     # 向量；分块阶段为空，EmbeddingService 填充后写入
@@ -38,7 +37,7 @@ class DocumentChunk:
 
 @dataclass
 class ChunkHit:
-    """kh_chunk 检索命中（关键词 / 向量 / RRF 融合后共用；对齐 TS pipeline.types ChunkHit）
+    """kh_chunk 检索命中
 
     字段名保持 camelCase，与 search 输出的 chunk 详情 dict 同键，贯穿
     混合检索（keyword/vector）→ RRF 融合 → Reranker 重排全阶段复用。
@@ -96,9 +95,9 @@ class PipelineDocument:
 
 
 class SearchDocumentData(TypedDict, total=False):
-    """ES kh_document 一条记录（对应 TS PipelineOrchestrator.toSearchIndexDoc）
+    """ES kh_document 一条记录
 
-    字段名保持 camelCase，与 TS 侧写入的数据同构（已有索引可平滑复用）。
+    字段名保持 camelCase，（已有索引可平滑复用）。
     由编排器在消费侧按 documentId 拉库构建（content 取全文），写入时由
     SearchIndexService 补 indexedAt。
     """
@@ -113,7 +112,7 @@ class SearchDocumentData(TypedDict, total=False):
     isPublic: bool | None
     categoryId: str | None
     authorId: str | None
-    # 可见性过滤用（公开 ∪ 本人 ∪ 所在团队）；对齐 TS ES_DOC_VISIBILITY_FIELDS
+    # 可见性过滤用（公开 ∪ 本人 ∪ 所在团队）；
     teamId: str | None
     # 计数
     viewCount: int | None
@@ -148,7 +147,7 @@ class ExtractedRelation:
 
 @dataclass
 class ExtractionResult:
-    """单个 chunk 的抽取结果（对应 TS ExtractionResult）"""
+    """单个 chunk 的抽取结果"""
 
     chunk_id: str | None = None
     entities: list[ExtractedEntity] = field(default_factory=list)
@@ -156,7 +155,7 @@ class ExtractionResult:
 
 
 def to_iso_date(value: datetime | str | None) -> str | None:
-    """转 ISO-8601 字符串（对应 TS toIsoDate；无效值返回 None）"""
+    """转 ISO-8601 字符串"""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -168,7 +167,7 @@ def to_iso_date(value: datetime | str | None) -> str | None:
 
 
 def to_search_index_doc(doc: PipelineDocument) -> SearchDocumentData:
-    """管线快照 → ES kh_document 记录（对应 TS PipelineOrchestrator.toSearchIndexDoc）
+    """管线快照 → ES kh_document 记录
 
     放在此处而非编排器内，是为了让全量回填脚本（scripts/reindex_all_chunks.py）
     复用同一份字段映射，杜绝两处漂移（此前只在编排器内，脚本无法调用）。

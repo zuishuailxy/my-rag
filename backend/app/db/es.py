@@ -1,7 +1,7 @@
 """
-Elasticsearch 客户端封装（对应 TS 各 service 的 new Client({ node })，amqp 同款生命周期管理）
+Elasticsearch 客户端封装（)，amqp 同款生命周期管理）
 
-- start：健康检查；ES 不可用时只降级（记日志、置不可用），不阻断应用启动（与 TS onModuleInit 一致）
+- start：健康检查；ES 不可用时只降级（记日志、置不可用），不阻断应用启动
 - close：应用退出时关闭连接
 - ensure_index：通用 create-if-not-exists（resource_already_exists 幂等），供后续
   kh_chunk / kh_document 等索引服务复用
@@ -35,7 +35,7 @@ class ElasticsearchService:
         return self._client is not None
 
     async def start(self) -> None:
-        """建连 + 健康检查；失败降级为不可用，不抛错（对齐 TS）"""
+        """建连 + 健康检查；失败降级为不可用，不抛错"""
         if not settings.ELASTICSEARCH_ENABLED:
             logger.warning("Elasticsearch 已禁用（ELASTICSEARCH_ENABLED=false），检索索引将跳过写入")
             return
@@ -62,7 +62,7 @@ class ElasticsearchService:
         settings_body: dict[str, Any] | None = None,
         mappings: dict[str, Any],
     ) -> None:
-        """create-if-not-exists（幂等，对应 TS createIndexIfNotExists）
+        """create-if-not-exists
 
         客户端不可用时静默跳过；创建失败（除已存在）记日志并抛出。
         """

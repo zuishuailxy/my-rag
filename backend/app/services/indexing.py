@@ -1,15 +1,15 @@
 """
-RAG 向量索引（对应 TS VectorIndexService，写入 Elasticsearch kh_chunk → 本项目落 PostgreSQL doc_chunk）
+RAG 向量索引
 
-职责（与 TS 一一对应）：
+职责：
 - delete_by_doc_id：按 document_id 删除旧块（发布重建 / 下架时调用）
 - index_chunks：bulk 写入 / 覆盖 chunk（chunk_id 唯一，ON CONFLICT upsert，对应 ES _id 覆盖）
 
-- load_pipeline_document：Postgres 元数据 + Mongo 正文 → PipelineDocument 快照（对应 TS loadDocumentsByIds + toPipelineDoc）
-- reindex_document：单篇重建（对应 TS reindexOne，分块 → 嵌入 → 删旧 → 写新）
+- load_pipeline_document：Postgres 元数据 + Mongo 正文 → PipelineDocument 快照
+- reindex_document：单篇重建
 - index_document_vectors：按 ID 加载 + 重建的兼容入口，被 DocumentService 与 MQ 消费者调用。
 
-注意：删旧块在嵌入之后执行（有意优化 TS 的先删后建）——新数据就绪才清旧块，
+注意：删旧块在嵌入之后执行——新数据就绪才清旧块，
 重建中途失败不会留下检索空窗。
 """
 import logging
@@ -75,7 +75,7 @@ class VectorIndexService:
 
 
 def to_pipeline_document(entity: DocumentEntity, content: str) -> PipelineDocument:
-    """Postgres 实体 + Mongo 正文 → 管线统一 DTO（对应 TS toPipelineDoc）"""
+    """Postgres 实体 + Mongo 正文 → 管线统一 DTO"""
     return PipelineDocument(
         id=str(entity.id),
         title=entity.title,
@@ -110,7 +110,7 @@ async def load_pipeline_document(
 async def load_all_published_documents(
     session: AsyncSession,
 ) -> list[PipelineDocument]:
-    """加载全部已发布文档快照（对应 TS loadAllPublishedDocuments，KG BUILD_ALL 用）"""
+    """加载全部已发布文档快照"""
     result = await session.execute(
         select(DocumentEntity).where(
             DocumentEntity.deleted.is_(False),
@@ -126,9 +126,9 @@ async def load_all_published_documents(
 
 
 async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:
-    """单篇重建（对应 TS reindexOne）：分块 → 批量嵌入 → 删旧 → 写新，返回块数
+    """单篇重建：分块 → 批量嵌入 → 删旧 → 写新，返回块数
 
-    删旧块放在嵌入之后（有意优化 TS 的先删后建）：新数据就绪才清旧块，
+    删旧块放在嵌入之后：新数据就绪才清旧块，
     重建中途失败不会留下检索空窗。
     """
     if not doc.content or not doc.content.strip():
@@ -143,7 +143,7 @@ async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:
         author_id=doc.author_id,
         team_id=doc.team_id,
         doc_status=doc.status,
-        # 可见性字段冗余进 chunk，供 ES kh_chunk 可见性过滤（对齐 TS isPublic）
+        # 可见性字段冗余进 chunk，供 ES kh_chunk 可见性过滤
         is_public=bool(doc.is_public),
         publish_time=to_iso_date(doc.publish_time),
     )
@@ -155,9 +155,9 @@ async def reindex_document(session: AsyncSession, doc: PipelineDocument) -> int:
         chunk.embedding = vec
 
     svc = VectorIndexService()
-    await svc.delete_by_doc_id(session, int(doc.id))   # PG + ES kh_chunk 旧块
-    await svc.index_chunks(session, chunks)            # PG 向量（语义）
-    await es_chunk_index_service.index_chunks(chunks)  # ES 关键词（IK，方案 B；失败降级）
+    await svc.delete_by_doc_id(session, int(doc.id)) # PG + ES kh_chunk 旧块
+    await svc.index_chunks(session, chunks) # PG 向量（语义）
+    await es_chunk_index_service.index_chunks(chunks) # ES 关键词（IK，方案 B；失败降级）
 
     logger.info("RAG 索引完成：documentId=%s, chunks=%d", doc.id, len(chunks))
     return len(chunks)
@@ -172,7 +172,7 @@ async def index_document_vectors(session: AsyncSession, doc_id: int) -> int:
 
 
 def _chunk_row(chunk: DocumentChunk) -> dict:
-    """DocumentChunk → doc_chunk 行（对齐 TS buildDocMap）"""
+    """DocumentChunk → doc_chunk 行"""
     return {
         "document_id": int(chunk.document_id),
         "chunk_id": chunk.chunk_id,

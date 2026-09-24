@@ -1,11 +1,11 @@
-"""联网搜索服务（对应 TS ai/web-search.service.ts）
+"""联网搜索服务
 
-⚠️ 刻意迁移：TS 原版用 Bocha（api.bochaai.com），本项目改用 Tavily
+⚠️ 刻意迁移：（api.bochaai.com），本项目改用 Tavily
 （api.tavily.com），对外接口形状保持一致（WebSearchHit / WebSearchResult），
 供 ai_stream 的 web_search 工具调用。字段映射：
 
-- title  ← results[].title
-- url    ← results[].url
+- title ← results[].title
+- url ← results[].url
 - snippet ← results[].content（Tavily 无 summary/snippet 之分，content 即摘要）
 - siteName ← Tavily 不返回，取 URL hostname 兜底（前端展示用）
 
@@ -28,7 +28,7 @@ _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
 @dataclass
 class WebSearchHit:
-    """单条搜索命中（对应 TS WebSearchHit）"""
+    """单条搜索命中"""
 
     title: str
     url: str
@@ -38,7 +38,7 @@ class WebSearchHit:
 
 @dataclass
 class WebSearchResult:
-    """搜索结果（对应 TS WebSearchResult；error 非 None 表示本次未命中原因）"""
+    """搜索结果"""
 
     query: str
     items: list[WebSearchHit] = field(default_factory=list)
@@ -67,7 +67,7 @@ class WebSearchService:
 
         body = {
             "query": query,
-            # 对齐 TS 的 Math.min(Math.max(count, 1), 10)
+            #), 10)
             "max_results": min(max(count, 1), 10),
         }
         try:

@@ -58,7 +58,7 @@ def show(step: str, resp: httpx.Response) -> None:
         body = resp.json()
     except Exception:
         body = resp.text
-    print(f"{step:<56} {resp.status_code}  {str(body)[:100]}")
+    print(f"{step:<56} {resp.status_code} {str(body)[:100]}")
 
 
 async def mongo_version(oid: ObjectId) -> int:
@@ -125,14 +125,14 @@ async def main() -> None:
             ok &= r.status_code == 400 and "teamId" in r.json()["detail"]
 
             # 4) updateBy / authorId **已不参与校验**：服务层忽略 DTO 的这两个字段
-            #    （updateBy 恒取 JWT 操作者；authorId 不可改）→ 传非法值既不 400，
-            #    也不改变落库值。这是与 TS 对齐后的刻意行为。
+            # （updateBy 恒取 JWT 操作者；authorId 不可改）→ 传非法值既不 400，
+            # 也不改变落库值。这是后的刻意行为。
             r = await client.patch(f"{BASE}/{doc_id}", json={"updateBy": "12.5"})
             show("4) PATCH updateBy=12.5（DTO 字段已忽略）", r)
             ok &= r.status_code == 200 and r.json()["updateBy"] == SEED_ADMIN_ID
 
             r = await client.patch(f"{BASE}/{doc_id}", json={"authorId": OVER_INT64})
-            show("   PATCH authorId 超 int64（DTO 字段已忽略）", r)
+            show(" PATCH authorId 超 int64（DTO 字段已忽略）", r)
             ok &= r.status_code == 200 and r.json()["authorId"] == SEED_ADMIN_ID
 
             # 5) categoryId 超 int64 → 400（旧实现能过 int()，但 commit 时 PG 报错）
@@ -150,7 +150,7 @@ async def main() -> None:
             ok &= await mongo_version(content_oid) == base_version
             r = await client.get(f"{BASE}/{doc_id}")
             ok &= r.json()["content"] == "原始正文"
-            print(f"   → Mongo version 仍为 {base_version}，正文未被改动 ✅")
+            print(f" → Mongo version 仍为 {base_version}，正文未被改动 ✅")
 
             # 7) 合法值正常生效
             r = await client.patch(
@@ -166,7 +166,7 @@ async def main() -> None:
             ok &= r.status_code == 200 and r.json()["categoryId"] is None
 
             # 9) POST 非法 teamId → 400，且不留 Mongo 孤儿正文
-            #    （createBy / authorId 已不参与校验：服务层忽略 DTO 的这两个字段）
+            # （createBy / authorId 已不参与校验：服务层忽略 DTO 的这两个字段）
             before = await get_document_content_collection().count_documents({})
             r = await client.post(
                 BASE,
@@ -176,7 +176,7 @@ async def main() -> None:
             ok &= r.status_code == 400 and "teamId" in r.json()["detail"]
             after = await get_document_content_collection().count_documents({})
             ok &= before == after
-            print(f"   → Mongo 正文数 {before} → {after}，无孤儿 ✅")
+            print(f" → Mongo 正文数 {before} → {after}，无孤儿 ✅")
 
             # 10) POST 非法 categoryId → 400（同样先校验后写 Mongo）
             r = await client.post(
@@ -209,7 +209,7 @@ async def main() -> None:
             task_id = (await client.get(f"{BASE}/{doc_id}/reviews/current")).json()["id"]
 
             # 15) 请求体夹带非法 reviewerId → 被忽略（不再走 require_bigint，也就不 400）
-            #     审核人一律取 JWT，前端伪造不了审核身份
+            # 审核人一律取 JWT，前端伪造不了审核身份
             r = await client.post(
                 f"{BASE}/reviews/tasks/{task_id}/reject",
                 json={"reviewComment": "补充来源", "reviewerId": "string"},
@@ -223,7 +223,7 @@ async def main() -> None:
             ok &= r.status_code == 200 and r.json() is None
             r = await client.get(f"{BASE}/{doc_id}/reviews/history")
             ok &= r.status_code == 200 and r.json()[0]["reviewerId"] == SEED_ADMIN_ID
-            print("   历史首条 reviewerId =", r.json()[0]["reviewerId"], "（来自 JWT）")
+            print(" 历史首条 reviewerId =", r.json()[0]["reviewerId"], "（来自 JWT）")
 
             # 17) 驳回意见必填仍在服务层生效（不是 DTO 层的 bigint 校验，但同属请求体之外的校验）
             r = await client.post(f"{BASE}/{doc_id}/reviews/submit")

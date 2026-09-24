@@ -1,5 +1,5 @@
 """
-文档发布审核服务（对应 TS DocumentReviewService）
+文档发布审核服务
 
 与 kh_document_review 表对应：每次 submit 插入一条记录，approve / reject 回填结果。
 开关：环境变量 DOCUMENT_REQUIRE_APPROVAL（默认 true；严格等于 'false' 时 publish 免审）。
@@ -56,7 +56,7 @@ class DocumentReviewService:
         """
         是否开启发布审核（默认 true）
 
-        判定与 TS 逐字一致：`config.get('DOCUMENT_REQUIRE_APPROVAL', 'true') !== 'false'`，
+        判定：`config.get('DOCUMENT_REQUIRE_APPROVAL', 'true') !== 'false'`，
         即只有严格等于字符串 "false" 才免审。
         """
         return settings.DOCUMENT_REQUIRE_APPROVAL != "false"
@@ -75,15 +75,15 @@ class DocumentReviewService:
         若来自 Published，先清索引（审核期间不可检索）。
         同一文档已有待审记录时抛 400。
 
-        actor 为当前登录用户（TS `submitForReview(documentId, actor?)` —— **可选**参数，
+        actor 为当前登录用户（(documentId, actor?)` —— **可选**参数，
         与 update / remove 那批必传 actor 的写路径不同）：传了才做写权校验，
         非 ADMIN 且非作者本人 → 403「无权提交该文档审核」；缺省则跳过，
-        与 TS `if (actor && !canWriteDocument(doc, actor))` 的短路语义一致。
+(actor && !canWriteDocument(doc, actor))` 的短路语义一致。
         故 HTTP 端点必须传 current_user，否则这条写路径等于不设防。
         """
         doc = await self._find_document_or_throw(session, document_id)
 
-        # 写权校验排在状态校验之前（TS 同序：canWriteDocument → canSubmitReview）
+        # 写权校验排在状态校验之前
         if actor is not None and not can_write_document(doc, actor):
             raise HTTPException(status_code=403, detail="无权提交该文档审核")
 
@@ -105,11 +105,11 @@ class DocumentReviewService:
             before_status=before_status,
         )
         session.add(review)
-        await session.flush()  # 对应 TS em.save(review)
+        await session.flush() #)
 
         doc.status = DocumentStatus.PENDING_REVIEW
         if actor is not None and actor.user_id:
-            # TS `if (actor?.userId) doc.updateBy = actor.userId;`
+            #(actor?.userId) doc.updateBy = actor.userId;`
             doc.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(doc)
@@ -137,8 +137,8 @@ class DocumentReviewService:
     ) -> DocumentEntity:
         """审核通过 → Published + 重建索引
 
-        参数顺序与 TS approveReview(reviewId, reviewerId, reviewerName, reviewComment?) 一致。
-        reviewerId / reviewerName 必填（TS 同款）：审核人由 controller 从 JWT 取
+(reviewId, reviewerId, reviewerName, reviewComment?) 一致。
+        reviewerId / reviewerName 必填：审核人由 controller 从 JWT 取
         （userId 与 `realName ?? username`），不在请求体传，因此调用方一定拿得到。
         """
         # 审核人 ID 先校验：非法值直接 400，不能静默丢弃（否则审核记录会缺审核人）
@@ -178,10 +178,10 @@ class DocumentReviewService:
     ) -> DocumentEntity:
         """审核驳回 → Draft（驳回意见必填且 trim 后非空）
 
-        参数顺序与 TS rejectReview(reviewId, reviewComment, reviewerId, reviewerName) 一致；
-        reviewerId / reviewerName 必填（TS 同款，来源同 approve_review）。
+(reviewId, reviewComment, reviewerId, reviewerName) 一致；
+        reviewerId / reviewerName 必填。
         注意：意见必填在**服务层**校验（400「驳回意见不能为空」），不在 DTO 层——
-        TS 的 ReviewDecisionDto 也未标必填，两边行为保持一致。
+，两边行为保持一致。
         """
         if not review_comment or not review_comment.strip():
             raise HTTPException(status_code=400, detail="驳回意见不能为空")

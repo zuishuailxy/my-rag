@@ -1,12 +1,11 @@
 """
-实体 / 关系抽取服务（对应 TS ExtractionService）
+实体 / 关系抽取服务
 
 供 KG 建图使用：从每个 chunk 抽「实体 + 关系」，再写入 Neo4j。
 
 <p>ChatOpenAI.with_structured_output(method="function_calling")：
 DeepSeek 走 OpenAI 兼容 Chat Completions，不支持 json_schema 严格模式，
-用函数调用方式拿到结构化结果（对齐 TS「不指定 method，qwen-plus 默认 jsonSchema」
-的意图——按所选模型选最稳的结构化通道）。</p>
+用函数调用方式拿到结构化结果。</p>
 
 <p>配置（config.py）：OPENAI_API_KEY / LLM_API_KEY / DASHSCOPE_API_KEY、
 LLM_BASE_URL（默认 DeepSeek）、LLM_MODEL（默认 deepseek-v4-flash）、
@@ -30,7 +29,7 @@ from app.services.kg_extraction_schema import (
 
 logger = logging.getLogger("ExtractionService")
 
-# user 消息里正文截断长度，防超上下文（对齐 TS slice(0, 4000)）
+# user 消息里正文截断长度，防超上下文（)）
 _MAX_CONTENT_CHARS = 4000
 _LLM_TEMPERATURE = 0.1
 
@@ -42,7 +41,7 @@ class ExtractionService:
         # 单 chunk 最多实体 / 关系数，防止图爆炸
         self.max_entities = settings.KG_MAX_ENTITIES
         self.max_relations = settings.KG_MAX_RELATIONS
-        # 未配置 API Key 时保持 None，extract() 调用时抛错（对齐 TS 构造函数早退）
+        # 未配置 API Key 时保持 None，extract() 调用时抛错
         self._structured = _build_structured_llm()
 
     async def extract(
@@ -138,7 +137,7 @@ class ExtractionService:
 
 
 def _build_structured_llm():
-    """构建结构化 LLM（未配置 API Key 返回 None，对齐 TS 构造函数早退）"""
+    """构建结构化 LLM"""
     api_key = (
         settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
     )
@@ -166,7 +165,7 @@ def _build_structured_llm():
     return llm.with_structured_output(
         KgExtractionLlmOutput,
         method="function_calling",
-        # 注意：不传 name（TS 用 name='extract_knowledge_graph' 命名工具）——
+        # 注意：不传 name——
         # langchain-openai 会把 name 透传给 completions.create() 导致 TypeError，
         # 工具名由 SDK 内部按 schema 生成，不影响结构化结果。
     )

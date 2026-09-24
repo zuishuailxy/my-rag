@@ -1,4 +1,4 @@
-"""检索 + 切题评估编排（对应 TS ai/agentic-retrieve.ts）
+"""检索 + 切题评估编排
 
 把「检索一次 → 判切题 → 不切题则改写再查一次」的纠错环封装成可复用函数：
 
@@ -11,11 +11,11 @@
 不是「有条数」。只有切题时 `hits` 才非空（给模型引用）；不切题时 `hits` 为空，
 `raw_hits` 仍保留给改写器。
 
-⚠️ 与 TS 的差异（迁移代价，刻意记录）：
-- TS 的 `retrieval.retrieve()` 直接返回 `ChunkHit[]`；本项目的
+（迁移代价，刻意记录）：
+()` 直接返回 `ChunkHit[]`；本项目的
   `HybridRetrievalService.retrieve()` 返回 camelCase dict，故此处用
   `ChunkHit.from_row` 归一（与 ai_stream / ai_chat 现有做法一致）。
-- TS 用回调 `onEval` / `onRewrite` 推进过程条。Python 的异步生成器**无法在回调里
+。Python 的异步生成器**无法在回调里
   yield**，所以流式链路（ai_stream.py）不调 `retrieve_until_relevant`，而是用
   `retrieve_and_grade` + `to_eval` 手工内联、逐次 yield `data-eval`；本模块的
   `retrieve_until_relevant` 主要给非流式 ai_chat 用。
@@ -33,21 +33,21 @@ from app.services.retrieval import HybridRetrievalService
 
 logger = logging.getLogger("AgenticRetrieve")
 
-# 推给前端 data-eval；ok 表示资料切题，不是「有条数」（对应 TS RetrieveEvalReason）
+# 推给前端 data-eval；ok 表示资料切题，不是「有条数」
 RetrieveEvalReason = Literal[
-    "ok",  # 首轮检索切题
-    "retried_ok",  # 改写后再查切题
-    "empty",  # 首轮无命中
-    "retried_empty",  # 改写后再查仍无命中
-    "irrelevant",  # 首轮有命中但不切题
-    "retried_irrelevant",  # 改写后再查仍不切题
-    "error",  # 检索接口失败
+    "ok", # 首轮检索切题
+    "retried_ok", # 改写后再查切题
+    "empty", # 首轮无命中
+    "retried_empty", # 改写后再查仍无命中
+    "irrelevant", # 首轮有命中但不切题
+    "retried_irrelevant", # 改写后再查仍不切题
+    "error", # 检索接口失败
 ]
 
 
 @dataclass
 class RetrieveEval:
-    """一次检索的评估（对应 TS RetrieveEval，推给前端 data-eval）"""
+    """一次检索的评估"""
 
     ok: bool
     reason: RetrieveEvalReason
@@ -57,7 +57,7 @@ class RetrieveEval:
     retry_query: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
-        """转成前端契约（camelCase：`retryQuery`，对齐 TS）"""
+        """转成前端契约"""
         return {
             "ok": self.ok,
             "reason": self.reason,
@@ -70,7 +70,7 @@ class RetrieveEval:
 
 @dataclass
 class GradedRetrieve:
-    """单次检索 + 评估结果（对应 TS GradedRetrieve）"""
+    """单次检索 + 评估结果"""
 
     # 原始命中，给改写器用；不切题时不要当制度依据
     raw_hits: list[ChunkHit]
@@ -86,14 +86,14 @@ class GradedRetrieve:
 
 @dataclass
 class RetrieveOutcome:
-    """`retrieve_until_relevant` 的返回（对应 TS `{ hits, eval, usedQuery }`）"""
+    """`retrieve_until_relevant` 的返回"""
 
     hits: list[ChunkHit]
     eval: RetrieveEval
     used_query: str
 
 
-# 无命中时的评估占位（对应 TS EMPTY_GRADE）
+# 无命中时的评估占位
 EMPTY_GRADE = HitGrade(ok=False, reason="empty", text="未检索到资料")
 
 
@@ -108,7 +108,7 @@ async def retrieve_and_grade(
     retried: bool = False,
     previous_query: str | None = None,
 ) -> GradedRetrieve:
-    """单次检索 + 切题评估（对应 TS retrieveAndGrade）
+    """单次检索 + 切题评估
 
     `question` 是用户原问题（评估切题时对照这个）；`query` 是本轮检索词。
     `retried` 标记是否已是改写后的第二次检索；`previous_query` 是首轮检索词，
@@ -139,7 +139,7 @@ async def retrieve_and_grade(
             eval=to_eval(grade, display_query, retried, retry_query),
             used_query=used_query,
         )
-    except Exception as error:  # noqa: BLE001 —— 检索失败不抛，收敛成 error 评估
+    except Exception as error: # noqa: BLE001 —— 检索失败不抛，收敛成 error 评估
         detail = str(error)
         logger.warning("检索失败：query=%r err=%s", used_query[:80], detail)
         return GradedRetrieve(
@@ -169,7 +169,7 @@ async def retrieve_until_relevant(
     on_eval: Callable[[RetrieveEval], None] | None = None,
     on_rewrite: Callable[[str], None] | None = None,
 ) -> RetrieveOutcome:
-    """查一次 → 评估 → 不足则改写再查一次（对应 TS retrieveUntilRelevant）
+    """查一次 → 评估 → 不足则改写再查一次
 
     无 agent 时的等价环，给非流式 /ai/chat 用。
     """
@@ -188,7 +188,7 @@ async def retrieve_until_relevant(
         return RetrieveOutcome(first.hits, first.eval, first.used_query)
 
     # rewrite_after_retrieve 永不返回 None：失败会回退用户原问题；返回空串表示
-    # 原问题与上次检索词相同、无法再查（与 TS 一致）。
+    # 原问题与上次检索词相同、无法再查。
     retry_query = await rewrite.rewrite_after_retrieve(
         question, first.used_query, first.grade, first.raw_hits
     )
@@ -218,7 +218,7 @@ def to_eval(
     retried: bool,
     retry_query: str | None = None,
 ) -> RetrieveEval:
-    """HitGrade → 前端 RetrieveEval（对应 TS toEval）"""
+    """HitGrade → 前端 RetrieveEval"""
     if grade.reason == "relevant":
         return RetrieveEval(
             ok=True,

@@ -1,4 +1,4 @@
-"""检索前把追问改写成独立短查询 + 意图路由（对应 TS ai/chat-query-rewrite.service.ts）
+"""检索前把追问改写成独立短查询 + 意图路由
 
 角色：多轮对话里用户常问「那谁审批？」「这个怎么办？」这类依赖上文的追问，
 直接拿去混合检索会召回一堆无关制度。本服务做三件事：
@@ -20,30 +20,30 @@
   - 回退：TypeSafe 未安装 / 未配 key / 调用失败 → 用 LLM 的 `need_retrieve`
     推导意图（True→kb，False→chitchat），再不行落到 kb。
 
-回退语义（与 TS 一致）：未配置 LLM Key、没有历史、上下文为空、任一调用失败，
+回退语义：未配置 LLM Key、没有历史、上下文为空、任一调用失败，
 都回退 `{query: 原问题, need_retrieve: True}` / `intent=kb` —— 改写是增强，不是必需
 环节，任何失败都不能让用户问不出结果。
 
-刻意差异（相对 TS）：
-- **结构化输出改用 `method="function_calling"` 且关闭 thinking**：TS 用
+刻意差异：
+- **结构化输出改用 `method="function_calling"` 且关闭 thinking**：
   `withStructuredOutput(rewriteSchema)` 走所选模型（qwen-plus）默认的 jsonSchema 通道；
   本项目 LLM 是 **deepseek-v4-flash**，不支持 json_schema 严格模式、也不接受带 name 的
   tool_choice（详见 kg_extraction.py / chat_long_memory.py 同类注释）。故显式指定
   function_calling + `extra_body={"thinking": {"type": "disabled"}}`。
 - **TypeSafe 依赖是本次新增**：SDK 未进 requirements，`_load_typesafe()` 延迟导入，
   失败只 WARN 并回退 LLM，不影响模块加载。
-- **切题判定在本项目优先 TypeSafe（TS 用 LLM `gradeSchema`）**：TS 的 `gradeHits` /
+- **切题判定在本项目优先 TypeSafe**：
   `rewriteAfterRetrieve` 都走 `withStructuredOutput`；本项目把切题判定换成 TypeSafe
   两路 Choice（自己加的优化），LLM 仅作回退；改写仍是 LLM（`retryRewriteSchema`）。
   对调用方的 `HitGrade` 契约一致。
 - **`RetrieveQueryPlan` 的 `needRetrieve` → `need_retrieve`**：纯进程内类型，
   无跨语言契约（不像 ChunkHit 要对齐 search 输出的 dict 键），按 Python 习惯 snake_case。
-  注意 LLM 结构化输出的字段名仍是 `standalone_query` / `need_retrieve`，与 TS zod 逐字一致。
-- TS `Number(config.get('AI_QUERY_REWRITE_TIMEOUT_MS', 15000))` → config.py 声明为 int，
+  注意 LLM 结构化输出的字段名仍是 `standalone_query` / `need_retrieve`。
+(config.get('AI_QUERY_REWRITE_TIMEOUT_MS', 15000))` → config.py 声明为 int，
   非法值启动即报错（同 chat_short_memory 的处理）。
-- 调用用 `ainvoke`（TS `invoke`）：本服务在流式问答的请求路径上，不阻塞事件循环。
+- 调用用 `ainvoke`：本服务在流式问答的请求路径上，不阻塞事件循环。
 
-未实现（TS 侧也没有，勿擅自加）：检索结果缓存、按 query 去重的改写缓存、
+未实现：检索结果缓存、按 query 去重的改写缓存、
 need_retrieve=false 时的追问兜底话术（由调用方决定）。
 """
 
@@ -64,7 +64,7 @@ from app.services.chat_memory import compact_rewrite_context
 
 logger = logging.getLogger("ChatQueryRewriteService")
 
-# 内部 LLM 调用的隔离配置（对应 TS invokeIsolated）
+# 内部 LLM 调用的隔离配置
 # 工具里再 invoke 评估/改写模型时，默认会继承 agent 的 callbacks，内部结构化 JSON 会进
 # messages 流、变成回答正文。显式传空 callbacks 摘掉 StreamMessagesHandler
 #（实测 ensure_config 对 callbacks 是**覆盖**而非合并），tags 作消费端兜底过滤。
@@ -96,21 +96,21 @@ __all__ = [
     "chat_query_rewrite_service",
 ]
 
-# 改写温度固定 0（对齐 TS `temperature: 0`）：改写要可复现，不要自由发挥
+# 改写温度固定 0：改写要可复现，不要自由发挥
 _REWRITE_TEMPERATURE = 0.0
 
 # 命中资料正文送入评估/改写的截断长度。
-# ⚠️ **刻意偏离 TS summarizeHits 的 180**：中文 chunk 约 700~1000 字，关键句常在中后段
+# 中文 chunk 约 700~1000 字，关键句常在中后段
 #（实测「私车公用」在 759 字 chunk 的第 644 字），截 180 会让评估器只看到 chunk 开头的
 # 「差旅管理办法」标题，误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。
 # 放到能覆盖整块，评估/改写才看得到真正相关的内容。
 _RELEVANCE_SNIPPET_LEN = 1200
 
-# 本轮路由意图（对应 TS CHAT_INTENTS 字面量联合）
+# 本轮路由意图
 CHAT_INTENTS = ("chitchat", "profile", "kb", "web", "kb_then_web")
 ChatIntent = Literal["chitchat", "profile", "kb", "web", "kb_then_web"]
 
-# 意图在过程条上的中文名（对应 TS INTENT_LABEL）
+# 意图在过程条上的中文名
 INTENT_LABEL: dict[ChatIntent, str] = {
     "chitchat": "闲聊",
     "profile": "个人偏好",
@@ -153,7 +153,7 @@ _REWRITE_GATE_INSTRUCTIONS = (
 
 
 class RewriteResult(BaseModel):
-    """结构化改写结果（对应 TS zod `rewriteSchema`，字段名与描述逐字一致）"""
+    """结构化改写结果"""
 
     standalone_query: str = Field(
         description="可独立检索的一句中文短查询，消解指代和省略，不含寒暄"
@@ -185,7 +185,7 @@ class RelevanceResult(BaseModel):
 
 
 class RetryRewriteResult(BaseModel):
-    """不足后改写检索词（对应 TS zod `retryRewriteSchema`：字段名 query）"""
+    """不足后改写检索词"""
 
     query: str = Field(
         description="与上次不同的一句中文检索词，不超过 40 字，针对用户原问题"
@@ -197,11 +197,11 @@ HitGradeReason = Literal["relevant", "irrelevant", "empty"]
 
 @dataclass
 class HitGrade:
-    """检索结果切题评估（对应 TS `HitGrade`，供 agentic-retrieve 用）
+    """检索结果切题评估
 
-    ok     —— 是否可当制度依据（不是「有没有条数」）
+    ok —— 是否可当制度依据（不是「有没有条数」）
     reason —— relevant / irrelevant / empty
-    text   —— 给过程条看的一句中文
+    text —— 给过程条看的一句中文
     """
 
     ok: bool
@@ -209,7 +209,7 @@ class HitGrade:
     text: str
 
 
-# 改写 + 图谱短实体名系统提示词（对齐 TS ROUTE_PROMPT 的 standalone_query / graph_queries 部分）
+# 改写 + 图谱短实体名系统提示词
 REWRITE_PROMPT = (
     "你是企业知识库的检索改写器。根据对话把当前问题改写成一条可独立检索的短查询，"
     "并抽出图谱要用的短实体名。\n"
@@ -233,7 +233,7 @@ REWRITE_PROMPT = (
 )
 
 
-# 切题评估提示词（TypeSafe 不可用时的 LLM 回退，对应 TS GRADE_PROMPT）
+# 切题评估提示词
 RELEVANCE_PROMPT = (
     "你是企业知识库的检索评估器。判断命中资料能否回答用户问题。\n"
     "\n"
@@ -244,7 +244,7 @@ RELEVANCE_PROMPT = (
 )
 
 
-# 不足后换一种问法再查（对应 TS RETRY_REWRITE_PROMPT，empty / irrelevant 共用）
+# 不足后换一种问法再查
 RETRY_REWRITE_PROMPT = (
     "你是企业知识库的检索改写器。上次检索不足，请换一种问法再查。\n"
     "\n"
@@ -257,10 +257,10 @@ RETRY_REWRITE_PROMPT = (
 
 
 class RetrieveQueryPlan(TypedDict):
-    """改写后的检索方案（对应 TS `type RetrieveQueryPlan`）
+    """改写后的检索方案
 
-    query          —— 实际送去检索的查询（改写成功用 LLM 结果，否则原问题）
-    need_retrieve  —— TS `needRetrieve`：false 时调用方应跳过检索直接作答
+    query —— 实际送去检索的查询（改写成功用 LLM 结果，否则原问题）
+：false 时调用方应跳过检索直接作答
     """
 
     query: str
@@ -268,15 +268,15 @@ class RetrieveQueryPlan(TypedDict):
 
 
 class ChatRoutePlan(TypedDict):
-    """本轮意图 + 工具开关（对应 TS `type ChatRoutePlan`）
+    """本轮意图 + 工具开关
 
-    intent         —— 5 路意图
-    label          —— 意图中文名（过程条展示）
-    query          —— 改写后的检索词（给 RAG / 联网用）
-    graph_queries  —— 图谱用的短实体名（整句对不上图节点）
+    intent —— 5 路意图
+    label —— 意图中文名（过程条展示）
+    query —— 改写后的检索词（给 RAG / 联网用）
+    graph_queries —— 图谱用的短实体名（整句对不上图节点）
     allow_retrieve —— kb / kb_then_web 才挂 retrieve_knowledge
-    allow_graph    —— 与 allow_retrieve 相同：查知识库的轮次才查图谱
-    allow_web      —— web / kb_then_web 才挂 web_search
+    allow_graph —— 与 allow_retrieve 相同：查知识库的轮次才查图谱
+    allow_web —— web / kb_then_web 才挂 web_search
     """
 
     intent: ChatIntent
@@ -294,7 +294,7 @@ def _build_llm() -> ChatOpenAI | None:
     Key / baseURL / model 的 fallback 链与 ai_stream / chat_long_memory 一致：
     OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY；
     OPENAI_BASE_URL → LLM_BASE_URL → DashScope 兼容端点；
-    MODEL_NAME → LLM_MODEL → qwen-plus（后两个为 TS 字面量，本项目走 DeepSeek）。
+    MODEL_NAME → LLM_MODEL → qwen-plus。
     """
     api_key = (
         settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
@@ -367,9 +367,9 @@ def _build_retry_writer():
 
 
 def summarize_hits(hits: Sequence[ChunkHit], limit: int = 5) -> str:
-    """把命中资料拼成摘要（对应 TS summarizeHits：序号 + 标题/章节 + 分数 + 摘要）
+    """把命中资料拼成摘要
 
-    截断长度用 `_RELEVANCE_SNIPPET_LEN`（刻意比 TS 长，见该常量注释）。
+    截断长度用 `_RELEVANCE_SNIPPET_LEN`。
     """
     lines = []
     for i, hit in enumerate(hits[:limit], start=1):
@@ -381,7 +381,7 @@ def summarize_hits(hits: Sequence[ChunkHit], limit: int = 5) -> str:
 
 
 def distinct_query(next_query: str, previous: str) -> str:
-    """归一空白后返回新查询；为空或与上次相同时返回空串（对应 TS distinctQuery）"""
+    """归一空白后返回新查询；为空或与上次相同时返回空串"""
     query = re.sub(r"\s+", " ", next_query).strip()
     if not query:
         return ""
@@ -400,7 +400,7 @@ def _load_typesafe() -> tuple[Any, Any] | None:
     if not settings.TYPESAFE_API_KEY:
         return None
     try:
-        from typesafe_sdk import AsyncTypeSafeClient, Choice  # noqa: PLC0415
+        from typesafe_sdk import AsyncTypeSafeClient, Choice # noqa: PLC0415
     except ImportError:
         logger.warning("typesafe_sdk 未安装，意图识别回退 LLM")
         return None
@@ -411,7 +411,7 @@ class ChatQueryRewriteService:
     """查询改写（LLM）+ 意图路由（TypeSafe）。任一环节失败都回退原文，不阻断对话。"""
 
     def __init__(self) -> None:
-        # 对应 TS 构造函数里的 `config.get(...)`：缺省值写在 config.py，此处直接读
+        #)`：缺省值写在 config.py，此处直接读
         self._rewriter: Any | None = _build_rewriter()
         self._relevance_judge: Any | None = _build_relevance_judge()
         self._retry_writer: Any | None = _build_retry_writer()
@@ -424,7 +424,7 @@ class ChatQueryRewriteService:
         question: str,
         history: Sequence[BaseMessage],
     ) -> ChatRoutePlan:
-        """意图路由 + 查询改写（agentic RAG 入口，对应 TS classify）
+        """意图路由 + 查询改写
 
         分工（路线 A）：
           - TypeSafe 判 intent（5 路 Choice）；失败/未配置时用 LLM 的
@@ -439,9 +439,9 @@ class ChatQueryRewriteService:
         intent = await self._route_intent(question, context)
 
         # 2. 只有依赖上文的追问（gate=needs_context / 门控不可用）才调一次 LLM，
-        #    同时产出 standalone_query + graph_queries。
-        #    自足问题不调：query 用原问题，图谱短实体名交给模型在 retrieve_graph
-        #    入参里现抽（retrieve_graph 工具照常挂载，见 ai_stream.create_turn_agent）。
+        # 同时产出 standalone_query + graph_queries。
+        # 自足问题不调：query 用原问题，图谱短实体名交给模型在 retrieve_graph
+        # 入参里现抽（retrieve_graph 工具照常挂载，见 ai_stream.create_turn_agent）。
         query = question
         graph_queries: list[str] = []
         llm_need_retrieve: bool | None = None
@@ -485,9 +485,9 @@ class ChatQueryRewriteService:
         question: str,
         history: Sequence[BaseMessage],
     ) -> RetrieveQueryPlan:
-        """把当前问题改写成独立检索查询（对应 TS rewrite）
+        """把当前问题改写成独立检索查询
 
-        ⚠️ 与 TS 一致：`rewrite` 只是 `classify` 的**薄封装**，只取「检索词 + 要不要检索」，
+        ⚠️：`rewrite` 只是 `classify` 的**薄封装**，只取「检索词 + 要不要检索」，
         给非流式 /ai/chat 用；流式链路直接用 `classify()`（还要 intent / 工具开关）。
         改写逻辑（TypeSafe 门控 + LLM 消解指代）全部在 `classify()` 里，只此一处，避免漂移。
         """
@@ -542,7 +542,7 @@ class ChatQueryRewriteService:
                     },
                 )
             answer = response.choices["relevance"]
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("TypeSafe 切题判定失败，回退 LLM：%s", err)
             return None
 
@@ -575,7 +575,7 @@ class ChatQueryRewriteService:
                 ],
                 config=_INTERNAL_CALL_CONFIG,
             )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("切题判定(LLM)失败，按切题处理：%s", err)
             return None
         logger.info(
@@ -589,7 +589,7 @@ class ChatQueryRewriteService:
     async def grade_hits(
         self, question: str, hits: Sequence[ChunkHit]
     ) -> HitGrade:
-        """检索结果切题评估（对应 TS gradeHits，返回 HitGrade 给 agentic-retrieve）
+        """检索结果切题评估
 
         空召回 → empty；否则走 TypeSafe/LLM 判定；判定不可用（未配/失败）时按切题
         放行（ok=True）—— 判定是增强，不阻断作答。
@@ -613,10 +613,10 @@ class ChatQueryRewriteService:
         grade: HitGrade,
         hits: Sequence[ChunkHit],
     ) -> str:
-        """首轮空 / 不切题后改写检索词（对应 TS rewriteAfterRetrieve）
+        """首轮空 / 不切题后改写检索词
 
         返回新检索词；失败或与上次相同则回退用户原问题；原问题也与上次相同时返回
-        空串（表示无法再查）—— 与 TS 一致，**永不返回 None**。
+        空串（表示无法再查）——，**永不返回 None**。
         """
         fallback = distinct_query(question, previous_query)
         if self._retry_writer is None:
@@ -637,7 +637,7 @@ class ChatQueryRewriteService:
                 ],
                 config=_INTERNAL_CALL_CONFIG,
             )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("检索改写失败，回退原问题：%s", err)
             return fallback
         query = distinct_query(result.query, previous_query)
@@ -659,7 +659,7 @@ class ChatQueryRewriteService:
                     HumanMessage(f"对话：\n{context}\n\n当前问题：{question}"),
                 ]
             )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning(f"检索改写失败，使用原问题：{err}")
             return None
         logger.info(
@@ -698,7 +698,7 @@ class ChatQueryRewriteService:
                     },
                 )
             answer = response.choices["intent"]
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("TypeSafe 意图识别失败，回退 LLM：%s", err)
             return None
 
@@ -740,7 +740,7 @@ class ChatQueryRewriteService:
                     },
                 )
             answer = response.choices["rewrite_gate"]
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             logger.warning("TypeSafe 改写门控失败，回退 LLM 改写：%s", err)
             return None
 
@@ -783,7 +783,7 @@ class ChatQueryRewriteService:
     def _to_plan(
         intent: ChatIntent, query: str, graph_queries: list[str] | None = None
     ) -> ChatRoutePlan:
-        """意图 → 工具开关（对应 TS toPlan）
+        """意图 → 工具开关
 
         allow_retrieve / allow_graph：kb / kb_then_web 才挂 retrieve_knowledge /
         retrieve_graph；allow_web：web / kb_then_web 才挂 web_search。
@@ -804,5 +804,5 @@ class ChatQueryRewriteService:
         }
 
 
-# 全局单例（对应 TS @Injectable 的单例语义）
+# 全局单例
 chat_query_rewrite_service = ChatQueryRewriteService()

@@ -1,19 +1,19 @@
 """
-认证接口（对应 NestJS AuthController）
+认证接口
 
-- POST /auth/register                    注册（公开）
-- POST /auth/login                       登录（公开）
-- POST /auth/refresh                     刷新令牌（公开）
-- GET  /auth/verify-email                邮箱激活（公开；激活链接落地页调用）
-- POST /auth/password/reset/send-code    发送密码重置验证码（公开）
-- POST /auth/password/reset              按邮箱重置密码（公开）
-- POST /auth/logout                      退出登录（需登录；无状态 JWT，仅返回提示语）
-- GET  /auth/me                          当前用户信息（需登录）
-- GET  /auth/reviewer-ids                审核员 ID 列表（需 ADMIN / REVIEWER 角色）
+- POST /auth/register 注册（公开）
+- POST /auth/login 登录（公开）
+- POST /auth/refresh 刷新令牌（公开）
+- GET /auth/verify-email 邮箱激活（公开；激活链接落地页调用）
+- POST /auth/password/reset/send-code 发送密码重置验证码（公开）
+- POST /auth/password/reset 按邮箱重置密码（公开）
+- POST /auth/logout 退出登录（需登录；无状态 JWT，仅返回提示语）
+- GET /auth/me 当前用户信息（需登录）
+- GET /auth/reviewer-ids 审核员 ID 列表（需 ADMIN / REVIEWER 角色）
 
-状态码：NestJS @Post 默认 201、@Get 200，与项目 document 路由约定一致。
+状态码：、@Get 200，与项目 document 路由约定一致。
 鉴权见 app/api/auth_route.py：@public() 对应 @Public()、@roles(...) 对应 @Roles + RolesGuard，
-未标记的路由默认需要登录（logout 即属此类——TS 里它没标 @Public）。
+未标记的路由默认需要登录。
 """
 
 from typing import Annotated
@@ -48,7 +48,7 @@ _CurrentUser = Annotated[AuthUser, Depends(get_current_user)]
     "/register",
     status_code=201,
     response_model=RegisterResult,
-    # TS 仅在需要邮件激活时返回 emailVerificationRequired 键；
+    # 
     # exclude_none 使免验证路径的响应里彻底省略该键（而非 null）
     response_model_exclude_none=True,
 )
@@ -76,8 +76,8 @@ async def refresh(dto: RefreshTokenRequest, session: _DB) -> LoginResult:
 @router.get("/verify-email", response_model=MessageResult)
 @public()
 async def verify_email(
-    # 必填 query 参数：缺失时 FastAPI 返回 422（TS 侧 token 缺失会退化成
-    # consumeToken(undefined) → 400，此处刻意优于 TS——参数校验前置）
+    # 必填 query 参数：缺失时 FastAPI 返回 422（
+    # consumeToken(undefined) → 400，）
     token: Annotated[str, Query(description="激活邮件链接中的令牌")],
     session: _DB,
 ) -> MessageResult:
@@ -105,8 +105,7 @@ async def reset_password_by_email(
 
 @router.post("/logout", status_code=201, response_model=MessageResult)
 async def logout(user: _CurrentUser) -> MessageResult:
-    """退出登录（需登录；无状态 JWT 服务端无会话可销毁，客户端丢弃 token 即可，
-    与 TS 注释一致——接口存在主要为前端语义兜底）"""
+    """退出登录"""
     return MessageResult(message="已退出登录")
 
 

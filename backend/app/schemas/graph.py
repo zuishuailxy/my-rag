@@ -1,7 +1,7 @@
-"""图谱检索响应 schema（对应 TS graph/graph.controller.ts 返回结构）
+"""图谱检索响应 schema
 
 图谱节点 / 边 / 关键词检索的命中项，以及全景图（overview）聚合结构。
-字段名对齐 TS（camelCase）。
+字段名）。
 """
 from typing import Literal
 
@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 
 class GraphNodeItem(BaseModel):
-    """知识实体节点（TS listNodes 返回）"""
+    """知识实体节点"""
 
     id: str | None = None
     name: str | None = None
@@ -18,7 +18,7 @@ class GraphNodeItem(BaseModel):
 
 
 class GraphEdgeItem(BaseModel):
-    """实体间 RELATED_TO 边（TS listEdges 返回）"""
+    """实体间 RELATED_TO 边"""
 
     source: str | None = None
     target: str | None = None
@@ -27,7 +27,7 @@ class GraphEdgeItem(BaseModel):
 
 
 class GraphSearchItem(BaseModel):
-    """关键词检索命中（TS searchGraph 返回）
+    """关键词检索命中
 
     可命中实体 / 文档 / 块节点，label 区分节点类型，snippet 为正文前 160 字。
     """
@@ -44,7 +44,7 @@ class GraphSearchItem(BaseModel):
     snippet: str | None = None
 
 
-# ---- 全景图（TS getOverview 返回结构）----
+# ---- 全景图----
 
 GraphOverviewKind = Literal["document", "entity", "tag"]
 GraphOverviewEdgeKind = Literal["mentions", "related", "tagged"]

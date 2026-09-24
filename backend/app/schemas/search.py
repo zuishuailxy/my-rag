@@ -1,4 +1,4 @@
-"""全文搜索请求 / 响应（对应 TS search/dto/search.dto.ts + SearchController 返回）
+"""全文搜索请求 / 响应
 
 字段名保持 camelCase，与 ES kh_document 文档（SearchIndexService 写入）一致。
 """
@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class SearchRequest(BaseModel):
-    """全文搜索请求（对应 TS SearchDocumentsDto）
+    """全文搜索请求
 
     keyword 必填；page / pageSize 可选且有上下界；categoryId / authorId 为可选过滤。
     """
@@ -22,9 +22,9 @@ class SearchRequest(BaseModel):
 
 
 class SearchHitItem(BaseModel):
-    """单条命中（ES kh_document 文档原文 + 关键词高亮片段，对齐 TS searchDocuments 返回）
+    """单条命中
 
-    仅保留 TS 实际返回的字段：id / title / summary / categoryId / tags / authorId /
+：id / title / summary / categoryId / tags / authorId /
     teamId / isPublic / status / publishTime / score / highlight。列表不回传 content
     全文（_source 已排除）。
     """
@@ -36,20 +36,20 @@ class SearchHitItem(BaseModel):
     # 与 PostgreSQL / Elasticsearch 中的逗号分隔字符串保持一致
     tags: str | None = None
     authorId: str | None = None
-    # 可见性字段（对齐 TS searchDocuments 返回）：teamId 为空串表示不属任何团队，
+    # 可见性字段：teamId 为空串表示不属任何团队，
     # isPublic 为 None 表示索引里缺该字段（历史数据未回填），都按「非公开」理解
     teamId: str | None = None
     isPublic: bool | None = None
     status: int | None = None
     publishTime: str | None = None
-    # 相关性得分（hit._score）；TS 用 `hit._score ?? 0`
+    # 相关性得分（hit._score）；
     score: float | None = None
     # 关键词高亮片段（ES 默认 <em> 标签包裹命中词）；未命中的字段返回空列表
     highlight: dict[str, list[str]] | None = Field(default=None)
 
 
 class SearchResponse(BaseModel):
-    """全文搜索分页响应（对齐 TS { items, total, page, pageSize }）"""
+    """全文搜索分页响应"""
 
     items: List[SearchHitItem] = Field(default_factory=list)
     total: int = 0

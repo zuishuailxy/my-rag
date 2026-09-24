@@ -1,14 +1,11 @@
 """
-邮件发送服务（对应 TS src/auth/email.service.ts，@nestjs-modules/mailer + nodemailer）
+邮件发送服务
 
 Python 侧用 aiosmtplib + 标准库 EmailMessage（multipart/alternative：纯文本 + HTML），
-邮件文案与 TS 逐字一致（激活链接 24 小时有效 / 重置验证码 10 分钟有效）。
+邮件文案（激活链接 24 小时有效 / 重置验证码 10 分钟有效）。
 
-- 激活链接格式：{APP_PUBLIC_URL}/auth/verify-email?token={token}（模板与 TS 逐字一致；
-  TS 原设计 APP_PUBLIC_URL 指向前端页面路由，无前端阶段指向后端 API 时
-  该配置必须自带 /api/v1 前缀，前缀不在代码里拼）
+- 激活链接格式：{APP_PUBLIC_URL}/auth/verify-email?token={token}
 - 发送失败不吞错：SMTP 异常原样抛出，由调用方（注册流程等）决定处理方式，
-  与 TS mailer.sendMail 抛错行为一致
 """
 import logging
 from email.message import EmailMessage
@@ -23,7 +20,7 @@ logger = logging.getLogger("EmailService")
 class EmailService:
     """SMTP 邮件发送（单例；SMTP 参数每次发送时从 settings 读取）"""
 
-    # ---------- 业务邮件（文案与 TS 逐字一致） ----------
+    # ---------- 业务邮件 ----------
 
     async def send_activation_email(
         self, email: str, username: str, token: str
@@ -68,7 +65,7 @@ class EmailService:
     def _build_message(
         self, to: str, subject: str, text: str, html: str
     ) -> EmailMessage:
-        """组装 multipart/alternative 邮件（纯文本 + HTML；对应 TS sendMail 的 text+html）"""
+        """组装 multipart/alternative 邮件"""
         message = EmailMessage()
         message["From"] = settings.MAIL_FROM
         message["To"] = to
@@ -78,7 +75,7 @@ class EmailService:
         return message
 
     async def _send(self, message: EmailMessage) -> None:
-        """经 SMTP 发送；失败原样抛出（对齐 TS mailer.sendMail 抛错不吞）"""
+        """经 SMTP 发送；失败原样抛出"""
         # MAIL_SECURE=true → 隐式 TLS（465）；false → STARTTLS（587），nodemailer 同义
         await aiosmtplib.send(
             message,
@@ -91,5 +88,5 @@ class EmailService:
         )
 
 
-# 全局单例（对应 TS @Global AuthModule 导出的 EmailService）
+# 全局单例
 email_service = EmailService()

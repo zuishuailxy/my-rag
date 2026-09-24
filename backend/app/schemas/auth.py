@@ -1,20 +1,20 @@
 """
-认证相关 DTO（对应 TS dto/auth.dto.ts）、登录结果（TS auth.service.ts 的 LoginResult）
-与当前登录用户（TS interfaces/auth-user.interface.ts）
+认证相关 DTO、登录结果
+与当前登录用户
 
-命名沿用 TS 语义化重命名约定（QueryReviewTasksDto → ReviewTaskQuery）：
-  LoginDto         → LoginRequest
-  RegisterDto      → RegisterRequest
-  RefreshTokenDto  → RefreshTokenRequest
-  AuthUser         → AuthUser（同名，TS 是 interface，此处是 Pydantic 模型）
-  LoginResult      → LoginResult（同名；TS 的 tokenType 字面量 'Bearer' → Literal）
-  { userId, message } → RegisterResult（TS register 返回的内联类型）
+（QueryReviewTasksDto → ReviewTaskQuery）：
+  LoginDto → LoginRequest
+  RegisterDto → RegisterRequest
+  RefreshTokenDto → RefreshTokenRequest
+  AuthUser → AuthUser
+  LoginResult → LoginResult
+  { userId, message } → RegisterResult
 
 请求体字段 camelCase（username / password 无驼峰差异，refreshToken 有）。
 
-⚠️ 两处刻意优于 TS（均为防 500，TS 侧会由 PG / bcrypt 抛异常变成 5xx）：
+：
   1. username / realName 加了 max_length：kh_user.username 是 VARCHAR(50)、
-     real_name 是 VARCHAR(50)，TS 只有 @IsString()，超长会撞 PG 22001 → 500。
+     real_name 是 VARCHAR(50)，()，超长会撞 PG 22001 → 500。
   2. password 加了 max_length=72：bcrypt 5.0 对 **超过 72 字节** 的密码直接抛
      ValueError（4.x 是静默截断）。字符数 72 只是保守粗筛（中文 3 字节/字，
      24 个汉字就到顶），**服务层仍须按 UTF-8 字节数再校验一次**，超限时：
@@ -45,7 +45,7 @@ BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
 class LoginRequest(BaseModel):
-    """登录请求体（对应 TS LoginDto）"""
+    """登录请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -54,7 +54,7 @@ class LoginRequest(BaseModel):
         json_schema_extra={"example": {"username": "admin", "password": "123456"}},
     )
 
-    # TS 只有 @IsString()；此处补长度上界，避免超长用户名撞 PG 22001 变 500
+    #()；此处补长度上界，避免超长用户名撞 PG 22001 变 500
     username: str = Field(
         ..., min_length=1, max_length=50, description="登录用户名（1-50 字符）"
     )
@@ -68,7 +68,7 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    """注册请求体（对应 TS RegisterDto）
+    """注册请求体
 
     REQUIRE_EMAIL_VERIFICATION=false（默认）注册后立即可登录；
     true 且传了 email 时需邮件激活（status/email_verified 置 0，激活后恢复）。
@@ -91,22 +91,22 @@ class RegisterRequest(BaseModel):
     username: str = Field(
         ..., min_length=1, max_length=50, description="登录用户名（1-50 字符，不可重复）"
     )
-    # 密码：TS @MinLength(6)；上限防 bcrypt 72 字节 ValueError（服务层再按字节兜一次）
+    # 密码：(6)；上限防 bcrypt 72 字节 ValueError（服务层再按字节兜一次）
     password: str = Field(
         ...,
         min_length=6,
         max_length=BCRYPT_MAX_PASSWORD_BYTES,
         description="登录密码（至少 6 位，最长 72 字符）",
     )
-    # 邮箱（可选；传了就必须是合法邮箱，空串同样会 422，与 TS @IsEmail 一致）
+    # 邮箱
     email: EmailStr | None = Field(default=None, description="邮箱")
     # 真实姓名 / 显示名（可选）
     real_name: str | None = Field(default=None, max_length=50, description="真实姓名")
-    # 角色不在注册时传：注册默认无角色，授权走管理端接口（与 TS 注册流程一致）
+    # 角色不在注册时传：注册默认无角色，授权走管理端接口
 
 
 class RefreshTokenRequest(BaseModel):
-    """刷新 Token 请求体（对应 TS RefreshTokenDto）"""
+    """刷新 Token 请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -119,10 +119,10 @@ class RefreshTokenRequest(BaseModel):
 
 
 class AuthUser(BaseModel):
-    """JWT 校验后注入到路由的当前用户（对应 TS interfaces/auth-user.interface.ts）
+    """JWT 校验后注入到路由的当前用户
 
     由鉴权依赖（二期 AuthService + FastAPI 依赖）从 token 解出后注入，路由里直接用
-    `current_user: AuthUser = Depends(...)` 取，等价于 NestJS 的 `@CurrentUser()`。
+    `current_user: AuthUser = Depends(...)` 取)`。
     """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
@@ -137,19 +137,17 @@ class AuthUser(BaseModel):
     email: str | None = None
     # 头像 URL
     avatar: str | None = None
-    # 角色编码列表（如 ["ROLE_USER"]；TS 为必填，此处默认空列表，鉴权判断交给依赖层）
+    # 角色编码列表
     roles: list[str] = Field(default_factory=list)
-    # 合并权限码列表（直接授权 + 角色授权，管理员追加 ADMIN_OPERATION_PERMISSIONS；
-    # TS AuthUser 必填 permissions，此处默认空列表——守卫层 require_permission
-    # 每次实时查库判定，不依赖本快照，字段主要用于登录/me 响应透出）
+    # 合并权限码列表
     permissions: list[str] = Field(default_factory=list)
     # 所在团队 ID 列表（含担任负责人的团队），用于文档检索可见性过滤
-    # （对应 TS AuthUser.teamIds）；由 build_auth_user 查 kh_team_member ∪ kh_team.leader_id 注入
+    # 由 build_auth_user 查 kh_team_member ∪ kh_team.leader_id 注入
     team_ids: list[str] = Field(default_factory=list)
 
 
 class LoginResult(BaseModel):
-    """登录 / 刷新成功响应（对应 TS auth.service.ts 的 LoginResult）"""
+    """登录 / 刷新成功响应"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -157,7 +155,7 @@ class LoginResult(BaseModel):
     access_token: str
     # 刷新令牌（长效，默认 7d；仅用于换新令牌对，服务端不落库）
     refresh_token: str
-    # 固定 "Bearer"（TS 字面量类型）
+    # 固定 "Bearer"
     token_type: Literal["Bearer"] = "Bearer"
     # accessToken 有效秒数（前端据此做静默续期）
     expires_in: int
@@ -166,9 +164,9 @@ class LoginResult(BaseModel):
 
 
 class RegisterResult(BaseModel):
-    """注册成功响应（对应 TS register 返回的内联类型）
+    """注册成功响应
 
-    emailVerificationRequired 仅在需要邮件激活时出现（TS 按需返回键）；
+    emailVerificationRequired 仅在需要邮件激活时出现；
     Python 侧用 None 表达「不出现」，路由层配 response_model_exclude_none
     使响应里彻底省略该键（而非序列化成 null）。
     """
@@ -186,7 +184,7 @@ class RegisterResult(BaseModel):
 
 
 class SendResetCodeRequest(BaseModel):
-    """发送密码重置验证码请求体（对应 TS user/dto/extra.dto.ts 的 SendResetCodeDto）"""
+    """发送密码重置验证码请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -194,12 +192,12 @@ class SendResetCodeRequest(BaseModel):
         json_schema_extra={"example": {"email": "alice@example.com"}},
     )
 
-    # TS @IsEmail()；未注册邮箱由服务层 404（与 TS 一致，明确提示防枚举）
+    #()；未注册邮箱由服务层 404
     email: EmailStr = Field(..., description="注册时填写的邮箱")
 
 
 class ResetPasswordByEmailRequest(BaseModel):
-    """按邮箱重置密码请求体（对应 TS ResetPasswordByEmailDto）"""
+    """按邮箱重置密码请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -213,11 +211,11 @@ class ResetPasswordByEmailRequest(BaseModel):
         },
     )
 
-    # TS @IsEmail()
+    #()
     email: EmailStr = Field(..., description="注册时填写的邮箱")
-    # TS 只有 @IsString()（无 MinLength）：空串也放行，交由验证码比对统一 400
+    #()（无 MinLength）：空串也放行，交由验证码比对统一 400
     code: str = Field(..., description="邮箱收到的 6 位验证码")
-    # TS @MinLength(6)；上限见模块文档（防 bcrypt 72 字节 ValueError，服务层再按字节兜一次）
+    #(6)；上限见模块文档（防 bcrypt 72 字节 ValueError，服务层再按字节兜一次）
     new_password: str = Field(
         ...,
         min_length=6,
@@ -227,8 +225,7 @@ class ResetPasswordByEmailRequest(BaseModel):
 
 
 class MessageResult(BaseModel):
-    """通用消息响应（对应 TS verifyEmail / sendResetCode / resetPasswordByEmail
-    返回的 { message: string }）"""
+    """通用消息响应"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 

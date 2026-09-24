@@ -1,10 +1,10 @@
-"""auth 邮箱/密码路由 E2E 冒烟（对应 TS AuthController 的 4 个新端点）
+"""auth 邮箱/密码路由 E2E 冒烟
 
 覆盖路由（app/api/v1/auth.py）：
-  - POST /auth/logout                    需登录（TS 未标 @Public），201
-  - GET  /auth/verify-email?token=...    公开，200；令牌一次性消费
-  - POST /auth/password/reset/send-code  公开，201；60s 冷却、未注册邮箱 404
-  - POST /auth/password/reset            公开，201；成功后删码，新密码可登录
+  - POST /auth/logout 需登录，201
+  - GET /auth/verify-email?token=... 公开，200；令牌一次性消费
+  - POST /auth/password/reset/send-code 公开，201；60s 冷却、未注册邮箱 404
+  - POST /auth/password/reset 公开，201；成功后删码，新密码可登录
 
 与 smoke_email_flow.py（服务层直测）互补，本脚本走完整 HTTP 链路：
 裸 FastAPI app（不挂 lifespan）+ httpx.ASGITransport，真实 PG + Redis。
@@ -50,7 +50,7 @@ async def _fake_send(message: object) -> None:
     _sent_messages.append(message)
 
 
-email_service._send = _fake_send  # type: ignore[method-assign]
+email_service._send = _fake_send # type: ignore[method-assign]
 
 RUN_TAG = f"{int(time.time())}{secrets.token_hex(3)}"
 USERNAME = f"smoke-route-{RUN_TAG}"
@@ -61,7 +61,7 @@ NEW_PASSWORD = "newpass456"
 
 
 def show(step: str, resp: httpx.Response) -> None:
-    print(f"  {step}: {resp.status_code} {resp.text[:120]}")
+    print(f" {step}: {resp.status_code} {resp.text[:120]}")
 
 
 def reset_code_key(email: str) -> str:
@@ -101,7 +101,7 @@ async def main() -> None:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://smoke"
         ) as client:
-            # 1) logout 未带 token → 401（TS logout 没标 @Public，同样需登录）
+            # 1) logout 未带 token → 401
             resp = await client.post(f"{API}/auth/logout")
             show("1 logout 无 token", resp)
             assert resp.status_code == 401, resp.text
@@ -114,7 +114,7 @@ async def main() -> None:
             assert resp.status_code == 201, resp.text
             assert resp.json() == {"message": "已退出登录"}, resp.text
 
-            # 3) verify-email 缺 token query → 422（刻意优于 TS：参数校验前置）
+            # 3) verify-email 缺 token query → 422
             resp = await client.get(f"{API}/auth/verify-email")
             show("3 verify-email 缺 token", resp)
             assert resp.status_code == 422, resp.text
@@ -145,7 +145,7 @@ async def main() -> None:
 
             if need_verify:
                 # 5a) 需激活：注册响应带 emailVerificationRequired=true，
-                #     激活令牌已在 Redis（email:activation:user:{uid} → token）
+                # 激活令牌已在 Redis（email:activation:user:{uid} → token）
                 assert "邮件激活" in body["message"], body
                 token = await redis_service.get(f"email:activation:user:{user_id}")
                 assert token, "激活令牌未写入 Redis"
@@ -173,7 +173,7 @@ async def main() -> None:
                 assert resp.status_code == 200, resp.text
                 assert resp.json()["message"] == "账户已激活，请直接登录", resp.text
 
-            # 6) send-code 未注册邮箱 → 404「该邮箱未注册」（TS 同款明确提示）
+            # 6) send-code 未注册邮箱 → 404「该邮箱未注册」
             resp = await client.post(
                 f"{API}/auth/password/reset/send-code",
                 json={"email": f"nobody-{RUN_TAG}@example.com"},

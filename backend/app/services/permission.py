@@ -1,21 +1,20 @@
-"""权限管理服务（对应 TS src/user/permission.service.ts）
+"""权限管理服务
 
-与 TS 的仓库/工具对应：
-  permRepo       → Permission        (app/models/permission.py)
-  rolePermRepo   → RolePermission    (app/models/role_permission.py)
-  userPermRepo   → UserPermission    (app/models/user_permission.py)
-  userRoleRepo   → UserRole          (app/models/user_role.py)
-  roleRepo       → Role              (app/models/role.py)
+：
+  permRepo → Permission (app/models/permission.py)
+  rolePermRepo → RolePermission (app/models/role_permission.py)
+  userPermRepo → UserPermission (app/models/user_permission.py)
+  userRoleRepo → UserRole (app/models/user_role.py)
+  roleRepo → Role (app/models/role.py)
   nextSnowflakeId → app.common.snowflake.next_snowflake_id
 
-关键保真点（逐条对齐 TS，便于后续反查）：
-  - 软删：delete 只置 deleted=true（TS permRepo.save 同款；kh_permission 有 deleted 列）。
+关键保真点：
+  - 软删：delete 只置 deleted=true。
     注意 RolePermission / UserPermission 的授权是**硬删**（repo.delete 同款）。
-  - 父不能是自己：update 传 parentId==自身 id → 400「父权限不能是自己」（TS BadRequestException）。
+  - 父不能是自己：update 传 parentId==自身 id → 400「父权限不能是自己」。
   - 删除前置校验：有子权限 400 / 有关联角色或用户 400（均 BadRequestException）。
-  - getUserPermissionCodes：合并「直接权限 + 角色权限」（角色权限**不**过滤 role.status，
-    与 TS 一致；角色编码查询才过滤 role.status=1 判定管理员）；用户拥有任一 ADMIN_ROLES
-    角色时追加 ADMIN_OPERATION_PERMISSIONS（TS 同款，非 blanket 放行）。
+  - getUserPermissionCodes：合并「直接权限 + 角色权限」；用户拥有任一 ADMIN_ROLES
+    角色时追加 ADMIN_OPERATION_PERMISSIONS。
 """
 
 from fastapi import HTTPException
@@ -44,7 +43,7 @@ class PermissionService:
     # ---------------- 基础查询 ----------------
 
     async def list_all(self, session: AsyncSession) -> list[Permission]:
-        """启用且未删的权限，按 sort、created_at 升序（对应 TS listAll）"""
+        """启用且未删的权限，按 sort、created_at 升序"""
         stmt = (
             select(Permission)
             .where(Permission.deleted == False, Permission.status == 1)
@@ -53,7 +52,7 @@ class PermissionService:
         return list((await session.scalars(stmt)).all())
 
     async def get_by_id(self, session: AsyncSession, permission_id: str) -> Permission:
-        """按 ID 查权限（对应 TS getById）；非法/不存在/已删 → 404「权限不存在」"""
+        """按 ID 查权限；非法/不存在/已删 → 404「权限不存在」"""
         pk = parse_bigint(permission_id)
         if pk is None:
             raise HTTPException(status_code=404, detail="权限不存在")
@@ -67,10 +66,10 @@ class PermissionService:
         return perm
 
     async def get_children(self, session: AsyncSession, parent_id: str) -> list[Permission]:
-        """查某父权限下的子权限（对应 TS getChildren）"""
+        """查某父权限下的子权限"""
         pid = parse_bigint(parent_id)
         if pid is None:
-            # 非法父 ID → 视为无子节点，与 TS「查不到即空」一致
+            # 非法父 ID → 视为无子节点，
             return []
         stmt = (
             select(Permission)
@@ -84,7 +83,7 @@ class PermissionService:
         return list((await session.scalars(stmt)).all())
 
     async def page(self, session: AsyncSession, query: QueryPermissionRequest) -> dict:
-        """分页 + keyword 模糊（对应 TS page）；keyword 去空格后 ILIKE 两列"""
+        """分页 + keyword 模糊；keyword 去空格后 ILIKE 两列"""
         page = query.page or 1
         page_size = query.page_size or 20
         conditions = [Permission.deleted == False]
@@ -113,7 +112,7 @@ class PermissionService:
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     async def get_tree(self, session: AsyncSession) -> list[dict]:
-        """组装权限树（对应 TS getTree）；根节点 parentId='0' 递归展开 children"""
+        """组装权限树；根节点 parentId='0' 递归展开 children"""
         perms = await self.list_all(session)
         parent_groups: dict[str, list[Permission]] = {}
         for p in perms:
@@ -132,7 +131,7 @@ class PermissionService:
     # ---------------- 写操作 ----------------
 
     async def create(self, session: AsyncSession, dto: CreatePermissionRequest) -> Permission:
-        """创建权限（对应 TS create）"""
+        """创建权限"""
         exists = (
             await session.scalars(
                 select(Permission.id).where(
@@ -167,7 +166,7 @@ class PermissionService:
         permission_id: str,
         dto: UpdatePermissionRequest,
     ) -> Permission:
-        """更新权限（对应 TS update）；全字段可选，未传不改"""
+        """更新权限；全字段可选，未传不改"""
         perm = await self.get_by_id(session, permission_id)
         if dto.permission_code is not None and dto.permission_code != perm.permission_code:
             exists = (
@@ -209,7 +208,7 @@ class PermissionService:
         return perm
 
     async def delete(self, session: AsyncSession, permission_id: str) -> None:
-        """软删权限（对应 TS delete）；前置校验子权限 / 关联角色或用户"""
+        """软删权限；前置校验子权限 / 关联角色或用户"""
         perm = await self.get_by_id(session, permission_id)
         child_count = (
             await session.scalar(
@@ -244,7 +243,7 @@ class PermissionService:
     async def get_role_permission_ids(
         self, session: AsyncSession, role_id: str
     ) -> list[str]:
-        """角色已授予的权限 ID 列表（对应 TS getRolePermissionIds）"""
+        """角色已授予的权限 ID 列表"""
         await self._ensure_role_exists(session, role_id)
         rows = (
             await session.scalars(
@@ -258,7 +257,7 @@ class PermissionService:
     async def assign_role_permissions(
         self, session: AsyncSession, role_id: str, dto: AssignPermissionIdsRequest
     ) -> list[str]:
-        """全量替换角色权限（对应 TS assignRolePermissions）；先删后插"""
+        """全量替换角色权限；先删后插"""
         await self._ensure_role_exists(session, role_id)
         await self._validate_permission_ids(session, dto.permission_ids)
         rid = parse_bigint(role_id)
@@ -279,7 +278,7 @@ class PermissionService:
     async def get_user_direct_permission_ids(
         self, session: AsyncSession, user_id: str
     ) -> list[str]:
-        """用户直接授权（非经角色）的权限 ID 列表（对应 TS getUserDirectPermissionIds）"""
+        """用户直接授权（非经角色）的权限 ID 列表"""
         rows = (
             await session.scalars(
                 select(UserPermission.permission_id).where(
@@ -292,7 +291,7 @@ class PermissionService:
     async def assign_user_permissions(
         self, session: AsyncSession, user_id: str, dto: AssignPermissionIdsRequest
     ) -> list[str]:
-        """全量替换用户直接权限（对应 TS assignUserPermissions）；先删后插"""
+        """全量替换用户直接权限；先删后插"""
         await self._validate_permission_ids(session, dto.permission_ids)
         uid = parse_bigint(user_id)
         await session.execute(
@@ -314,7 +313,7 @@ class PermissionService:
     async def get_user_permission_codes(
         self, session: AsyncSession, user_id: str
     ) -> list[str]:
-        """合并用户权限码集合（对应 TS getUserPermissionCodes）
+        """合并用户权限码集合
 
         组成：直接权限 + 角色权限（都要求 perm.status=1、perm.deleted=false）；
         角色拥有任一 ADMIN_ROLES 时追加 ADMIN_OPERATION_PERMISSIONS。
@@ -367,7 +366,7 @@ class PermissionService:
     # ---------------- 内部辅助 ----------------
 
     async def _ensure_role_exists(self, session: AsyncSession, role_id: str) -> Role:
-        """角色必须存在（任何状态），否则 404「角色不存在」（对应 TS ensureRoleExists）"""
+        """角色必须存在（任何状态），否则 404「角色不存在」"""
         pk = parse_bigint(role_id)
         if pk is None:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -379,7 +378,7 @@ class PermissionService:
     async def _validate_permission_ids(
         self, session: AsyncSession, ids: list[str]
     ) -> None:
-        """校验权限 ID 全部存在且启用（对应 TS validatePermissionIds）
+        """校验权限 ID 全部存在且启用
 
         空列表直接放行；含非法 ID 或指向已停用的权限 → 404「部分权限不存在或已禁用」。
         """

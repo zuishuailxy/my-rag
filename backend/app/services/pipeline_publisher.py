@@ -1,5 +1,5 @@
 """
-文档发布管线投递（对应 TS DocumentPipelinePublisher）
+文档发布管线投递
 
 真实实现基于 RabbitMQ：发布后向 rag.reindex.exchange 投递 RAG 重建消息
 （见 app/mq/publisher.py / app/mq/rabbitmq.py）。

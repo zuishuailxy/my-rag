@@ -1,8 +1,8 @@
 """邮件服务 + 激活令牌 冒烟验证
 
-覆盖两块（对应 TS email.service.ts / email-activation.service.ts）：
+覆盖两块：
 - EmailService：不真发 SMTP——猴子补丁捕获 _send 的 EmailMessage，校验
-  From/To/Subject、纯文本与 HTML 双部分、激活链接格式（文案与 TS 逐字一致）
+  From/To/Subject、纯文本与 HTML 双部分、激活链接格式
 - EmailActivationService：走真实 Redis 全流程——双 key 设计（token→userId、
   userId→token）、重发作废旧令牌、消费一次性、按 token 作废
 
@@ -40,7 +40,7 @@ def _part_of(message: EmailMessage, content_type: str) -> str:
 
 
 def ok(step: str) -> None:
-    print(f"  ✅ {step}")
+    print(f" ✅ {step}")
 
 
 async def main() -> bool:
@@ -54,7 +54,7 @@ async def main() -> bool:
         _sent.append(message)
 
     orig_send = email_service._send
-    email_service._send = _capture  # type: ignore[method-assign]
+    email_service._send = _capture # type: ignore[method-assign]
     try:
         # ---------- 1) 激活邮件：收发件人 / 主题 / 链接 ----------
         await email_service.send_activation_email("u@example.com", "小明", "tok-abc")
@@ -69,7 +69,7 @@ async def main() -> bool:
         html = _part_of(msg, "text/html")
         assert "小明" in text and link in text, text
         assert f'<a href="{link}">{link}</a>' in html and "24 小时内有效" in html, html
-        ok("激活邮件：Subject/链接/双部分文案与 TS 一致")
+        ok
 
         # ---------- 2) 重置验证码邮件 ----------
         await email_service.send_reset_code_email("u@example.com", "小明", "654321")
@@ -79,13 +79,13 @@ async def main() -> bool:
         html = _part_of(msg, "text/html")
         assert "654321" in text and "10 分钟内有效" in text, text
         assert "654321" in html and "letter-spacing:4px" in html, html
-        ok("重置验证码邮件：验证码/有效期文案与 TS 一致")
+        ok
     finally:
-        email_service._send = orig_send  # type: ignore[method-assign]
+        email_service._send = orig_send # type: ignore[method-assign]
 
     # ============ 二、EmailActivationService（真实 Redis E2E） ============
     print("—— EmailActivationService ——")
-    user_id = "1000000000000000001"  # 种子 admin，不落 PG，只碰 Redis
+    user_id = "1000000000000000001" # 种子 admin，不落 PG，只碰 Redis
     try:
         # ---------- 3) 创建令牌：64 hex + 双 key 落库 ----------
         token1 = await email_activation_service.create_token(user_id)
@@ -118,7 +118,7 @@ async def main() -> bool:
         await email_activation_service.delete_by_token(token3)
         assert await redis_service.get(f"{TOKEN_PREFIX}{token3}") is None
         assert await redis_service.get(f"{USER_PREFIX}{user_id}") is None
-        await email_activation_service.delete_by_token("no-such-token")  # 不抛错
+        await email_activation_service.delete_by_token("no-such-token") # 不抛错
         ok("delete_by_token：两侧 key 一起删 + 未知 token 静默跳过")
     finally:
         # 清理该前缀全部键（冒烟不污染）
@@ -130,7 +130,7 @@ async def main() -> bool:
         ]
         if keys:
             await redis_service.delete(*keys)
-            print(f"  🧹 已清理激活令牌键 {len(keys)} 个")
+            print(f" 🧹 已清理激活令牌键 {len(keys)} 个")
         await redis_service.close()
 
     print("\n全部通过 ✅")

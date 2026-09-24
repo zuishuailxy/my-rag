@@ -1,5 +1,5 @@
 """
-文档发布后管线的 MQ 消费者（对应 TS DocumentPipelineConsumer）
+文档发布后管线的 MQ 消费者
 
 消费：
 - RAG 向量化（kh.rag.reindex.queue）

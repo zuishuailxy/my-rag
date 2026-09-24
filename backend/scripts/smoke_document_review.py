@@ -1,5 +1,5 @@
 """
-文档审核服务集成冒烟测试（对应 TS DocumentReviewService）
+文档审核服务集成冒烟测试
 
 前置条件：本地 docker 的 postgres（kh_document / kh_document_review 已由 init.sql 建好）
 与 mongodb 运行中。RabbitMQ 未启动时投递会降级为 warn，不影响断言。
@@ -9,9 +9,9 @@
 
 测试会真实写入数据，结束时物理清理，不留脏数据。
 
-注：submit_for_review 的 actor 是**可选**参数（对应 TS `submitForReview(id, actor?)`，
+注：submit_for_review 的 actor 是**可选**参数（)`，
 与 update / remove 那批必传 actor 的写路径不同）：传了才做写权校验（ADMIN 或作者本人），
-缺省跳过 —— 与 TS `if (actor && !canWriteDocument(doc, actor))` 的短路语义一致。
+(actor && !canWriteDocument(doc, actor))` 的短路语义一致。
 第 11 段覆盖该分支。
 """
 import asyncio
@@ -45,7 +45,7 @@ OTHER = AuthUser(user_id="9204", username="smoke-other", roles=["ROLE_USER"])
 
 
 async def main() -> None:
-    # 日志对齐 NestJS 风格：[LEVEL] [ClassName] 中文消息：key=value
+    # 日志
     # 脚本独立运行时 root logger 默认 WARNING，需显式开启 INFO 才能看到服务日志
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s"
@@ -91,11 +91,11 @@ async def main() -> None:
             current = await svc.get_current_review(session, doc_id)
             assert current is not None and current.review_result is None
             assert current.before_status == 0
-            print("   待审记录: reviewId =", current.id, "| reviewResult =", current.review_result)
+            print(" 待审记录: reviewId =", current.id, "| reviewResult =", current.review_result)
 
             # 2) 重复提审 → 400
-            #    与 TS 一致：文档已是 PendingReview，先命中 canSubmitReview 校验
-            #    （「该文档已有待审核任务」分支仅在状态为 Draft/Published 而流水未结案时出现）
+            # 文档已是 PendingReview，先命中 canSubmitReview 校验
+            # （「该文档已有待审核任务」分支仅在状态为 Draft/Published 而流水未结案时出现）
             try:
                 await svc.submit_for_review(session, doc_id)
                 raise AssertionError("重复提审未被拦截")
@@ -104,11 +104,11 @@ async def main() -> None:
                 print("2) 重复提审 → 400 OK:", e.detail)
 
             # 3) 驳回：空意见 → 400
-            #    审核人必填（TS 同款），这里用种子 reviewer 账号
+            # 审核人必填，这里用种子 reviewer 账号
             review_id = current.id
             try:
                 await svc.reject_review(
-                    session, review_id, "   ", SEED_REVIEWER_ID, SEED_REVIEWER_USERNAME
+                    session, review_id, " ", SEED_REVIEWER_ID, SEED_REVIEWER_USERNAME
                 )
                 raise AssertionError("空驳回意见未被拦截")
             except HTTPException as e:
@@ -119,7 +119,7 @@ async def main() -> None:
             doc = await svc.reject_review(
                 session,
                 review_id,
-                "  内容需补充  ",
+                " 内容需补充 ",
                 reviewer_id="9001",
                 reviewer_name="张三",
             )
@@ -128,10 +128,10 @@ async def main() -> None:
 
             history = await svc.get_review_history(session, doc_id)
             assert history[0].review_result == int(ReviewResult.REJECTED)
-            assert history[0].review_comment == "内容需补充"  # trim 生效
+            assert history[0].review_comment == "内容需补充" # trim 生效
             assert history[0].reviewer_name == "张三"
             assert history[0].reviewed_at is not None
-            print("   历史首条: result =", history[0].review_result, "| comment =", history[0].review_comment)
+            print(" 历史首条: result =", history[0].review_result, "| comment =", history[0].review_comment)
 
             # 5) 已结案记录再次审核 → 400
             try:
@@ -162,7 +162,7 @@ async def main() -> None:
             assert approved.review_result == int(ReviewResult.APPROVED)
             assert approved.reviewer_name == SEED_REVIEWER_USERNAME
             assert approved.reviewer_id == SEED_REVIEWER_ID
-            print("   通过记录: reviewerName =", approved.reviewer_name, "| reviewerId =", approved.reviewer_id)
+            print(" 通过记录: reviewerName =", approved.reviewer_name, "| reviewerId =", approved.reviewer_id)
 
             # 7) 已发布再提审 → 状态回 PendingReview（触发 safe_unpublish 清索引）
             doc = await svc.submit_for_review(session, doc_id)
@@ -204,8 +204,8 @@ async def main() -> None:
                 assert e.status_code == 404, e.status_code
                 print("10) 不存在的文档 → 404 OK:", e.detail)
 
-            # 11) 写权校验（对应 TS submitForReview 内的 canWriteDocument；actor 可选）
-            #     新建一篇 author=AUTHOR 的草稿，逐个身份尝试提审
+            # 11) 写权校验
+            # 新建一篇 author=AUTHOR 的草稿，逐个身份尝试提审
             w_created = await DocumentService().create(
                 session,
                 DocumentCreate(
@@ -240,7 +240,7 @@ async def main() -> None:
                 assert e.status_code == 403, e.status_code
                 print("11b) 审核员提审 → 403 OK:", e.detail)
 
-            # 11c) 作者本人 → 放行，且 updateBy 记实际操作者（TS `actor?.userId`）
+            # 11c) 作者本人 → 放行，且 updateBy 记实际操作者
             w_doc = await svc.submit_for_review(session, w_doc_id, AUTHOR)
             assert int(w_doc.status) == int(DocumentStatus.PENDING_REVIEW)
             assert w_doc.update_by == int(AUTHOR.user_id)
@@ -260,7 +260,7 @@ async def main() -> None:
             assert w_doc.update_by == int(ADMIN_USER.user_id)
             print("11d) ADMIN 提审 → PendingReview OK，updateBy =", w_doc.update_by)
 
-            # 11e) actor=None → 跳过校验（TS `if (actor && ...)` 短路语义），仍可提审
+            # 11e) actor=None → 跳过校验（(actor && ...)` 短路语义），仍可提审
             w_cur = await svc.get_current_review(session, w_doc_id)
             assert w_cur is not None
             await svc.reject_review(

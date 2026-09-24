@@ -7,8 +7,8 @@
 
     from smoke_auth import bearer_headers
 
-    with TestClient(app, headers=bearer_headers()) as client:   # 同步脚本
-    async with httpx.AsyncClient(..., headers=bearer_headers()) as client:  # 异步脚本
+    with TestClient(app, headers=bearer_headers()) as client: # 同步脚本
+    async with httpx.AsyncClient(..., headers=bearer_headers()) as client: # 异步脚本
 
 这里**直接签发 JWT 而不调登录接口**：登录需要先有 client，而 client 又需要先有 token，
 会形成死循环；直接签发也让上面这种单点改造成立。登录链路本身由 smoke_auth_guard.py 覆盖。
@@ -27,9 +27,9 @@ import jwt
 from app.core.config import settings
 
 # init.sql 种子数据：三个预置账号（ID / username 与种子一致）
-#   admin    ROLE_ADMIN + ROLE_REVIEWER  → 可通过 @roles(REVIEWER, ADMIN) 的审核接口
-#   reviewer ROLE_REVIEWER               → 同上
-#   user     ROLE_USER                   → 审核接口应 403
+# admin ROLE_ADMIN + ROLE_REVIEWER → 可通过 @roles(REVIEWER, ADMIN) 的审核接口
+# reviewer ROLE_REVIEWER → 同上
+# user ROLE_USER → 审核接口应 403
 SEED_ADMIN_ID = "1000000000000000001"
 SEED_ADMIN_USERNAME = "admin"
 SEED_REVIEWER_ID = "1000000000000000002"

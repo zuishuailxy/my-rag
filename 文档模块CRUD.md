@@ -1,14 +1,14 @@
 # 文档模块 CRUD 实现说明
 
 - 日期：2026-08-27
-- 范围：文档（Document）模块从 NestJS（TypeORM + Mongoose）到 FastAPI（SQLAlchemy 2.0 + motor）的完整移植
+- 范围：文档（Document）（TypeORM + Mongoose）到 FastAPI（SQLAlchemy 2.0 + motor）的完整移植
 - 状态：已通过真实数据库集成测试（docker 内 Postgres + MongoDB）
 
 ---
 
 ## 1. 背景与架构
 
-原 NestJS 实现采用**双库存储**，移植后保持一致：
+，移植后保持一致：
 
 | 存储 | 表 / 集合 | 内容 | 客户端 |
 |---|---|---|---|
@@ -18,8 +18,8 @@
 两库一对一关联：
 
 ```
-kh_document.content_id  ←→  document_content._id (ObjectId)
-kh_document.id          ←→  document_content.documentId（雪花 ID）
+kh_document.content_id ←→ document_content._id (ObjectId)
+kh_document.id ←→ document_content.documentId（雪花 ID）
 ```
 
 创建顺序：**生成雪花 ID → 先写 Mongo（拿 ObjectId）→ 再写 Postgres**；Postgres 失败时回滚物理删除已写入的 Mongo 正文，避免脏数据。
@@ -49,7 +49,7 @@ kh_document.id          ←→  document_content.documentId（雪花 ID）
 
 ### 3.1 状态枚举（双端共用一份）
 
-`backend/app/models/document.py` 中定义，DTO 与实体共用（与 TS 中 DTO 从 entity 导入枚举的做法一致）：
+`backend/app/models/document.py` 中定义，DTO 与实体共用：
 
 | 枚举 | 值 | 含义 |
 |---|---|---|
@@ -77,7 +77,7 @@ kh_document.id          ←→  document_content.documentId（雪花 ID）
 | `create_by` / `update_by` | BIGINT NULL | 创建人 / 更新人 |
 | `deleted` | BOOLEAN DEFAULT false | 逻辑删除 |
 
-> 大整数统一为 Python `int`（任意精度），无需 TS 的 `bigintTransformer`；API 输出时再转回字符串。
+> 大整数统一为 Python `int`（任意精度）；API 输出时再转回字符串。
 
 ### 3.3 document_content（MongoDB）
 
@@ -96,13 +96,13 @@ kh_document.id          ←→  document_content.documentId（雪花 ID）
 
 ## 4. DTO（Pydantic，对应 class-validator DTO）
 
-| DTO | 对应 TS | 要点 |
+| DTO |
 |---|---|---|
 | `DocumentCreate` | `CreateDocumentDto` | `title`/`content` 必填；其余可选；`status` 用统一枚举；ID 字段为字符串 + camelCase 别名 |
 | `DocumentQuery` | `QueryDocumentDto` | `title` 模糊、分类/团队/作者/状态筛选；`page` 默认 1（ge=1）；`pageSize` 默认 20（1–100） |
 | `DocumentUpdate` | `UpdateDocumentDto` = `PartialType(OmitType(Create, ['createBy']))` | 全部字段可选；去掉 `createBy`；新增 `updateBy` |
 
-接口层接受 camelCase（`categoryId`/`pageSize`…），与 TS API 一致；`populate_by_name=True` 同时兼容 snake_case。
+接口层接受 camelCase（`categoryId`/`pageSize`…）；`populate_by_name=True` 同时兼容 snake_case。
 
 ## 5. Service 业务逻辑（`DocumentService`）
 
@@ -167,43 +167,43 @@ kh_document.id          ←→  document_content.documentId（雪花 ID）
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/documents \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "title": "部署指南",
-    "content": "# 部署\n1. docker compose up -d\n2. 初始化数据库",
-    "categoryId": "100",
-    "authorId": "200",
-    "status": 1,
-    "createBy": "300"
-  }'
+ -H 'Content-Type: application/json' \
+ -d '{
+ "title": "部署指南",
+ "content": "# 部署\n1. docker compose up -d\n2. 初始化数据库",
+ "categoryId": "100",
+ "authorId": "200",
+ "status": 1,
+ "createBy": "300"
+ }'
 ```
 
 ```json
 {
-  "id": "748087797847429120",
-  "title": "部署指南",
-  "contentId": "66f2a1b2c3d4e5f6a7b8c9d0",
-  "summary": null,
-  "categoryId": "100",
-  "teamId": null,
-  "authorId": "200",
-  "coverImage": null,
-  "tags": null,
-  "status": 1,
-  "remark": null,
-  "viewCount": 0,
-  "likeCount": 0,
-  "commentCount": 0,
-  "favouriteCount": 0,
-  "wordCount": 15,
-  "publishTime": "2026-08-27T08:00:47.523536",
-  "isPublic": false,
-  "createdAt": "2026-08-27T08:00:47.523536",
-  "updatedAt": "2026-08-27T08:00:47.523536",
-  "createBy": "300",
-  "updateBy": "300",
-  "deleted": false,
-  "content": "# 部署\n1. docker compose up -d\n2. 初始化数据库"
+ "id": "748087797847429120",
+ "title": "部署指南",
+ "contentId": "66f2a1b2c3d4e5f6a7b8c9d0",
+ "summary": null,
+ "categoryId": "100",
+ "teamId": null,
+ "authorId": "200",
+ "coverImage": null,
+ "tags": null,
+ "status": 1,
+ "remark": null,
+ "viewCount": 0,
+ "likeCount": 0,
+ "commentCount": 0,
+ "favouriteCount": 0,
+ "wordCount": 15,
+ "publishTime": "2026-08-27T08:00:47.523536",
+ "isPublic": false,
+ "createdAt": "2026-08-27T08:00:47.523536",
+ "updatedAt": "2026-08-27T08:00:47.523536",
+ "createBy": "300",
+ "updateBy": "300",
+ "deleted": false,
+ "content": "# 部署\n1. docker compose up -d\n2. 初始化数据库"
 }
 ```
 
@@ -211,8 +211,8 @@ curl -X POST http://localhost:8000/api/v1/documents \
 
 ```bash
 curl -X PATCH http://localhost:8000/api/v1/documents/748087797847429120 \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "新的正文内容", "updateBy": "800"}'
+ -H 'Content-Type: application/json' \
+ -d '{"content": "新的正文内容", "updateBy": "800"}'
 ```
 
 ## 7. 错误处理
@@ -230,8 +230,8 @@ curl -X PATCH http://localhost:8000/api/v1/documents/748087797847429120 \
 
 ```bash
 cd backend
-PYTHONPATH=. .venv/bin/python scripts/smoke_document_service.py   # Service 层
-PYTHONPATH=. .venv/bin/python scripts/smoke_document_api.py       # HTTP 层
+PYTHONPATH=. .venv/bin/python scripts/smoke_document_service.py # Service 层
+PYTHONPATH=. .venv/bin/python scripts/smoke_document_api.py # HTTP 层
 ```
 
 覆盖点：
@@ -243,17 +243,17 @@ PYTHONPATH=. .venv/bin/python scripts/smoke_document_api.py       # HTTP 层
 
 | 问题 | 现象 | 修复 |
 |---|---|---|
-| `favourite_count` 拼写不一致 | 模型 / 运行中 dev 库（旧 volume）为美式 `favorite_count`，`init.sql` 与 TS 为英式 | 统一英式；dev 库执行 `ALTER TABLE ... RENAME COLUMN`；模型改回 |
+| `favourite_count` 拼写不一致 | 模型 / 运行中 dev 库（旧 volume）为美式 `favorite_count`；dev 库执行 `ALTER TABLE ... RENAME COLUMN`；模型改回 |
 | fastapi 0.110.1 不支持 query 参数模型 | `Annotated[Model, Query()]` 直接 AssertionError（0.115 才支持） | GET 端点显式声明 Query 参数，再组装 `DocumentQuery` |
 | 超出 int64 的 id 导致 500 | Python `int()` 任意精度不抛错，超界发生在 asyncpg 绑定参数时 | `_parse_bigint()` 显式范围检查：路径 id → 404，筛选 id → 400 |
 | 缺少 `greenlet` | SQLAlchemy 异步会话报 `No module named 'greenlet'` | `uv add greenlet`（`sqlalchemy[asyncio]` extra 的必需依赖） |
 | Mongoose `timestamps: true` 无对应魔法 | Mongo 文档无自动 createdAt/updatedAt | Service 层统一 `_utcnow()` 手动维护 |
 
-## 10. 与 NestJS 实现的差异与注意事项
+##
 
 1. **Mongo 时间戳**：Mongoose 自动维护 `createdAt/updatedAt`，Python 侧在写库 helper 中显式赋值，保持语义一致。
-2. **DTO 与实体的枚举统一**：`DocumentStatus` 只有一份（IntEnum，0/1/2），DTO 从模型导入，避免 TS 中"字符串枚举 vs 数值枚举"的分裂。
-3. **大整数序列化**：响应中所有 bigint 字段输出为字符串（对齐 TS `bigintTransformer`），键名 camelCase。
+2. **DTO 与实体的枚举统一**：`DocumentStatus` 只有一份（IntEnum，0/1/2），DTO 从模型导入，"字符串枚举 vs 数值枚举"的分裂。
+3. **大整数序列化**：响应中所有 bigint 字段输出为字符串，键名 camelCase。
 4. **`DocumentUpdate` 为显式定义**（Pydantic 无 `PartialType`），新增字段时需与 `DocumentCreate` 保持同步，文件内有注释提醒。
 5. **dev 库与 `init.sql` 的一致性**：本次已统一 `favourite_count` 拼写；后续如再遇到新旧 volume 差异，以 `init-scripts/postgresql/init.sql` 为准，并对 dev 库执行对应 DDL。
 

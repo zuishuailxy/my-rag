@@ -1,6 +1,5 @@
 """
-文档发布 / 归档 / 保存草稿 集成冒烟测试（对应 TS DocumentService.publish / archive /
-saveAsDraft / remove / update 的状态与索引同步分支）
+文档发布 / 归档 / 保存草稿 集成冒烟测试
 
 前置条件：本地 docker 的 postgres（kh_document / kh_document_review 已由 init.sql 建好）
 与 mongodb 运行中。RabbitMQ 未启动时不报错（服务内部降级为 warn），但断言依赖
@@ -11,8 +10,7 @@ after_publish / after_unpublish 的**调用次数**，与 MQ 是否可达无关�
 
 测试会真实写入数据，结束时物理清理，不留脏数据。
 
-注：update / publish / archive / save_as_draft / remove 的 actor 为必传参数（对应 TS
-`actor: AuthUser`），服务层做写权校验（ADMIN 或作者本人）。本脚本统一用 AUTHOR 调用，
+注：update / publish / archive / save_as_draft / remove 的 actor 为必传参数，服务层做写权校验（ADMIN 或作者本人）。本脚本统一用 AUTHOR 调用，
 并在 D 段覆盖越权 403 与 ADMIN / 作者放行的分支。
 """
 import asyncio
@@ -54,16 +52,16 @@ def _install_spy() -> None:
     orig_publish = pipeline_publisher.after_publish
     orig_unpublish = pipeline_publisher.after_unpublish
 
-    async def spy_publish(document_id):  # type: ignore[no-untyped-def]
+    async def spy_publish(document_id): # type: ignore[no-untyped-def]
         PUBLISHED.append(str(document_id))
         return await orig_publish(document_id)
 
-    async def spy_unpublish(document_id):  # type: ignore[no-untyped-def]
+    async def spy_unpublish(document_id): # type: ignore[no-untyped-def]
         UNPUBLISHED.append(str(document_id))
         return await orig_unpublish(document_id)
 
-    pipeline_publisher.after_publish = spy_publish  # type: ignore[method-assign]
-    pipeline_publisher.after_unpublish = spy_unpublish  # type: ignore[method-assign]
+    pipeline_publisher.after_publish = spy_publish # type: ignore[method-assign]
+    pipeline_publisher.after_unpublish = spy_unpublish # type: ignore[method-assign]
 
 
 async def _aexpect_400(awaitable, label: str, detail_contains: str) -> None:
@@ -73,19 +71,19 @@ async def _aexpect_400(awaitable, label: str, detail_contains: str) -> None:
     except HTTPException as e:
         assert e.status_code == 400, f"{label}: 期望 400，实际 {e.status_code}"
         assert detail_contains in str(e.detail), f"{label}: detail={e.detail}"
-        print(f"   ✓ {label} → 400：{e.detail}")
+        print(f" ✓ {label} → 400：{e.detail}")
         return
     raise AssertionError(f"{label} 未被拦截")
 
 
 async def _aexpect_403(awaitable, label: str) -> None:
-    """断言 awaitable 抛出 403「无权修改该文档」（写权校验，对应 TS ForbiddenException）"""
+    """断言 awaitable 抛出 403「无权修改该文档」"""
     try:
         await awaitable
     except HTTPException as e:
         assert e.status_code == 403, f"{label}: 期望 403，实际 {e.status_code}"
         assert str(e.detail) == "无权修改该文档", f"{label}: detail={e.detail}"
-        print(f"   ✓ {label} → 403：{e.detail}")
+        print(f" ✓ {label} → 403：{e.detail}")
         return
     raise AssertionError(f"{label} 未被拦截（写权校验缺失）")
 
@@ -358,7 +356,7 @@ async def main() -> None:
 
             # D1~D5) 他人（普通用户）对五条写路径一律 403。
             # 关键：D3 / D4 目标是**草稿**，本会先撞「只有已发布可以归档 / 保存草稿」
-            # 那条 400 —— 拿到 403 才证明写权校验排在状态校验之前（与 TS 同位）。
+            # 那条 400 —— 拿到 403 才证明写权校验排在状态校验之前。
             await _aexpect_403(
                 svc.update(session, guard_id, DocumentUpdate(remark="越权"), OTHER),
                 "D1 update(他人)",
@@ -392,14 +390,14 @@ async def main() -> None:
             )
             assert res["remark"] == "管理员改"
             assert res["updateBy"] == ADMIN_USER.user_id, res["updateBy"]
-            print("   ✓ D7 作者本人 / ADMIN 均可写（updateBy 记实际操作者）")
+            print(" ✓ D7 作者本人 / ADMIN 均可写（updateBy 记实际操作者）")
 
             # D8) 越权尝试必须**零副作用**：文档仍为草稿、remark 仍是管理员改的值
             after = await svc.find_one(session, guard_id)
             assert after["status"] == int(DocumentStatus.DRAFT)
             assert after["remark"] == "管理员改"
             assert after["deleted"] is False
-            print("   ✓ D8 越权请求无副作用（状态 / remark / 删除位均未变）")
+            print(" ✓ D8 越权请求无副作用（状态 / remark / 删除位均未变）")
 
         print(
             f"\n投递统计：after_publish × {len(PUBLISHED)}，"

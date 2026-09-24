@@ -53,7 +53,7 @@ DOC_A = {
     "tags": "smoke",
     "status": 1,
     "isPublic": True,
-    # 仅用于验证 vs 可见性字段回传（对齐 TS item.teamId）；本脚本直写 ES，
+    # 仅用于验证 vs 可见性字段回传；本脚本直写 ES，
     # DOC_A 带团队、DOC_B 不带，覆盖「有值 / 缺字段」两种情况
     "teamId": SMOKE_TEAM_ID,
     "viewCount": 0,
@@ -139,7 +139,7 @@ async def main() -> None:
     # 1) 写入两条测试文档（index_document 内部 refresh）
     await search_index_service.index_document(DOC_A)
     await search_index_service.index_document(DOC_B)
-    print(f"   准备：写入 ES 测试文档 {DOC_A_ID} / {DOC_B_ID}")
+    print(f" 准备：写入 ES 测试文档 {DOC_A_ID} / {DOC_B_ID}")
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -182,7 +182,7 @@ async def main() -> None:
             hit_highlight,
             "highlight 应包含 <em> 包裹的命中词" if not hit_highlight else "命中词被 <em> 包裹",
         )
-        # 字段完整性：返回的命中项含标题 / score / highlight（对齐 TS item 字段，无 content 全文）
+        # 字段完整性：返回的命中项含标题 / score / highlight
         first = items[0]
         check(
             "返回字段",
@@ -192,8 +192,8 @@ async def main() -> None:
             f"title={first.get('title')!r}, score={first.get('score')!r}, highlight={first.get('highlight') is not None}",
         )
 
-        # 4.2) 可见性字段回传（对齐 TS item.isPublic / item.teamId）：
-        #      DOC_A 带 teamId、DOC_B 无该字段 → 分别断言「有值」与「None」
+        # 4.2) 可见性字段回传：
+        # DOC_A 带 teamId、DOC_B 无该字段 → 分别断言「有值」与「None」
         by_id = {it["id"]: it for it in items}
         a_item = by_id.get(str(DOC_A_ID), {})
         b_item = by_id.get(str(DOC_B_ID), {})
@@ -209,7 +209,7 @@ async def main() -> None:
             f"B.teamId={b_item.get('teamId')!r}（期望 None，字段缺失）",
         )
 
-        # 4.5) ES 层验证：列表查询 _source 已排除 content 全文（对齐 TS _source.excludes）
+        # 4.5) ES 层验证：列表查询 _source 已排除 content 全文
         raw = await es_service.client.search(
             index=DOCUMENT_INDEX,
             query={"term": {"id": DOC_A_ID}},

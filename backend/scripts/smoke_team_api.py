@@ -1,4 +1,4 @@
-"""团队模块 E2E 冒烟（对应 TS TeamController / TeamService）
+"""团队模块 E2E 冒烟
 
 覆盖 TeamController 已接线端点（POST / PUT / DELETE / page / mine / tree /
 :id / members 三件套）：
@@ -114,7 +114,7 @@ async def main() -> None:
     check(
         1.2,
         r_tree.status_code == 401,
-        f"无 token GET /teams/tree → {r_tree.status_code}（已按 TS 收紧，原为公开）",
+        f"无 token GET /teams/tree → {r_tree.status_code}",
     )
 
     async with httpx.AsyncClient(
@@ -126,15 +126,15 @@ async def main() -> None:
         r = await client.get(f"{API}/teams/page", headers=user_headers)
         check(2, r.status_code == 403, f"USER 角色 GET /teams/page → {r.status_code}")
 
-        # 2.1 /tree 同样 ADMIN 限定（TS @Roles(ADMIN) + @RequirePermission('system:team')）
+        # 2.1 /tree 同样 ADMIN 限定（(ADMIN) + @RequirePermission('system:team')）
         r = await client.get(f"{API}/teams/tree", headers=user_headers)
         check(
             2.1,
             r.status_code == 403,
-            f"USER 角色 GET /teams/tree → {r.status_code}（TS 是 ADMIN 端点）",
+            f"USER 角色 GET /teams/tree → {r.status_code}",
         )
 
-        # 2.2 /mine 登录即可：TS 该端点没有 @Roles / @RequirePermission
+        # 2.2 /mine 登录即可：
         r = await client.get(f"{API}/teams/mine", headers=user_headers)
         mine_user = [t["id"] for t in r.json()] if r.status_code == 200 else []
         # 种子：user 只在「后端开发组」成员表里（技术中心的成员是 admin）
@@ -198,13 +198,13 @@ async def main() -> None:
         if child_id:
             CREATED_TEAM_IDS.append(child_id)
 
-        # 5. 同码再建 → TS 无查重，如实 201（保真：不引入 409）
+        # 如实 201（保真：不引入 409）
         r = await client.post(
             f"{API}/teams",
             json={"teamName": f"冒烟团队{RUN_TAG}", "teamCode": f"SMOKE_{RUN_TAG}"},
         )
         dup_id = r.json().get("id") if r.status_code == 201 else None
-        check(5, r.status_code == 201, f"POST /teams 同码不查重 → {r.status_code}（TS 同款无 409）")
+        check(5, r.status_code == 201, f"POST /teams 同码不查重 → {r.status_code}")
         if dup_id:
             CREATED_TEAM_IDS.append(dup_id)
 
@@ -302,7 +302,7 @@ async def main() -> None:
         check(17, r.status_code == 404 and r.json()["detail"] == "部分用户不存在",
               f"POST members 假用户 → {r.status_code}")
 
-        # 18. 空数组 → 201 true no-op（TS In([]) 同款）
+        # 18. 空数组 → 201 true no-op（([]) 同款）
         r = await client.post(f"{API}/teams/{child_id}/members", json=[])
         check(18, r.status_code == 201 and r.json() is True, f"POST members 空数组 → {r.status_code}")
 
@@ -358,8 +358,8 @@ async def main() -> None:
         )
         check(24, gone, "tree 不再含已删团队")
 
-        # 25. /mine 的软删过滤（对齐 TS listAccessibleTeamIds 第 3 步）
-        #     新建临时团队 + 把 user 加进去 → 应出现在 user 的 /mine
+        # 25. /mine 的软删过滤
+        # 新建临时团队 + 把 user 加进去 → 应出现在 user 的 /mine
         r = await client.post(
             f"{API}/teams", json={"teamName": f"冒烟mine团队{RUN_TAG}"}
         )
@@ -385,7 +385,7 @@ async def main() -> None:
         )
 
         # 26. 软删该团队后再查 /mine → 必须消失
-        #     ⚠️ 这正是不加 deleted 过滤的后果：已删团队会继续授予文档可见性
+        # ⚠️ 这正是不加 deleted 过滤的后果：已删团队会继续授予文档可见性
         r = await client.delete(f"{API}/teams/{mine_team_id}")
         r2 = await client.get(f"{API}/teams/mine", headers=user_headers)
         ids_after = [t["id"] for t in r2.json()] if r2.status_code == 200 else []

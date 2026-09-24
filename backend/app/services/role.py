@@ -1,12 +1,11 @@
-"""角色管理服务（对应 TS src/user/role.service.ts）
+"""角色管理服务
 
-- kh_role 无 deleted 列（TS 实体同样没有）→ delete 是**硬删除**（TS roleRepo.remove 同款）。
-- getById 对任意非法/不存在的 id 统一 404「角色不存在」（路径参数经 parse_bigint，
-  非法值按「不存在」处理，避免 TS 侧 TypeORM 非数字 id 抛 QueryFailedError → 500 的路径）。
+- kh_role 无 deleted 列→ delete 是**硬删除**。
+- getById 对任意非法/不存在的 id 统一 404「角色不存在」。
 - 服务层无状态、不持会话，session 由路由层传入（同 UserService 惯例）。
 
-与 TS 的对应关系：
-  roleRepo     → Role 模型（app/models/role.py）
+：
+  roleRepo → Role 模型（app/models/role.py）
   userRoleRepo → UserRole 模型（app/models/user_role.py）
   nextSnowflakeId → app.common.snowflake.next_snowflake_id
 """
@@ -23,10 +22,10 @@ from app.schemas.role import RoleCreateRequest, RoleUpdateRequest
 
 
 class RoleService:
-    """角色 CRUD（路由层全部 @roles(ADMIN)，对应 TS RoleController 类级 @Roles）"""
+    """角色 CRUD（路由层全部 @roles(ADMIN)）"""
 
     async def list_all(self, session: AsyncSession) -> list[Role]:
-        """全部**启用**角色，按 roleName 升序（对应 TS listAll）"""
+        """全部**启用**角色，按 roleName 升序"""
         stmt = (
             select(Role)
             .where(Role.status == ROLE_STATUS_ENABLED)
@@ -35,7 +34,7 @@ class RoleService:
         return list((await session.scalars(stmt)).all())
 
     async def get_by_id(self, session: AsyncSession, role_id: str) -> Role:
-        """按 ID 查角色（对应 TS getById）；不存在 / id 非法 → 404「角色不存在」"""
+        """按 ID 查角色；不存在 / id 非法 → 404「角色不存在」"""
         pk = parse_bigint(role_id)
         if pk is None:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -49,9 +48,9 @@ class RoleService:
     async def create(
         self, session: AsyncSession, dto: RoleCreateRequest
     ) -> Role:
-        """创建角色（对应 TS create）；roleCode 查重 → 409「角色编码已存在」。
+        """创建角色；roleCode 查重 → 409「角色编码已存在」。
 
-        依赖数据库唯一约束兜底并发（TS 同款：应用层查重 + 唯一索引双保险）。
+        依赖数据库唯一约束兜底并发。
         """
         exists = (
             await session.scalars(
@@ -76,7 +75,7 @@ class RoleService:
     async def update(
         self, session: AsyncSession, role_id: str, dto: RoleUpdateRequest
     ) -> Role:
-        """部分更新角色（对应 TS update）；未传字段不改动"""
+        """部分更新角色；未传字段不改动"""
         role = await self.get_by_id(session, role_id)
         if dto.role_name is not None:
             role.role_name = dto.role_name
@@ -89,11 +88,10 @@ class RoleService:
         return role
 
     async def delete(self, session: AsyncSession, role_id: str) -> None:
-        """删除角色（对应 TS delete，硬删除）
+        """删除角色
 
         仍有关联用户（kh_user_role 存在引用）→ 400「角色仍有关联用户，无法删除」。
-        TS 的 count 不筛选用户状态/删除位，此处保持一致（哪怕引用方已软删也拦截，
-        避免留下无归属的关系行——TS 原文如此，不擅自放宽）。
+，此处保持一致。
         """
         role = await self.get_by_id(session, role_id)
         pk = role.id

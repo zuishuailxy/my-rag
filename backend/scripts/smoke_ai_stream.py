@@ -109,7 +109,7 @@ async def main() -> None:
                 f"eval={_idx('data-eval')}, sources={_idx('data-sources')}",
             )
         else:
-            print("   （本轮无检索事件：意图未允许检索或模型未调用工具）")
+            print(" （本轮无检索事件：意图未允许检索或模型未调用工具）")
         session_id = next(
             (e["data"]["sessionId"] for e in events if e.get("type") == "data-session"), None
         )
@@ -121,9 +121,9 @@ async def main() -> None:
         n_reasoning = sum(
             len(e.get("delta") or "") for e in events if e.get("type") == "reasoning-delta"
         )
-        print(f"   思考量: {n_reasoning} 字符（0 表示本轮模型未输出思考，不阻断）")
+        print(f" 思考量: {n_reasoning} 字符（0 表示本轮模型未输出思考，不阻断）")
         n_source_docs = sum(1 for t in types if t == "source-document")
-        print(f"   source-document: {n_source_docs} 条（0 表示知识库无召回）")
+        print(f" source-document: {n_source_docs} 条（0 表示知识库无召回）")
 
         # 3) 落库：2 条消息，assistant 内容 == 流式回答
         r = await client.get(f"{BASE}/ai/sessions/{session_id}/messages", headers=user_headers)

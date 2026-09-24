@@ -1,5 +1,5 @@
 """
-文档发布后的知识管线「生产者」（对应 TS DocumentPipelinePublisher）
+文档发布后的知识管线「生产者」
 
 触发：
 - RAG 向量化（rag.reindex.exchange / rag.reindex.by_ids、rag.reindex.delete）
@@ -7,8 +7,7 @@
 - KG 建图（kg.graph.exchange）
 
 约定：投递失败只打日志，不回滚文档已发布状态（由 DocumentService 的 try-catch 兜底）。
-消息一律只带 documentId，消费者自行查库（Search 曾带 1000 字快照，受队列字符
-限制改为按 ID 拉库，对齐 TS 新版）。
+消息一律只带 documentId，消费者自行查库。
 """
 import asyncio
 import logging

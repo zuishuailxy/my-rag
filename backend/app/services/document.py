@@ -65,7 +65,7 @@ def _as_status(value: int | DocumentStatus | None) -> DocumentStatus:
 
 
 def document_to_dict(entity: DocumentEntity) -> dict:
-    """实体 → 响应 dict（bigint 转字符串与 TS bigintTransformer 一致，键名 camelCase）
+    """实体 → 响应 dict
 
     放在模块级是为了给路由层复用：审核服务返回的是 DocumentEntity（不带正文），
     路由需要同一套 bigint → 字符串的转换后再交给 DocumentResponse 校验。
@@ -117,13 +117,12 @@ class DocumentService:
     ) -> dict:
         """创建文档：生成雪花 ID → 写 Mongo 正文（拿 ObjectId）→ 写 Postgres 元数据
 
-        actor 为当前登录用户（TS `create(dto, user)` 的 @CurrentUser()，**必传**）：
+        actor 为当前登录用户（(dto, user)` 的 @CurrentUser()，**必传**）：
 
         authorId / createBy / updateBy 三者**恒为 actor.userId**，一律不读 DTO
-        （TS 原文：`authorId: actor.userId` / `createBy: actor.userId` /
-        `updateBy: actor.userId`）。CreateDocumentDto 里虽有 authorId / createBy 字段，
+。CreateDocumentDto 里虽有 authorId / createBy 字段，
         但服务层忽略 → 客户端无法在创建时伪造作者、创建人或「最后修改人」。
-        ⚠️ 刻意差异说明：TS 的 updateBy 那行原文写作 `dto.createBy ?? actor?.userId`，
+        ⚠️ 刻意差异说明：，
         经核对为笔误（CreateDocumentDto 无 updateBy 字段，写 `dto.updateBy` 编译不过），
         实际效果等价 `actor.userId`，此处按效果对齐。
         副作用（刻意为之）：导入场景显式传 createBy=原作者时，createBy / updateBy
@@ -161,18 +160,16 @@ class DocumentService:
         # ID 字段先校验再写 Mongo：非法值（如 Swagger 默认的 "string"）直接 400，
         # 避免先写正文再回滚删除，也避免非数字串落到 PG 报驱动级错误变成 500
         #
-        # DTO 未传 authorId / createBy 时回退当前登录用户（TS `?? actor?.userId`）。
-        # update_by 单独取 actor（见 docstring：TS `dto.createBy ?? actor?.userId` 是笔误，
-        # 已确认应为 `dto.updateBy ?? actor?.userId`，而 CreateDocumentDto 无 updateBy）。
+        # DTO 未传 authorId / createBy 时回退当前登录用户。
+        # update_by 单独取 actor。
         actor_id = actor.user_id
-        # createBy / updateBy 均恒取当前登录用户（TS `createBy: actor.userId` /
-        # `updateBy: actor.userId`，两者都不读 DTO）—— 不读 dto.createBy，
+        # createBy / updateBy 均恒取当前登录用户—— 不读 dto.createBy，
         # 否则客户端可在创建时伪造「创建人」。
         create_by = require_bigint(actor_id, "createBy")
         update_by = require_bigint(actor_id, "updateBy")
         category_id = require_bigint(dto.category_id, "categoryId")
         team_id = require_bigint(dto.team_id, "teamId")
-        # TS 严格以当前登录用户为作者：`authorId: actor.userId`，不读 dto.authorId
+        # `authorId: actor.userId`，不读 dto.authorId
         # （避免客户端伪造作者）。actor 必传，故 actor_id 恒非空。
         author_id = require_bigint(actor_id, "authorId")
         now = _utcnow()
@@ -241,14 +238,14 @@ class DocumentService:
 
         支持按标题模糊、分类 / 团队 / 作者 / 状态筛选；默认排除已软删记录。
 
-        可见性（对应 TS findAll 的 `const scope = accessFromUser(user)` 分支）：
+        可见性（)` 分支）：
         普通用户只能看到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」：
           - 不受限（ADMIN / REVIEWER）：不加任何可见性条件，与原先行为一致
           - 有团队：author_id = 我
                     OR (status = 已发布 AND (is_public = true OR team_id ∈ 我的团队))
           - 无团队：author_id = 我 OR (status = 已发布 AND is_public = true)
         「自己写的」分支**不限制 status** —— 自己的草稿 / 待审 / 已归档都要能在列表里
-        看到（对齐 TS）；他人的未发布文档一律不可见。
+        看到；他人的未发布文档一律不可见。
 
         ⚠️ scope=None 表示**不加可见性过滤**（与 search_documents(scope=None) /
         hybrid_search(scope=None) / KG 查询侧 scope=None 同一约定）。因此生产链路
@@ -271,7 +268,7 @@ class DocumentService:
                 for pk in (parse_bigint(team_id) for team_id in scope.team_ids)
                 if pk is not None
             ]
-            # 公开 ∪ 所在团队；无团队时退化为只判公开（对齐 TS 的 if/else 两分支）
+            # 公开 ∪ 所在团队；无团队时退化为只判公开
             visible_to_others = (
                 or_(
                     DocumentEntity.is_public.is_(True),
@@ -294,7 +291,7 @@ class DocumentService:
 
         if query.title:
             conditions.append(DocumentEntity.title.ilike(f"%{query.title}%"))
-        # 用真值判断（与 title 一致、也与 TS 的 `if (categoryId)` 一致）：
+        # 用真值判断（与 title 一致、(categoryId)` 一致）：
         # ?categoryId= 空串视为未筛选，而非筛选 category_id IS NULL；
         # 非空但非法（如 "string" / 超 int64）由 require_bigint 抛 400
         if query.category_id:
@@ -344,9 +341,9 @@ class DocumentService:
         """查询文档详情（默认附带 Mongo 正文）
 
         可见性：scope 非空时按 can_read_document 判权，读不到抛 403「无权查看该文档」
-        （对应 TS `findOne(id, true, user)` 里的 `if (user && !canReadDocument(...))`）。
+        （)` 里的 `if (user && !canReadDocument(...))`）。
 
-        scope=None 表示不判权 —— 与 TS 的 `user?: AuthUser` 可选签名一致，仅供脚本 /
+        scope=None 表示不判权 ——，仅供脚本 /
         内部调用；HTTP 端点（GET /documents/{id}）**必须**传 access_from_user(user)，
         否则列表过滤形同虚设（拿到 id 就能直读他人未发布文档）。
         """
@@ -378,19 +375,18 @@ class DocumentService:
         - PATCH 不允许随意改 status；仅兼容 Published→Draft
         - 提交后按状态变化同步 RAG / Search / KG
 
-        actor 为当前登录用户（TS `update(id, dto, user)`）：`updateBy` 恒记 actor.userId、
-        **不读 dto.updateBy**；`author_id` **不可改**（TS 同样不读 dto.authorId）。
+        actor 为当前登录用户（(id, dto, user)`）：`updateBy` 恒记 actor.userId、
+        **不读 dto.updateBy**；`author_id` **不可改**。
         两者都为了让客户端无法伪造归属 / 审计人（DTO 字段仍在，服务层忽略）。
 
         写权：ADMIN 或作者本人，否则 403「无权修改该文档」
-        （对应 TS `this.assertWritable(doc, actor)`，位置在取到实体之后、状态校验之前）。
+        （)`，位置在取到实体之后、状态校验之前）。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
         coll = get_document_content_collection()
         old_status = _as_status(entity.status)
-        # 可见性变更检测用（TS 只比 isPublic / teamId —— **不含作者**：
-        # PATCH 已不允许改 author_id，故无需把作者纳入比较）
+        # 可见性变更检测用
         old_visibility = (entity.is_public, entity.team_id)
 
         # —— 状态与编辑权限（待审核中不可改标题 / 正文）——
@@ -407,9 +403,9 @@ class DocumentService:
         # 空串保持「清空该字段」语义（与改动前一致）。
         new_category_id = require_bigint(dto.category_id, "categoryId")
         new_team_id = require_bigint(dto.team_id, "teamId")
-        # ⚠️ 刻意差异：TS 的 UpdateDocumentDto 经 PartialType 带 authorId、另手动加 updateBy，
+        # ⚠️ 刻意差异：、另手动加 updateBy，
         # 但 `update` **两个都不读**（恒 `doc.updateBy = actor.userId`）。此处同样不读 ——
-        # 否则客户端可借 PATCH 改文档归属、伪造「最后修改人」。DTO 字段保留（与 TS 结构一致），
+        # 否则客户端可借 PATCH 改文档归属、伪造「最后修改人」。DTO 字段保留，
         # 只是服务层忽略。
 
         # PATCH 不允许随意改 status；仅兼容 Published→Draft，其余走专用接口
@@ -446,7 +442,7 @@ class DocumentService:
                         "contentSummary": content_summary,
                         "updatedAt": _utcnow(),
                     },
-                    "$inc": {"version": 1},  # 版本号 +1
+                    "$inc": {"version": 1}, # 版本号 +1
                 },
             )
             if result.matched_count == 0:
@@ -479,7 +475,7 @@ class DocumentService:
             entity.remark = dto.remark
         if dto.is_public is not None:
             entity.is_public = dto.is_public
-        # 无条件记当前登录用户（TS `doc.updateBy = actor.userId`，不读 dto.updateBy）
+        # 无条件记当前登录用户
         entity.update_by = require_bigint(actor.user_id, "updateBy")
 
         await session.commit()
@@ -510,7 +506,7 @@ class DocumentService:
         """软删除文档：Postgres、Mongo 两侧都将 deleted 置为 true（不物理删正文），
         并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）
 
-        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        写权：ADMIN 或作者本人，否则 403（)`）。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -520,7 +516,7 @@ class DocumentService:
             await self._safe_unpublish(doc_id)
 
         entity.deleted = True
-        # TS remove：`doc.updateBy = actor.userId;`（actor 必传，无 ?. 可选链）
+        # `doc.updateBy = actor.userId;`（actor 必传，无 ?. 可选链）
         entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await get_document_content_collection().update_one(
@@ -545,7 +541,7 @@ class DocumentService:
         流程：校验格式 → 解析为 Markdown（PDF 图片走 RustFS）→ 原文件存 RustFS →
         创建草稿（DocumentStatus.DRAFT）→ 返回摘要。
 
-        actor 透传给 create（TS `uploadAndCreateDocument(file, meta, user)` 同款），
+        actor 透传给 create（(file, meta, user)` 同款），
         用于回填 authorId / createBy。
         """
         if not file_data:
@@ -622,7 +618,7 @@ class DocumentService:
                 remark=meta.remark,
                 is_public=meta.is_public,
                 status=DocumentStatus.DRAFT,
-                # 刻意不传 meta.authorId / meta.createBy：TS 的 uploadAndCreateDocument
+                # 刻意不传 meta.authorId / meta.createBy：
                 # 也没传这两个（CreateDocumentDto 有此字段但 create 一律忽略），
                 # 作者 / 创建人恒取当前登录用户。
             ),
@@ -674,7 +670,7 @@ class DocumentService:
         - 需审核：Draft / Published → PendingReview（不建索引）
         - 免审：Draft / Published / Archived → Published + 建索引
 
-        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        写权：ADMIN 或作者本人，否则 403（)`）。
         """
         logger.info("发布文档：documentId=%s", doc_id)
 
@@ -694,7 +690,7 @@ class DocumentService:
         ):
             # 草稿或已发布：进入待审，不建索引；
             # 来自 Published 时 submit_for_review 内部会清旧索引
-            # actor 透传（TS `this.reviewService.submitForReview(id, actor)`）：
+            # actor 透传（(id, actor)`）：
             # 写权已由本方法开头的 _assert_writable 拦过，此处再判一次无害且保真
             saved = await document_review_service.submit_for_review(
                 session, doc_id, actor
@@ -720,7 +716,7 @@ class DocumentService:
         entity.status = DocumentStatus.PUBLISHED
         entity.publish_time = _utcnow()
         if actor is not None and actor.user_id:
-            # TS directPublish：`if (actor?.userId) doc.updateBy = actor.userId;`
+            # `if (actor?.userId) doc.updateBy = actor.userId;`
             entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
@@ -738,7 +734,7 @@ class DocumentService:
     ) -> dict:
         """归档：Published → Archived，清索引
 
-        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        写权：ADMIN 或作者本人，否则 403（)`）。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -747,7 +743,7 @@ class DocumentService:
             raise HTTPException(status_code=400, detail="只有已发布文档可以归档")
 
         entity.status = DocumentStatus.ARCHIVED
-        # TS archive：`doc.updateBy = actor.userId;`（actor 必传）
+        # `doc.updateBy = actor.userId;`（actor 必传）
         entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
@@ -763,7 +759,7 @@ class DocumentService:
     ) -> dict:
         """已发布 → 草稿（保存草稿），清索引
 
-        写权：ADMIN 或作者本人，否则 403（对应 TS `this.assertWritable(doc, actor)`）。
+        写权：ADMIN 或作者本人，否则 403（)`）。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -772,7 +768,7 @@ class DocumentService:
             raise HTTPException(status_code=400, detail="只有已发布文档可以保存为草稿")
 
         entity.status = DocumentStatus.DRAFT
-        # TS saveAsDraft：`doc.updateBy = actor.userId;`（actor 必传）
+        # `doc.updateBy = actor.userId;`（actor 必传）
         entity.update_by = require_bigint(actor.user_id, "updateBy")
         await session.commit()
         await session.refresh(entity)
@@ -800,7 +796,7 @@ class DocumentService:
           就地更新三处索引的可见性字段 —— chunk（ES kh_chunk）、文档级
           （ES kh_document）、图谱文档节点（Neo4j KnowledgeDocument），
           不必重新分块 / 重新嵌入 / 重新拉全文 / 重新抽实体建图
-          （对应 TS PipelineOrchestrator.updateVisibility 的三路 Promise.all）。
+。
 
         两个分支可**同时命中**：免审下重建索引本身就带上了新可见性（本分支再刷一次幂等），
         需审下不重建索引，可见性完全靠本分支兜住 —— 故本分支不得被上面的 return 吞掉。
@@ -818,7 +814,7 @@ class DocumentService:
             await self._safe_unpublish(doc.id)
             return
 
-        # ⚠️ 短路条件必须与 TS **完全同形**：TS 把 `!isRequireApproval()` 写在
+        # ()` 写在
         # if 条件**里面**（`isPublished && contentChanged && !isRequireApproval()`），
         # 所以需审模式下这个分支整体不成立，流程继续往下走可见性同步。
         # 曾经把 `not is_require_approval()` 挪进 if 体内 —— 那等于「需审也 return」，
@@ -838,10 +834,10 @@ class DocumentService:
             # Neo4j 文档节点用 authorId/isPublic/teamId），各自有 update_visibility
             # 实现；任一失败只记日志，不阻断文档更新。
             #
-            # 刻意差异：TS 由 PipelineOrchestrator.updateVisibility 统一 Promise.all
+            # 刻意差异：
             # 三处调用，本项目沿用「document.py 直接调具体服务」的既有结构（编排器
             # 只负责 MQ 消费侧的建索引），此处顺序 await 三处，语义等价。
-            # 外层 try 对齐 TS 的 `try { await pipeline.updateVisibility(doc) }
+            # 外层 try) }
             # catch { warn }`：三处实现内部都已自行降级（不抛），这里是兜底 ——
             # 将来某处改成抛错，也不该把整个 PATCH 打成 500。
             try:
@@ -854,7 +850,7 @@ class DocumentService:
                 await graph_build_service.update_visibility(
                     doc.id, doc.is_public, doc.team_id, doc.author_id
                 )
-            except Exception as err:  # noqa: BLE001
+            except Exception as err: # noqa: BLE001
                 logger.warning(
                     "可见性同步失败（不影响文档保存）：documentId=%s, %s", doc.id, err
                 )
@@ -897,7 +893,7 @@ class DocumentService:
 
     @staticmethod
     def _assert_writable(doc: DocumentEntity, actor: AuthUser) -> None:
-        """写权校验：只有 ADMIN 或作者本人可改（对应 TS DocumentService.assertWritable）
+        """写权校验：只有 ADMIN 或作者本人可改
 
         权限码（require_permission("document:edit")）只回答「能不能用这类接口」，
         不回答「能不能动**这一篇**」。缺了本校验，任何持 document:edit / document:delete
@@ -906,7 +902,7 @@ class DocumentService:
         REVIEWER 不在白名单：审核员走 reviews/tasks 的 approve / reject 处置他人文档，
         不走 update / publish / archive / save-draft / remove。
 
-        越权抛 403「无权修改该文档」（TS ForbiddenException 同款文案 + 状态码）。
+        越权抛 403「无权修改该文档」。
         """
         if not can_write_document(doc, actor):
             raise HTTPException(status_code=403, detail="无权修改该文档")

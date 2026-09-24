@@ -66,7 +66,7 @@ async def main() -> None:
     # 3) DROP 后重建：验证 CREATE 路径（而非只命中已存在）
     async with svc._driver.session() as session:
         for stmt in CONSTRAINT_STATEMENTS:
-            name = stmt.split()[2]  # CREATE CONSTRAINT <name> IF NOT EXISTS ...
+            name = stmt.split()[2] # CREATE CONSTRAINT <name> IF NOT EXISTS ...
             await (await session.run(f"DROP CONSTRAINT {name} IF EXISTS")).consume()
         dropped = set(await _read(session, "SHOW CONSTRAINTS YIELD name RETURN name"))
     assert not (expected & dropped), f"DROP 未生效：{expected & dropped}"
@@ -95,7 +95,7 @@ async def main() -> None:
 
     # 5) 并发 MERGE 同一实体名：约束生效后应只有 1 个节点（历史上会变多份）
     async def _merge_entity(index: int) -> None:
-        async with svc._driver.session() as session:  # type: ignore[union-attr]
+        async with svc._driver.session() as session: # type: ignore[union-attr]
             await svc._run_write(
                 session,
                 "MERGE (e:KnowledgeEntity {name: $name}) "
@@ -127,7 +127,7 @@ async def main() -> None:
         residue = await _scalar(
             session,
             "MATCH (n) WHERE (n:KnowledgeDocument AND n.id = $doc) "
-            "   OR (n:KnowledgeEntity AND n.name = $ent) RETURN count(n)",
+            " OR (n:KnowledgeEntity AND n.name = $ent) RETURN count(n)",
             doc=TEST_DOC_ID,
             ent=TEST_ENTITY_NAME,
         )

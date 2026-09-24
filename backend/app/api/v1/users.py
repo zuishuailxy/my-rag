@@ -1,29 +1,29 @@
-"""用户管理接口（对应 NestJS UserController）
+"""用户管理接口
 
-- PUT    /users/me                  当前用户更新资料（需登录）
-- GET    /users/me/stats            当前用户统计（需登录）
-- PUT    /users/password/change     修改密码（需登录）
-- GET    /users/page                用户分页列表（仅 ADMIN）
-- POST   /users                     创建用户（仅 ADMIN，201）
-- GET    /users/{user_id}           用户详情（仅 ADMIN）
-- PUT    /users/{user_id}           管理员更新用户（仅 ADMIN）
-- DELETE /users/{user_id}           软删除用户（仅 ADMIN）
-- PUT    /users/{user_id}/password/reset  重置密码（仅 ADMIN）
-- GET    /users/{user_id}/roles     用户角色码（仅 ADMIN）
-- PUT    /users/{user_id}/roles     全量替换角色（仅 ADMIN）
-- GET    /users/{user_id}/permissions       用户权限码（仅 ADMIN + system:user）
-- PUT    /users/{user_id}/permissions       全量替换用户直接授权（仅 ADMIN + system:user）
+- PUT /users/me 当前用户更新资料（需登录）
+- GET /users/me/stats 当前用户统计（需登录）
+- PUT /users/password/change 修改密码（需登录）
+- GET /users/page 用户分页列表（仅 ADMIN）
+- POST /users 创建用户（仅 ADMIN，201）
+- GET /users/{user_id} 用户详情（仅 ADMIN）
+- PUT /users/{user_id} 管理员更新用户（仅 ADMIN）
+- DELETE /users/{user_id} 软删除用户（仅 ADMIN）
+- PUT /users/{user_id}/password/reset 重置密码（仅 ADMIN）
+- GET /users/{user_id}/roles 用户角色码（仅 ADMIN）
+- PUT /users/{user_id}/roles 全量替换角色（仅 ADMIN）
+- GET /users/{user_id}/permissions 用户权限码（仅 ADMIN + system:user）
+- PUT /users/{user_id}/permissions 全量替换用户直接授权（仅 ADMIN + system:user）
 
 路由顺序：/me、/me/stats、/password/change、/page 是字面量段，必须注册在
 /users/{user_id} 之前（否则被动态路径吞掉），与 role/document 路由约定一致；
 POST /users 与 /{user_id} 组方法不同（POST vs GET/PUT/DELETE）本无冲突，
 仍按约定放在动态段之前。
 
-状态码：NestJS @Post 默认 201 其余 200（本组仅 createUser 是 POST → 201）。
-鉴权：TS 逐方法标 @Roles(ADMIN) → 对应端点 @roles(RoleCode.ADMIN)；
-me / me/stats / password/change 只需登录（TS 未标 @Roles）。
+状态码：（本组仅 createUser 是 POST → 201）。
+鉴权：(ADMIN) → 对应端点 @roles(RoleCode.ADMIN)；
+me / me/stats / password/change 只需登录。
 
-createUser 响应体：TS 控制器拿 service 返回的 userId 再调 getUserVO 组装
+createUser 响应体：
 （两次服务调用），Python 同款先 create 后查 VO，不合并为单次调用。
 """
 
@@ -124,9 +124,7 @@ async def page_users(
 async def create_user(
     dto: CreateUserRequest, session: _DB
 ) -> UserVOResponse:
-    """创建用户（仅 ADMIN；201；用户名重复 409 / 角色不存在 404）
-
-    与 TS 控制器同款两步：service 只返回 userId，再查一次 getUserVO 组装响应。
+    """创建用户（仅 ADMIN；201；用户名重复 409 / 角色不存在 404）两步：service 只返回 userId，再查一次 getUserVO 组装响应。
     """
     user_id = await user_service.create_user(session, dto)
     return _vo(await user_service.get_user_vo(session, user_id))
@@ -144,14 +142,14 @@ async def get_user(user_id: str, session: _DB) -> UserVOResponse:
 async def update_user(
     user_id: str, dto: UpdateUserRequest, session: _DB
 ) -> UserVOResponse:
-    """管理员更新用户（仅 ADMIN；部分更新；status 0/1 均接受与 TS 一致）"""
+    """管理员更新用户"""
     return _vo(await user_service.update_user(session, user_id, dto))
 
 
 @router.delete("/{user_id}")
 @roles(RoleCode.ADMIN)
 async def delete_user(user_id: str, session: _DB) -> dict[str, str]:
-    """删除用户（仅 ADMIN；软删除 deleted=true，角色关联行保留与 TS 一致）"""
+    """删除用户"""
     await user_service.delete_user(session, user_id)
     return {"message": "删除成功"}
 
@@ -193,9 +191,7 @@ async def assign_roles(
 async def get_user_permissions(
     user_id: str, session: _DB
 ) -> UserPermissionCodesResponse:
-    """用户权限码（仅 ADMIN + system:user）
-
-    与 TS getUserPermissions 同款：先 findByIdOrThrow 校验用户存在（404），
+    """用户权限码（仅 ADMIN + system:user）：先 findByIdOrThrow 校验用户存在（404），
     再查合并权限码（直接 + 角色）与直接授权 ID 列表。
     """
     await user_service.find_by_id_or_throw(session, user_id)
@@ -217,9 +213,7 @@ async def get_user_permissions(
 async def assign_user_permissions(
     user_id: str, dto: AssignPermissionIdsRequest, session: _DB
 ) -> UserPermissionIdsResponse:
-    """全量替换用户直接授权（仅 ADMIN + system:user；先删后插，空数组即清空）
-
-    与 TS assignUserPermissions 同款：先 findByIdOrThrow 校验用户存在（404），
+    """全量替换用户直接授权（仅 ADMIN + system:user；先删后插，空数组即清空）：先 findByIdOrThrow 校验用户存在（404），
     再全量替换 UserPermission；permissionIds 含非法/已禁用权限 → 404。
     """
     await user_service.find_by_id_or_throw(session, user_id)

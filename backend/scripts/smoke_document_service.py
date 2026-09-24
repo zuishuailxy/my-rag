@@ -8,7 +8,7 @@
 
 测试会真实写入数据，结束时物理清理，不留脏数据。
 
-注：update / publish / remove 的 actor 为必传参数（对应 TS 的 `actor: AuthUser`），
+注：update / publish / remove 的 actor 为必传参数，
 服务层会做写权校验（ADMIN 或作者本人）。本脚本统一用 AUTHOR 调用，故能通过；
 更完整的越权矩阵由 smoke_document_publish.py（D 段 8 条）与
 smoke_document_review.py（第 11 段 5 条）覆盖，本脚本只保留单点回归。
@@ -35,7 +35,7 @@ async def main() -> None:
     svc = DocumentService()
     created_id: str | None = None
     content_oid: ObjectId | None = None
-    old_flag = settings.DOCUMENT_REQUIRE_APPROVAL  # 4b 临时切免审，结束时还原
+    old_flag = settings.DOCUMENT_REQUIRE_APPROVAL # 4b 临时切免审，结束时还原
     try:
         async with async_session_factory() as session:
             # 1) 创建（草稿，不传 summary → 从正文生成 contentSummary）
@@ -62,15 +62,14 @@ async def main() -> None:
                 "| Mongo contentSummary=", mdoc["contentSummary"],
                 "| publishTime=", created["publishTime"],
             )
-            assert created["wordCount"] == 15, created["wordCount"]  # 13 汉字 + 2 英文词
-            assert created["publishTime"] is None  # 草稿无发布时间
+            assert created["wordCount"] == 15, created["wordCount"] # 13 汉字 + 2 英文词
+            assert created["publishTime"] is None # 草稿无发布时间
             assert created["categoryId"] == "100"
-            # authorId / createBy 均恒取 actor.userId（TS `authorId: actor.userId` /
-            # `createBy: actor.userId`）—— 请求体里的 create_by=300 被服务层忽略，
+            # authorId / createBy 均恒取 actor.userId—— 请求体里的 create_by=300 被服务层忽略，
             # author_id=200 恰等于 AUTHOR 的 id，故断言按 AUTHOR 校验
             assert created["authorId"] == AUTHOR.user_id
             assert created["createBy"] == AUTHOR.user_id
-            assert mdoc["contentSummary"].startswith("你好 Hello world")  # 未传 summary，从正文生成
+            assert mdoc["contentSummary"].startswith("你好 Hello world") # 未传 summary，从正文生成
 
             # 2) 详情（含 Mongo 正文）
             detail = await svc.find_one(session, created_id)
@@ -99,8 +98,8 @@ async def main() -> None:
                 "| contentLength =", mdoc["contentLength"],
                 "| publishTime =", updated["publishTime"],
             )
-            assert mdoc["version"] == 2  # 正文变更 version +1
-            assert updated["publishTime"] is None  # 仍为草稿，无发布时间
+            assert mdoc["version"] == 2 # 正文变更 version +1
+            assert updated["publishTime"] is None # 仍为草稿，无发布时间
 
             # 4b) 免审模式下发布（需审模式会进 PendingReview，见 smoke_document_publish.py）
             settings.DOCUMENT_REQUIRE_APPROVAL = "false"
@@ -110,7 +109,7 @@ async def main() -> None:
                 "| publishTime =", published["publishTime"],
             )
             assert published["status"] == int(DocumentStatus.PUBLISHED)
-            assert published["publishTime"] is not None  # 发布写入 publishTime
+            assert published["publishTime"] is not None # 发布写入 publishTime
 
             # 5) 更新：只改摘要（contentSummary 同步，version 不变）
             await svc.update(session, created_id, DocumentUpdate(summary="新的摘要"), AUTHOR)
@@ -138,7 +137,7 @@ async def main() -> None:
                 await svc.find_one(session, created_id)
                 raise AssertionError("软删后仍能查到")
             except HTTPException as e:
-                print("   软删后 find_one → 404 OK")
+                print(" 软删后 find_one → 404 OK")
                 assert e.status_code == 404
 
         print("\n集成冒烟测试全部通过 ✅")

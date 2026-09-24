@@ -69,13 +69,13 @@ def main() -> None:
             ), data["fileUrl"]
             # 记录 RustFS key 用于清理
             rustfs_keys.append(data["fileUrl"].split("/knowledge-hub/")[-1])
-            print("   title=%s, fileUrl=%s" % (data["title"], data["fileUrl"]))
+            print(" title=%s, fileUrl=%s" % (data["title"], data["fileUrl"]))
 
             # 2) 文档确实已创建（详情接口）
             r = client.get(f"/api/v1/documents/{doc_id}")
             assert r.status_code == 200, r.text
             assert r.json()["content"] == content
-            assert r.json()["status"] == 0  # 草稿
+            assert r.json()["status"] == 0 # 草稿
             print("2) 草稿已创建，正文一致 OK")
 
             # 3) 不支持的扩展名 → 400

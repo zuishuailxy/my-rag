@@ -1,5 +1,5 @@
 """
-全局鉴权守卫（对应 TS JwtAuthGuard + JwtStrategy + RolesGuard + @Public / @Roles）
+全局鉴权守卫
 
 实现方式：**自定义 APIRoute（route_class）**，不是中间件。
 
@@ -11,7 +11,7 @@ BaseHTTPMiddleware（含 @app.middleware("http")）是纯 ASGI 中间件，运�
 两处，新增公开路由忘了同步 → 接口被自己的守卫拦成 401，而路由文件里看不出任何异常。
 
 route_class 是唯一能在「路由匹配之后、依赖解析之前」读到 endpoint 元数据的扩展点，
-语义等价于 NestJS 的 `Reflector.getAllAndOverride(key, [handler, class])`。
+语义)`。
 
 用法
 ────
@@ -20,11 +20,11 @@ route_class 是唯一能在「路由匹配之后、依赖解析之前」读到 e
     router = APIRouter(route_class=AuthRoute)
 
     @router.post("/login")
-    @public()                                    # 免登录
+    @public() # 免登录
     async def login(...): ...
 
     @router.get("/reviewer-ids")
-    @roles(RoleCode.ADMIN, RoleCode.REVIEWER)    # 需登录 + 角色之一
+    @roles(RoleCode.ADMIN, RoleCode.REVIEWER) # 需登录 + 角色之一
     async def reviewer_ids(...): ...
 
 默认行为：**未标 @public() 的路由一律需要登录** —— 这是刻意的 fail-safe 设计，
@@ -35,25 +35,25 @@ route_class 是唯一能在「路由匹配之后、依赖解析之前」读到 e
 `APIRouter(route_class=AuthRoute)`，漏写的 router 会整组失去保护 —— 由启动时调用的
 `check_route_classes()` 兜底告警。
 
-与 TS 的对应关系
-────────────────
-  @Public()                      → @public()
-  @Roles(...) + RolesGuard       → @roles(...)
-  JwtAuthGuard（APP_GUARD 全局） → AuthRoute.get_route_handler（默认拦截）
-  JwtStrategy.validate           → authenticate_request()（验签 + type=access + 查库）
-  @CurrentUser()                 → Depends(get_current_user)（复用 request.state.user）
 
-文案与 TS 逐条对齐：
-  401「未登录或 token 已失效」  ← JwtAuthGuard.handleRequest（err || !user）
-  401「无效的 access token」    ← JwtStrategy.validate（payload.type !== 'access'）
-  403「权限不足」               ← RolesGuard（角色未命中 / 用户无角色）
+────────────────
+  @Public() → @public()
+  @Roles(...) + RolesGuard → @roles(...)
+  JwtAuthGuard（APP_GUARD 全局） → AuthRoute.get_route_handler（默认拦截）
+  JwtStrategy.validate → authenticate_request()（验签 + type=access + 查库）
+  @CurrentUser() → Depends(get_current_user)（复用 request.state.user）
+
+文案：
+  401「未登录或 token 已失效」 ← JwtAuthGuard.handleRequest（err || !user）
+  401「无效的 access token」 ← JwtStrategy.validate（payload.type !== 'access'）
+  403「权限不足」 ← RolesGuard（角色未命中 / 用户无角色）
 
 注意：build_auth_user 抛出的 404「用户不存在」/ 401「账户已禁用」**原样透出**，不在这里
-兜成 401 —— 对应 TS handleRequest 里的 `throw err`，即「token 有效但用户已软删」在两侧
+兜成 401 ——，即「token 有效但用户已软删」在两侧
 都是 404 而非 401。
 
 另一个语义细节：@public() 与 @roles() 同时使用时以 @roles() 为准（仍需登录）。
-TS 里这种组合会因为 request.user 不存在而恒定 403，属调用方错误，此处不复制该行为。
+，属调用方错误，此处不复制该行为。
 """
 
 import logging
@@ -72,11 +72,11 @@ from app.services.auth import auth_service
 
 logger = logging.getLogger("AuthRoute")
 
-# endpoint 上挂载的元数据键（等价 NestJS SetMetadata 的 key）
+# endpoint 上挂载的元数据键
 _IS_PUBLIC_KEY = "_auth_is_public"
 _ROLES_KEY = "_auth_required_roles"
 
-# 错误文案（与 TS guard 源码逐条对齐，改这里前先看 src/auth/*.guard.ts）
+# 错误文案
 _NOT_AUTHENTICATED = "未登录或 token 已失效"
 _INVALID_ACCESS_TOKEN = "无效的 access token"
 _FORBIDDEN = "权限不足"
@@ -86,7 +86,7 @@ _UNAUTHORIZED_HEADERS = {"WWW-Authenticate": "Bearer"}
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 # auto_error=False：关掉 FastAPI 默认的 403「Not authenticated」，
-# 缺 token / token 非法统一由下面抛 401（NestJS guard 行为）
+# 缺 token / token 非法统一由下面抛 401
 _bearer = HTTPBearer(auto_error=False)
 
 
@@ -126,7 +126,7 @@ def roles(*role_codes: str) -> Callable[[_F], _F]:
 
 
 def _unauthorized(detail: str) -> HTTPException:
-    """构造带 WWW-Authenticate 头的 401（与 NestJS 的 Bearer 挑战一致）"""
+    """构造带 WWW-Authenticate 头的 401"""
     return HTTPException(
         status_code=401, detail=detail, headers=_UNAUTHORIZED_HEADERS
     )
@@ -135,7 +135,7 @@ def _unauthorized(detail: str) -> HTTPException:
 async def authenticate_request(request: Request) -> AuthUser:
     """解析并校验 Bearer access token（等价 JwtStrategy.validate）
 
-    顺序与 TS 一致：验签 + 验 exp → 校验 type=access → 按 sub 查库组装。
+    顺序：验签 + 验 exp → 校验 type=access → 按 sub 查库组装。
     build_auth_user 抛出的 404「用户不存在」/ 401「账户已禁用」原样透出。
     """
     credentials: HTTPAuthorizationCredentials | None = await _bearer(request)
@@ -146,14 +146,14 @@ async def authenticate_request(request: Request) -> AuthUser:
             credentials.credentials, settings.JWT_SECRET, algorithms=["HS256"]
         )
     except jwt.PyJWTError:
-        # 过期 / 签名不符 / 格式非法统一文案，不泄露具体原因（TS catch-all 同款）
+        # 过期 / 签名不符 / 格式非法统一文案，不泄露具体原因
         raise _unauthorized(_NOT_AUTHENTICATED) from None
-    # refresh token 不能当 access token 用（TS JwtStrategy 只认 type='access'）
+    # refresh token 不能当 access token 用
     if payload.get("type") != "access":
         raise _unauthorized(_INVALID_ACCESS_TOKEN)
     sub = payload.get("sub")
     if not isinstance(sub, str):
-        # 刻意优于 TS：TS 会拿 undefined 去查 bigint 主键 → PG 22P02 → 500
+        # 
         raise _unauthorized(_NOT_AUTHENTICATED)
 
     # 守卫跑在依赖解析之前，拿不到 Depends(get_db_session) 的 session，需自建。
@@ -163,7 +163,7 @@ async def authenticate_request(request: Request) -> AuthUser:
 
 
 class AuthRoute(APIRoute):
-    """带全局鉴权的路由类（等价 NestJS 的 JwtAuthGuard + RolesGuard）"""
+    """带全局鉴权的路由类"""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

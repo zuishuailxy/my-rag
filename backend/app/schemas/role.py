@@ -1,6 +1,6 @@
-"""角色管理 DTO（对应 TS user/dto/extra.dto.ts 的 CreateRoleDto / UpdateRoleDto）
+"""角色管理 DTO
 
-命名沿用 TS 语义化重命名约定：
+：
   CreateRoleDto → RoleCreateRequest
   UpdateRoleDto → RoleUpdateRequest
   控制器内联返回对象 → RoleBriefResponse（不含 status，create/list 用）
@@ -8,7 +8,7 @@
 
 请求/响应字段 camelCase（roleName / roleCode 有驼峰差异）。
 
-⚠️ 刻意优于 TS：TS 各字段只有 @IsString()，超长会撞 PG 22001 变 500；
+：()，超长会撞 PG 22001 变 500；
 此处按 kh_role 列宽补 max_length（roleName/roleCode 50、description 200）。
 """
 
@@ -25,7 +25,7 @@ __all__ = [
 
 
 class RoleCreateRequest(BaseModel):
-    """创建角色请求体（对应 TS CreateRoleDto；description 可选默认 None）"""
+    """创建角色请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -48,9 +48,7 @@ class RoleCreateRequest(BaseModel):
 
 
 class RoleUpdateRequest(BaseModel):
-    """更新角色请求体（对应 TS UpdateRoleDto；全字段可选，未传不改动）
-
-    与 TS 一致：status 无取值约束（任意数字都接受，传 0 即禁用）。
+    """更新角色请求体：status 无取值约束（任意数字都接受，传 0 即禁用）。
     """
 
     model_config = ConfigDict(
@@ -67,7 +65,7 @@ class RoleUpdateRequest(BaseModel):
 
 
 class RoleBriefResponse(BaseModel):
-    """角色简要响应（对应 TS create / listRoles 的内联返回对象，不含 status）"""
+    """角色简要响应"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -82,15 +80,14 @@ class RoleBriefResponse(BaseModel):
 
 
 class RoleDetailResponse(RoleBriefResponse):
-    """角色完整响应（对应 TS getRole / updateRole 的内联返回对象，多 status）"""
+    """角色完整响应"""
 
     # 状态：0 禁用 1 启用
     status: int
 
 
 class RolePermissionIdsResponse(BaseModel):
-    """角色已授权权限 ID 列表（对应 TS getRolePermissions / assignRolePermissions 的
-    内联返回 { roleId, permissionIds }）"""
+    """角色已授权权限 ID 列表"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 

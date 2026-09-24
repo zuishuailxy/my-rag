@@ -1,9 +1,9 @@
 """
-文件解析服务（对应 TS FileParserService）
+文件解析服务
 
 按扩展名分发到各 parser：
 - pdf：可选注入图片上传回调（RustFS `pdf-images/` 前缀；未启用则仅输出文本/表格）
-- xlsx：openpyxl 优先，失败降级 OOXML 文本提取（对应 TS exceljs → officeparser 降级）
+- xlsx：openpyxl 优先，失败降级 OOXML 文本提取
 - pptx / docx / txt / md：直接调用对应 parser
 
 解析结果为空或格式不支持时抛 400（HTTPException 对应 BadRequestException）。
@@ -27,7 +27,7 @@ from app.utils.parsers.xlsx import parse_xlsx
 
 logger = logging.getLogger(__name__)
 
-# 支持解析的文件扩展名（保持 TS 的 Set 顺序，用于错误提示）
+# 支持解析的文件扩展名
 SUPPORTED_EXTENSIONS = ["pdf", "docx", "xlsx", "pptx", "txt", "md"]
 
 

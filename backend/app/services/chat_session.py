@@ -1,19 +1,18 @@
-"""AI 会话服务（对应 TS ai/chat-session.service.ts，逐段转写）
+"""AI 会话服务
 
 会话 CRUD 与问答落库。列表按 updated_at 倒序（最近对话置顶）；
-消息按 created_at / id 升序（对齐 TS order: { createdAt: 'ASC', id: 'ASC' }）。
+消息按 created_at / id 升序。
 
-删除顺序与 TS 保真：先删消息再删会话——DDL 的 session_id 外键虽有
-ON DELETE CASCADE，但 TS 是显式两步删除，不依赖库级级联。
+：先删消息再删会话——DDL 的 session_id 外键虽有
+ON DELETE CASCADE，，不依赖库级级联。
 
 刻意差异：
 - append_turn 里显式赋 updated_at = func.now()：标题不变且无字段变更时
-  SQLAlchemy 不发 UPDATE，updated_at 会停在上轮——TS 靠 new Date() 强制
+  SQLAlchemy 不发 UPDATE，() 强制
   save() 触发更新，这里用 SQL 表达式赋值达到同样效果（每次问答必刷新）。
-- _get_owned 非法 / 不存在的会话 id 统一 404「会话不存在」（parse_bigint
-  语义，路径参数非法值 404；TS 靠 bigint 查不到自然 404，行为一致）。
+- _get_owned 非法 / 不存在的会话 id 统一 404「会话不存在」。
 
-缓存联动（2026-09-18 补齐，对齐 TS chat-session.service.ts）：
+缓存联动：
 - `list_recent_messages` 只查库，供调用方在 Redis 热窗口 miss 时回填；它**自己
   不写 Redis**——写窗口是 ChatShortMemoryService 的职责，两处各自实现过滤口径
   迟早会漂移（「只存 human/ai 原文」的判定集中在 chat_memory.py）。
@@ -46,12 +45,12 @@ from app.services.chat_summary import chat_session_summary_service
 
 logger = logging.getLogger("ChatSessionService")
 
-# 默认标题（对齐 TS DEFAULT_TITLE）
+# 默认标题
 DEFAULT_TITLE = "新对话"
 
 
 def title_from_question(question: str) -> str:
-    """首问 → 会话标题：压缩空白，30 字截断加省略号（对齐 TS titleFromQuestion）"""
+    """首问 → 会话标题：压缩空白，30 字截断加省略号"""
     text = re.sub(r"\s+", " ", question).strip()
     if not text:
         return DEFAULT_TITLE
@@ -64,7 +63,7 @@ class ChatSessionService:
     async def page_mine(
         self, session: AsyncSession, user_id: str, query: QuerySessionRequest
     ) -> dict:
-        """本人会话分页，updated_at 倒序（对应 TS pageMine）"""
+        """本人会话分页，updated_at 倒序"""
         page = query.page
         page_size = query.pageSize
         cond = AiSession.user_id == int(user_id)
@@ -82,7 +81,7 @@ class ChatSessionService:
     async def create(
         self, session: AsyncSession, user_id: str, dto: CreateSessionRequest
     ) -> AiSession:
-        """新建会话：标题 trim 后取前 80 字，缺省用默认标题（对应 TS create）"""
+        """新建会话：标题 trim 后取前 80 字，缺省用默认标题"""
         title = (dto.title or "").strip() or DEFAULT_TITLE
         entity = AiSession(id=next_snowflake_id(), user_id=int(user_id), title=title[:80])
         session.add(entity)
@@ -95,7 +94,7 @@ class ChatSessionService:
     async def rename(
         self, session: AsyncSession, user_id: str, session_id: str, dto: UpdateSessionRequest
     ) -> AiSession:
-        """会话改名：trim + 截断 80 字（对应 TS rename）"""
+        """会话改名：trim + 截断 80 字"""
         entity = await self._get_owned(session, user_id, session_id)
         entity.title = dto.title.strip()[:80]
         session.add(entity)
@@ -104,9 +103,7 @@ class ChatSessionService:
         return entity
 
     async def remove(self, session: AsyncSession, user_id: str, session_id: str) -> dict:
-        """删除会话：先删消息再删会话，最后清缓存，返回 { message: '已删除' }
-
-        对应 TS remove。清理顺序与 TS 一致：库删除提交后再清 Redis / Mem0——
+        """删除会话：先删消息再删会话，最后清缓存，返回 { message: '已删除' }。清理顺序：库删除提交后再清 Redis / Mem0——
         先清缓存再删库的话，若删库失败就出现「缓存已清但数据还在」，
         虽不影响正确性（回落数据库）但会让窗口白丢一次。
         """
@@ -126,7 +123,7 @@ class ChatSessionService:
     async def list_messages(
         self, session: AsyncSession, user_id: str, session_id: str
     ) -> list[AiMessage]:
-        """会话消息列表：created_at / id 升序（对应 TS listMessages）"""
+        """会话消息列表：created_at / id 升序"""
         entity = await self._get_owned(session, user_id, session_id)
         stmt = (
             select(AiMessage)
@@ -138,20 +135,20 @@ class ChatSessionService:
     async def list_recent_messages(
         self, session: AsyncSession, user_id: str, session_id: str, limit: int
     ) -> list[AiMessage]:
-        """最近 N 条消息，**时间正序**返回（对应 TS listRecentMessages）
+        """最近 N 条消息，**时间正序**返回
 
         用途：Redis 热窗口 miss 时，由调用方取这批行 → db_rows_to_messages →
         回填 ChatShortMemoryService。**只查库，不写缓存**（写窗口是短期记忆服务
         的职责，见模块注释「缓存联动」）。
 
-        实现要点与 TS 逐条对齐：
+        实现要点：
         - 先 `_get_owned`（本人校验，非本人 / 非法 id 404），再查消息。
         - SQL 用 created_at DESC, id DESC 取「最新的 N 条」，返回前 reverse 成
           正序——不能反过来用 ASC + limit（那取到的是最旧的 N 条）。这里必须
           走 SQL 侧 LIMIT 而不是取全量再切片：会话可能很长，全量拉进内存只为
           截 20 条是浪费。
-        - limit 做 `max(limit, 1)` 兜底（对齐 TS `take: Math.max(limit, 1)`）：
-          limit<=0 时退化成 1 条，绝不退化成「不限量」。⚠️ TS 传 NaN 会得到
+        - limit 做 `max(limit, 1)` 兜底（)`）：
+          limit<=0 时退化成 1 条，绝不退化成「不限量」。
           NaN 从而让 TypeORM 报错，Python 传非 int 在这里是类型错误，
           不构造等价行为。
         """
@@ -175,7 +172,7 @@ class ChatSessionService:
         answer: str,
         sources: list[dict] | None,
     ) -> AiSession:
-        """问答落库：无 sessionId 则新建；标题仍为默认名时用首问覆盖（对应 TS appendTurn）"""
+        """问答落库：无 sessionId 则新建；标题仍为默认名时用首问覆盖"""
         if session_id:
             entity = await self._get_owned(session, user_id, session_id)
         else:
@@ -202,7 +199,7 @@ class ChatSessionService:
             session_id=entity.id,
             role=MESSAGE_ROLE_ASSISTANT,
             content=answer,
-            # sources 为空落 NULL（对齐 TS sources.length ? sources : null）
+            # sources 为空落 NULL
             sources=sources or None,
         )
         session.add_all([user_msg, assistant_msg])
@@ -212,7 +209,7 @@ class ChatSessionService:
     async def touch_title(
         self, session: AsyncSession, user_id: str, session_id: str, question: str
     ) -> AiSession:
-        """仍为默认标题时用首问覆盖（对应 TS touchTitle）
+        """仍为默认标题时用首问覆盖
 
         标题未变时不发 UPDATE（TypeORM save 无变更同样不落库），updated_at 不前进；
         流式版不在这里刷 updated_at，落库由 append_turn 统一处理。
@@ -228,7 +225,7 @@ class ChatSessionService:
     async def _get_owned(
         self, session: AsyncSession, user_id: str, session_id: str
     ) -> AiSession:
-        """按 id + userId 双条件查本人会话；非法 / 不存在 / 非本人统一 404（对应 TS getOwned）"""
+        """按 id + userId 双条件查本人会话；非法 / 不存在 / 非本人统一 404"""
         pk = parse_bigint(session_id)
         if pk is not None:
             stmt = select(AiSession).where(

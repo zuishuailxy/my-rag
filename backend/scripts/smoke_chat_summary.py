@@ -79,13 +79,13 @@ async def cleanup(session_id: str | None) -> None:
         if session_id:
             async with async_session_factory() as db:
                 await chat_session_service.remove(db, USER_ID, session_id)
-    except Exception as err:  # noqa: BLE001
-        print(f"   (cleanup 会话跳过：{err})", file=sys.stderr)
+    except Exception as err: # noqa: BLE001
+        print(f" (cleanup 会话跳过：{err})", file=sys.stderr)
     try:
         if session_id:
             await chat_session_summary_service.clear(USER_ID, session_id)
-    except Exception as err:  # noqa: BLE001
-        print(f"   (cleanup 摘要跳过：{err})", file=sys.stderr)
+    except Exception as err: # noqa: BLE001
+        print(f" (cleanup 摘要跳过：{err})", file=sys.stderr)
 
 
 async def main() -> None:
@@ -93,7 +93,7 @@ async def main() -> None:
         settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
     )
     print(
-        f"   · 配置：LLM Key={'已配置' if has_key else '未配置'}、"
+        f" · 配置：LLM Key={'已配置' if has_key else '未配置'}、"
         f"窗口={WINDOW} 条、摘要上限={settings.CHAT_SUMMARY_MAX_CHARS} 字"
     )
 
@@ -102,13 +102,13 @@ async def main() -> None:
     client = redis_service.client
     assert client is not None, "Redis 未连接"
     await client.ping()
-    print("   0) Redis 连接 ✓ 已确认可用")
+    print(" 0) Redis 连接 ✓ 已确认可用")
 
     # 1) 前提断言
     assert chat_session_summary_service.enabled is has_key, (
         "enabled 必须与「是否配置 LLM Key」一致，否则折叠断言会假绿"
     )
-    print(f"   1) 前提断言 ✓ enabled={chat_session_summary_service.enabled}")
+    print(f" 1) 前提断言 ✓ enabled={chat_session_summary_service.enabled}")
 
     session_id: str | None = None
     try:
@@ -118,11 +118,11 @@ async def main() -> None:
             )
             sid = sess.id
         session_id = str(sid)
-        print(f"   2) 建临时会话 ✓ sessionId={session_id}")
+        print(f" 2) 建临时会话 ✓ sessionId={session_id}")
 
         # 2) 未折叠 → None
         assert await chat_session_summary_service.try_load(USER_ID, session_id) is None
-        print("   3) 未折叠 try_load ✓ 返回 None")
+        print(" 3) 未折叠 try_load ✓ 返回 None")
 
         # 3) 24 条 > 窗口 20 → fold 只折叠滑出的前 4 条
         ids = await insert_messages(sid, WINDOW + 4)
@@ -130,7 +130,7 @@ async def main() -> None:
         state = await chat_session_summary_service.try_load(USER_ID, session_id)
         if not has_key:
             assert state is None, "未配 LLM Key 时 fold 应跳过，不留摘要"
-            print("   4) SKIP —— 未配置 LLM Key，折叠未验证（SKIP 不算通过）")
+            print(" 4) SKIP —— 未配置 LLM Key，折叠未验证（SKIP 不算通过）")
         else:
             assert state is not None and state.summary.strip(), "fold 后应有摘要"
             assert state.covered_until_message_id == ids[3], (
@@ -140,8 +140,8 @@ async def main() -> None:
             assert "EMP-7788" in state.summary, (
                 f"窗口外的早期事实应被摘要抓住，实际摘要：{state.summary!r}"
             )
-            print(f"   4) 折叠 ✓ covered={state.covered_until_message_id}（=第4条）")
-            print(f"      摘要({len(state.summary)}字)：{state.summary[:100]}...")
+            print(f" 4) 折叠 ✓ covered={state.covered_until_message_id}（=第4条）")
+            print(f" 摘要({len(state.summary)}字)：{state.summary[:100]}...")
 
             # 4) 双写：Redis 与 DB 都在且一致
             raw = await redis_service.get(summary_key(session_id))
@@ -152,7 +152,7 @@ async def main() -> None:
             assert row is not None, "Postgres 摘要行应存在"
             assert redis_state["summary"] == row.summary == state.summary, "Redis/DB 摘要应一致"
             assert redis_state["covered_until_message_id"] == row.covered_until_message_id
-            print("   5) 双写 ✓ Redis + kh_ai_session_summary 一致")
+            print(" 5) 双写 ✓ Redis + kh_ai_session_summary 一致")
 
             # 5) 删 Redis → DB 兜底
             await redis_service.delete(summary_key(session_id))
@@ -161,7 +161,7 @@ async def main() -> None:
                 "删 Redis 后应从 Postgres 拿回同一份摘要"
             )
             assert restored.covered_until_message_id == state.covered_until_message_id
-            print("   6) DB 兜底 ✓ 删 Redis 后仍能读回摘要")
+            print(" 6) DB 兜底 ✓ 删 Redis 后仍能读回摘要")
 
             # 6) 幂等：重复 fold 不产生新折叠
             await chat_session_summary_service.fold(USER_ID, session_id, WINDOW)
@@ -171,7 +171,7 @@ async def main() -> None:
                 "无新滑出消息时水位不应前进"
             )
             assert again.summary == state.summary, "幂等 fold 不应改动摘要"
-            print("   7) 幂等 ✓ 重复 fold 水位/摘要不变")
+            print(" 7) 幂等 ✓ 重复 fold 水位/摘要不变")
 
             # 7) 增量：再追加一轮 → 只折叠新滑出的 2 条，水位前进
             await insert_messages(sid, 2, start=WINDOW + 4)
@@ -182,7 +182,7 @@ async def main() -> None:
                 "追加消息后水位应前进"
             )
             print(
-                f"   8) 增量 ✓ 水位 {state.covered_until_message_id} → "
+                f" 8) 增量 ✓ 水位 {state.covered_until_message_id} → "
                 f"{advanced.covered_until_message_id}"
             )
 
@@ -190,14 +190,14 @@ async def main() -> None:
             msg = chat_session_summary_service.build_system_message(advanced)
             assert msg is not None and "【早前对话摘要】" in msg.content
             assert chat_session_summary_service.build_system_message(None) is None
-            print("   9) build_system_message ✓ 格式正确，空摘要返回 None")
+            print(" 9) build_system_message ✓ 格式正确，空摘要返回 None")
 
         # 9) 降级：无 LLM 时 fold 静默跳过
         saved_llm = chat_session_summary_service._llm
         chat_session_summary_service._llm = None
         try:
             await chat_session_summary_service.fold(USER_ID, session_id, WINDOW)
-            print("   10) 降级 ✓ 无 LLM 时 fold 静默返回不抛")
+            print(" 10) 降级 ✓ 无 LLM 时 fold 静默返回不抛")
         finally:
             chat_session_summary_service._llm = saved_llm
 
@@ -206,7 +206,7 @@ async def main() -> None:
         assert await redis_service.get(summary_key(session_id)) is None, "clear 后 Redis 应无 key"
         async with async_session_factory() as db:
             assert await db.get(AiSessionSummary, sid) is None, "clear 后 DB 行应删除"
-        print("   11) clear ✓ Redis 与 Postgres 均已清")
+        print(" 11) clear ✓ Redis 与 Postgres 均已清")
     finally:
         await cleanup(session_id)
         await redis_service.close()

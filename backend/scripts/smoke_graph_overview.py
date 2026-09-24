@@ -1,6 +1,6 @@
 """知识图谱 overview 接口 E2E 冒烟（真实 Neo4j，裸 FastAPI app + ASGITransport）
 
-覆盖 GET /graph/overview（对应 TS GraphController.overview + getOverview）：
+覆盖 GET /graph/overview：
   1. 未登录 → 401
   2. 无 search 权限码的路由访问形态：docLimit 越界 → 422（Query 校验）
   3. 管理员默认查询 → 200 + 六大键结构完整（nodes/edges/stats/topEntities/recentNodes/entityTypes）
@@ -39,12 +39,12 @@ _ENT_KW = f"SmkOvEnt{_RID}"
 _TYPE = f"SmokeOvType{_RID}"
 _TAG = f"SmkOvTag{_RID}"
 
-DOC1 = f"doc1-{_RID}"          # 标题含 _TITLE_KW，同时提及 _ENT_KW 实体（画布 + extra 双路径）
-DOC2 = f"doc2-{_RID}"          # 标题不含关键词，靠实体名命中 extra 路径
+DOC1 = f"doc1-{_RID}" # 标题含 _TITLE_KW，同时提及 _ENT_KW 实体（画布 + extra 双路径）
+DOC2 = f"doc2-{_RID}" # 标题不含关键词，靠实体名命中 extra 路径
 CHUNK1 = f"chunk1-{_RID}"
 CHUNK2 = f"chunk2-{_RID}"
-ENT1 = f"{_ENT_KW}-alpha"      # 与 DOC1 相连，且与 ENT2 有 RELATED_TO
-ENT2 = f"{_ENT_KW}-beta"       # 仅 DOC2 的 chunk 提及
+ENT1 = f"{_ENT_KW}-alpha" # 与 DOC1 相连，且与 ENT2 有 RELATED_TO
+ENT2 = f"{_ENT_KW}-beta" # 仅 DOC2 的 chunk 提及
 NOW = datetime.now(timezone.utc)
 
 _results: list[str] = []
@@ -69,7 +69,7 @@ async def _seed() -> None:
             await session.run(
                 "MERGE (d:KnowledgeDocument {id: $id}) "
                 "SET d.title = $title, d.summary = $summary, d.tags = $tags, "
-                "    d.updatedAt = $now, d.createdAt = $yesterday",
+                " d.updatedAt = $now, d.createdAt = $yesterday",
                 id=doc_id,
                 title=title,
                 summary=f"{title} 摘要",
@@ -152,7 +152,7 @@ async def main() -> None:
     assert graph_build_service._driver is not None, "Neo4j 不可用，请检查 docker/neo4j"
 
     await _seed()
-    print(f"   准备：临时子图 doc1={DOC1} / doc2={DOC2} / ent1={ENT1} / ent2={ENT2}")
+    print(f" 准备：临时子图 doc1={DOC1} / doc2={DOC2} / ent1={ENT1} / ent2={ENT2}")
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

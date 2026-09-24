@@ -1,5 +1,5 @@
 """
-RabbitMQ 拓扑常量（对应 TS mq.constants）
+RabbitMQ 拓扑常量
 
 交换机：rag.reindex / search.index / kg.graph
 队列名带 `kh.` 前缀，避免和本机同时跑的其他项目冲突。

@@ -1,12 +1,12 @@
 """
-文本向量服务（对应 TS EmbeddingService，LangChain OpenAIEmbeddings）
+文本向量服务
 
 把 chunk 文本变成固定维度浮点向量，供语义检索。
 
 - LocalDeterministicEmbedding：确定性伪向量（开发/测试，无外部依赖，
   基于 3-gram 激活维度，相似文本余弦更高，可离线跑通链路）
 - OpenAICompatibleEmbedding：OpenAI 兼容 /embeddings（DashScope 百炼等），
-  基于 LangChain OpenAIEmbeddings；对齐 TS：API Key fallback 链、
+  基于 LangChain OpenAIEmbeddings；
   batch 钳制 ≤10（DashScope 上限）、正文保留换行
 
 配置见 config.py（EMBEDDING_PROVIDER / BASE_URL / MODEL / DIMENSION / BATCH_SIZE）。
@@ -50,7 +50,7 @@ class LocalDeterministicEmbedding:
         vec = [0.0] * self.dim
         for token in tokens:
             rng = random.Random(hashlib.md5(token.encode("utf-8")).digest())
-            for _ in range(8):  # 每个 token 激活 8 个维度（带符号）
+            for _ in range(8): # 每个 token 激活 8 个维度（带符号）
                 d = rng.randrange(self.dim)
                 vec[d] += 1.0 if rng.random() < 0.5 else -1.0
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
@@ -59,8 +59,6 @@ class LocalDeterministicEmbedding:
 
 class OpenAICompatibleEmbedding:
     """OpenAI 兼容 /embeddings 接口（DashScope 百炼等）
-
-    对齐 TS EmbeddingService：
     - API Key fallback：EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     - batchSize 钳制到 10（DashScope 单次上限，超出 400 InvalidParameter）
     - 正文原样发送（保留换行，对齐 stripNewLines=false）
@@ -91,7 +89,7 @@ class OpenAICompatibleEmbedding:
             model=model,
             dimensions=dim,
             base_url=base_url,
-            # 不做本地 token 长度检查（对齐 TS，避免 tiktoken 编码依赖）
+            # 不做本地 token 长度检查
             check_embedding_ctx_length=False,
         )
 
@@ -111,7 +109,7 @@ def _split_batches(texts: list[str], size: int) -> list[list[str]]:
 
 
 def _resolve_api_key() -> str | None:
-    """API Key fallback 链（与 TS 一致）"""
+    """API Key fallback 链"""
     return (
         settings.EMBEDDING_API_KEY
         or settings.DASHSCOPE_API_KEY

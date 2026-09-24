@@ -1,5 +1,5 @@
 """
-通用知识图谱抽取 Schema（对应 TS kg-extraction.schema.ts）
+通用知识图谱抽取 Schema
 
 @see docs/kg-extraction-schema.md
 
@@ -7,9 +7,8 @@
   （Neo4j 边类型仍为 RELATED_TO，relation 存为边属性）
 - normalize_entity_type / normalize_relation_type：LLM 返回类型规范到枚举，
   未知值走兜底（CONCEPT / RELATED_TO）
-- KgExtractionLlmOutput：LLM 结构化输出（对齐 TS zod schema，供
-  with_structured_output 使用，工具名 extract_knowledge_graph）
-- build_extraction_system_prompt：系统提示词（与 TS 逐字一致）
+- KgExtractionLlmOutput：LLM 结构化输出
+- build_extraction_system_prompt：系统提示词
 """
 from pydantic import BaseModel, Field
 
@@ -64,7 +63,7 @@ def normalize_relation_type(raw: str | None) -> str:
 
 
 class KgEntityLlmOutput(BaseModel):
-    """LLM 结构化输出：实体（对齐 TS kgExtractedEntitySchema）"""
+    """LLM 结构化输出：实体"""
 
     name: str = Field(description="文中原文实体名")
     # string 而非 enum：模型常返回中文类型或额外字段，交给 normalize_entity_type 归类
@@ -74,7 +73,7 @@ class KgEntityLlmOutput(BaseModel):
 
 
 class KgRelationLlmOutput(BaseModel):
-    """LLM 结构化输出：关系（对齐 TS kgExtractedRelationSchema）"""
+    """LLM 结构化输出：关系"""
 
     source: str = Field(description="起点实体 name，必须是已抽取实体")
     target: str = Field(description="终点实体 name，必须是已抽取实体")
@@ -86,14 +85,14 @@ class KgRelationLlmOutput(BaseModel):
 
 
 class KgExtractionLlmOutput(BaseModel):
-    """LLM 结构化输出：单个 chunk 的抽取结果（对齐 TS kgExtractionResultSchema）"""
+    """LLM 结构化输出：单个 chunk 的抽取结果"""
 
     entities: list[KgEntityLlmOutput] = Field(description="实体列表")
     relations: list[KgRelationLlmOutput] = Field(description="关系列表")
 
 
 def build_extraction_system_prompt(max_entities: int, max_relations: int) -> str:
-    """构建 LLM system prompt（与 TS buildExtractionSystemPrompt 逐字一致）"""
+    """构建 LLM system prompt"""
     return f"""你是知识图谱构建专家。请严格从文档片段中抽取知识实体和关系。
 
 ## 抽取规则

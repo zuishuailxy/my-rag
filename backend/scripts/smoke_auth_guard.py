@@ -1,22 +1,22 @@
 """
 鉴权守卫冒烟测试（route_class 全局守卫 + 真实 Postgres）
 
-背景：FastAPI 没有 NestJS 的 APP_GUARD，改用自定义 APIRoute（app/api/auth_route.py）
+背景：，改用自定义 APIRoute（app/api/auth_route.py）
 等价实现 JwtAuthGuard + JwtStrategy + RolesGuard。本脚本验证守卫的实际拦截行为，
 不依赖 lifespan，因此不连 MQ / ES / Neo4j，不消耗 LLM token。
 
 覆盖：
-  1  公开接口（health / login）无需 token
-  2  受保护接口无 token → 401「未登录或 token 已失效」+ WWW-Authenticate: Bearer
-  3  签名被篡改 → 401 同文案（过期/篡改/格式非法统一，不泄露原因）
-  4  refresh token 当 access 用 → 401「无效的 access token」
-  5  有效 access token → documents 列表 200
-  6  @CurrentUser 等价物：/auth/me 返回守卫解析出的用户（roles 来自 kh_user_role）
-  7  角色守卫：ROLE_ADMIN / ROLE_REVIEWER → 200；ROLE_USER → 403「权限不足」
-  8  禁用账户持有效 token → 401「账户已禁用」
-  9  已软删用户持有效 token → 404「用户不存在」
-     （对应 TS handleRequest 的 `throw err`：Strategy 抛的错原样透出，不是 401）
- 10  OpenAPI：受保护路由带 security、公开路由不带
+  1 公开接口（health / login）无需 token
+  2 受保护接口无 token → 401「未登录或 token 已失效」+ WWW-Authenticate: Bearer
+  3 签名被篡改 → 401 同文案（过期/篡改/格式非法统一，不泄露原因）
+  4 refresh token 当 access 用 → 401「无效的 access token」
+  5 有效 access token → documents 列表 200
+  6 @CurrentUser 等价物：/auth/me 返回守卫解析出的用户（roles 来自 kh_user_role）
+  7 角色守卫：ROLE_ADMIN / ROLE_REVIEWER → 200；ROLE_USER → 403「权限不足」
+  8 禁用账户持有效 token → 401「账户已禁用」
+  9 已软删用户持有效 token → 404「用户不存在」
+     
+ 10 OpenAPI：受保护路由带 security、公开路由不带
 
 依赖 init.sql 种子账号：admin（ADMIN+REVIEWER）/ reviewer（REVIEWER）/ user（USER），
 密码均为 123456。步骤 8、9 会临时改 kh_user，finally 中原样恢复。
@@ -193,7 +193,7 @@ async def main() -> None:
         assert resp.status_code == 401, resp.text
         assert resp.json()["detail"] == DISABLED, resp.text
 
-        # 10) 已软删用户：Strategy 抛的 404 原样透出（TS handleRequest 的 throw err）
+        # 10) 已软删用户：Strategy 抛的 404 原样透出
         async with async_session_factory() as session:
             await session.execute(
                 text(

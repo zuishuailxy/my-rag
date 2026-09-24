@@ -1,52 +1,52 @@
 """
-文档接口（对应 NestJS DocumentController）
+文档接口
 
-- POST   /documents                        创建文档
-- POST   /documents/upload/parse           上传并解析文件，创建草稿
-- GET    /documents                        分页查询列表（QueryDocumentDto）
-- GET    /documents/{id}                   查询详情（附带正文）
-- PATCH  /documents/{id}                   更新文档（UpdateDocumentDto）
-- DELETE /documents/{id}                   软删除
-- PUT    /documents/{id}/publish           发布（需审核时进待审，免审直接上架）
-- PUT    /documents/{id}/archive           归档（已发布 → 已归档，清索引）
-- PUT    /documents/{id}/save-draft        保存草稿（已发布 → 草稿，清索引）
-- GET    /documents/reviews/tasks          审核任务列表（QueryReviewTasksDto）
-- GET    /documents/reviews/tasks/pending-count  待审数量
-- POST   /documents/{id}/reviews/submit    单独提交审核
-- GET    /documents/{id}/reviews/current   当前待审记录（无则 null）
-- GET    /documents/{id}/reviews/history   该文档全部审核历史
-- POST   /documents/reviews/tasks/{taskId}/approve  审核通过
-- POST   /documents/reviews/tasks/{taskId}/reject   审核驳回
+- POST /documents 创建文档
+- POST /documents/upload/parse 上传并解析文件，创建草稿
+- GET /documents 分页查询列表（QueryDocumentDto）
+- GET /documents/{id} 查询详情（附带正文）
+- PATCH /documents/{id} 更新文档（UpdateDocumentDto）
+- DELETE /documents/{id} 软删除
+- PUT /documents/{id}/publish 发布（需审核时进待审，免审直接上架）
+- PUT /documents/{id}/archive 归档（已发布 → 已归档，清索引）
+- PUT /documents/{id}/save-draft 保存草稿（已发布 → 草稿，清索引）
+- GET /documents/reviews/tasks 审核任务列表（QueryReviewTasksDto）
+- GET /documents/reviews/tasks/pending-count 待审数量
+- POST /documents/{id}/reviews/submit 单独提交审核
+- GET /documents/{id}/reviews/current 当前待审记录（无则 null）
+- GET /documents/{id}/reviews/history 该文档全部审核历史
+- POST /documents/reviews/tasks/{taskId}/approve 审核通过
+- POST /documents/reviews/tasks/{taskId}/reject 审核驳回
 
-路由顺序与 TS 保持一致：reviews/tasks 等含字面量前缀的路由注册在 /{doc_id} 之前，
+路由顺序：reviews/tasks 等含字面量前缀的路由注册在 /{doc_id} 之前，
 避免被路径参数吃掉（FastAPI 按注册顺序匹配）。
 
-状态码：NestJS 的 @Post 默认 201（其余 200），故新建 / 提交 / 审核三个 POST 均为 201。
+状态码：（其余 200），故新建 / 提交 / 审核三个 POST 均为 201。
 
-鉴权（对应 document.controller.ts）：
-- 本 router 用 auth_router() → **全部接口都需要 Bearer token**（TS 的全局 JwtAuthGuard）
-- 逐接口权限码（对应 TS @RequirePermission，与 NestJS 同款 OR 语义：拥有 codes 中任一即通过）：
-  POST /upload/parse、POST /            → document:create
-  GET /                                  → document:list
-  GET /{id}                             → document:list
+鉴权（对应）：
+- 本 router 用 auth_router() → **全部接口都需要 Bearer token**
+- 逐接口权限码：
+  POST /upload/parse、POST / → document:create
+  GET / → document:list
+  GET /{id} → document:list
   PUT /{id}/publish、archive、save-draft→ document:edit
-  PATCH /{id}                           → document:edit
-  DELETE /{id}                          → document:delete
-  POST /{id}/reviews/submit             → document:edit
-  GET /{id}/reviews/current、history    → document:list + document:review
+  PATCH /{id} → document:edit
+  DELETE /{id} → document:delete
+  POST /{id}/reviews/submit → document:edit
+  GET /{id}/reviews/current、history → document:list + document:review
   审核 4 接口（见下）额外 document:review
   ADMIN 经 ADMIN_OPERATION_PERMISSIONS 自动拥有上述全部权限码。
-- 4 个审核接口额外 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)（TS 的 @Roles，先于权限码拦截）：
+- 4 个审核接口额外 @roles(RoleCode.REVIEWER, RoleCode.ADMIN)：
   GET /reviews/tasks、GET /reviews/tasks/pending-count、
   POST /reviews/tasks/{taskId}/approve、POST /reviews/tasks/{taskId}/reject
   这 4 个接口同时挂 @roles 与 require_permission(document:review)。
 - 需要用户身份的接口用 Depends(get_current_user)（等价 @CurrentUser()）：
   create / upload-parse 回填 authorId、createBy；update 回填 updateBy；
   approve / reject 取审核人 userId 与 `realName ?? username`。
-  审核人**不从请求体取**（TS ReviewDecisionDto 只有 reviewComment）。
+  审核人**不从请求体取**。
 
-可见性（权限码之外的「看得到哪些文档」，对应 TS document-access.ts）：
-- GET /documents     普通用户只看「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」
+可见性：
+- GET /documents 普通用户只看「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」
 - GET /documents/{id} 同上判权，读不到抛 403
 两者都传 access_from_user(current_user)；ADMIN / REVIEWER 不受限。
 ⚠️ 服务层的 scope=None 表示不过滤，端点漏传即等于放开可见性。
@@ -86,7 +86,7 @@ from app.services.document_review import DocumentReviewService
 
 router = auth_router()
 
-# 上传大小上限（对应 TS Multer fileSize: 50MB）
+# 上传大小上限
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 
 
@@ -103,15 +103,14 @@ def get_document_review_service() -> DocumentReviewService:
 def _doc_response(entity: DocumentEntity) -> DocumentResponse:
     """ORM 实体 → 文档响应
 
-    审核服务返回的是 DocumentEntity（与 TS submitForReview / approveReview 一致，
-    不带正文），这里复用 document_to_dict 做 bigint → 字符串转换；
+    审核服务返回的是 DocumentEntity，这里复用 document_to_dict 做 bigint → 字符串转换；
     content 在 DocumentResponse 中可空，故不带正文也可通过校验。
     """
     return DocumentResponse.model_validate(document_to_dict(entity))
 
 
 def _reviewer_name(user: AuthUser) -> str:
-    """审核人姓名：`realName ?? username`（TS 传给 approveReview / rejectReview 的同款兜底）
+    """审核人姓名：`realName ?? username`
 
     username 是必填项，因此结果一定是非空字符串。
     """
@@ -179,7 +178,7 @@ async def create_document(
 ) -> DocumentResponse:
     """创建文档：写 Mongo 正文 + Postgres 元数据
 
-    authorId / createBy / updateBy 一律取当前登录用户（TS 三个字段都写 `actor.userId`）；
+    authorId / createBy / updateBy 一律取当前登录用户；
     请求体即使带 authorId / createBy 也会被服务层忽略 —— 无法伪造作者 / 创建人。
     """
     return DocumentResponse.model_validate(
@@ -222,7 +221,7 @@ async def pending_review_count(
     session: AsyncSession = Depends(get_db_session),
     service: DocumentReviewService = Depends(get_document_review_service),
 ) -> int:
-    """待审任务总数（导航角标等）；与 TS 一致直接返回数字"""
+    """待审任务总数（导航角标等）；直接返回数字"""
     return await service.get_pending_count(session)
 
 
@@ -255,7 +254,7 @@ async def find_all_documents(
     """按标题模糊 / 分类 / 团队 / 作者 / 状态筛选，created_at 倒序分页
 
     普通用户只看得到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」
-    （对应 TS `findAll(query, user)` 里的 accessFromUser 分支）；
+    （)` 里的 accessFromUser 分支）；
     ADMIN / REVIEWER 不受限。可见性条件与上方筛选条件是 AND 关系。
     """
     query = DocumentQuery(
@@ -363,7 +362,7 @@ async def submit_review(
     """单独提交审核（也可由 publish 在需审核时内部调用）
 
     草稿 / 已发布 → 待审核；来自已发布时会先清索引，审核期间不可检索。
-    写权校验在服务层（非 ADMIN 且非作者本人 → 403，TS submitForReview 同款），
+    写权校验在服务层，
     故必须传 current_user —— 漏传等于这条写路径不设防。
     """
     return _doc_response(
@@ -422,7 +421,7 @@ async def approve_review(
 ) -> DocumentResponse:
     """审核通过：文档置 Published + 重建 RAG / Search / KG 索引
 
-    审核人取当前登录用户（TS `user.userId` / `user.realName ?? user.username`），
+    审核人取当前登录用户，
     不从请求体取 —— 请求体只有 reviewComment。
     """
     return _doc_response(
@@ -453,7 +452,7 @@ async def reject_review(
 ) -> DocumentResponse:
     """审核驳回：文档回 Draft，作者可修改后再次提审
 
-    驳回意见必填由服务层校验（400「驳回意见不能为空」）；TS 是 `dto.reviewComment ?? ''`
+    驳回意见必填由服务层校验（400「驳回意见不能为空」）；''`
     兜空串后交给服务层判空，此处 review_comment 为 None 时等价。
     审核人同 approve，取当前登录用户。
     """
@@ -483,7 +482,7 @@ async def find_one_document(
     """查询文档详情，附带 Mongo 正文
 
     读不到（他人未发布 / 非公开且非本团队）抛 403「无权查看该文档」
-    （对应 TS `findOne(id, true, user)` 的 canReadDocument 检查）。
+    （)` 的 canReadDocument 检查）。
     """
     return DocumentResponse.model_validate(
         await service.find_one(session, doc_id, scope=access_from_user(current_user))
@@ -505,7 +504,7 @@ async def update_document(
 ) -> DocumentResponse:
     """局部更新：正文 / 摘要 / 元数据字段均可选
 
-    updateBy 未显式传时取当前登录用户（TS `else if (actor?.userId)`）。
+    updateBy 未显式传时取当前登录用户（(actor?.userId)`）。
     """
     return DocumentResponse.model_validate(
         await service.update(session, doc_id, dto, current_user)

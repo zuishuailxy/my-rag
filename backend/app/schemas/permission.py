@@ -1,14 +1,14 @@
-"""权限 DTO 与响应模型（对应 TS src/user/dto/permission.dto.ts）
+"""权限 DTO 与响应模型
 
 字段逐字对齐 CreatePermissionDto / UpdatePermissionDto / QueryPermissionDto /
 AssignPermissionIdsDto；camelCase 别名由 alias_generator=to_camel 处理
 （与 role.py 同款约定：请求体与响应体均 camelCase）。
 
-⚠️ 刻意优于 TS：各字符串字段按 init.sql kh_permission 列宽补 max_length
+各字符串字段按 init.sql kh_permission 列宽补 max_length
 （permission_name 50 / permission_code 100 / menu_url 200 / api_url 500 /
 method 10 / icon 50），防超长撞 PG 22001 → 500。
 
-bigint 列：请求体里 parentId / permissionIds 是字符串（TS bigintTransformer 同款）；
+bigint 列：请求体里 parentId / permissionIds 是字符串；
 响应体里 id / parentId 一律转字符串，避免 JS Number 精度丢失（全项目约定）。
 """
 
@@ -27,7 +27,7 @@ __all__ = [
 
 
 class CreatePermissionRequest(BaseModel):
-    """创建权限请求体（对应 TS CreatePermissionDto；parentId 默认 '0' 由服务层处理）"""
+    """创建权限请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -50,7 +50,7 @@ class CreatePermissionRequest(BaseModel):
         max_length=100,
         description="权限编码（运行时校验，唯一）",
     )
-    # 1 菜单 2 按钮 3 接口（TS number 不约束取值，此处保持 int）
+    # 1 菜单 2 按钮 3 接口
     permission_type: int = Field(..., description="权限类型：1 菜单 2 按钮 3 接口")
     # 父权限 ID（雪花字符串），未传视为根 '0'
     parent_id: str | None = Field(default=None, description="父权限 ID（雪花），默认根 '0'")
@@ -63,9 +63,7 @@ class CreatePermissionRequest(BaseModel):
 
 
 class UpdatePermissionRequest(BaseModel):
-    """更新权限请求体（对应 TS UpdatePermissionDto；全字段可选，未传不改动）
-
-    与 TS 一致：status 无取值约束（传 0 即禁用）；parentId 传自身 ID 由服务层拦截 400。
+    """更新权限请求体：status 无取值约束（传 0 即禁用）；parentId 传自身 ID 由服务层拦截 400。
     """
 
     model_config = ConfigDict(
@@ -91,9 +89,7 @@ class UpdatePermissionRequest(BaseModel):
 
 
 class QueryPermissionRequest(BaseModel):
-    """权限分页查询（对应 TS QueryPermissionDto；
-
-    page/pageSize 由路由层以 Query 别名接收后再组装，便于 FastAPI 校验边界）。"""
+    """权限分页查询。"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -105,7 +101,7 @@ class QueryPermissionRequest(BaseModel):
 
 
 class AssignPermissionIdsRequest(BaseModel):
-    """分配权限 ID 列表（对应 TS AssignPermissionIdsDto；供角色/用户授权接口使用）"""
+    """分配权限 ID 列表"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -113,7 +109,7 @@ class AssignPermissionIdsRequest(BaseModel):
         json_schema_extra={"example": {"permissionIds": ["4000000000000000011"]}},
     )
 
-    # ⚠️ 保真 TS：AssignPermissionIdsDto 只有 @IsArray + @IsString({ each: true })，
+    # AssignPermissionIdsDto 只有 @IsArray + @IsString({ each: true })，
     # 无 min_length —— 空数组 = 清空全部授权（assignRolePermissions/assignUserPermissions
     # 先删后插，空数组即删除所有关联），故此处刻意不加 min_length。
     permission_ids: list[str] = Field(
@@ -122,7 +118,7 @@ class AssignPermissionIdsRequest(BaseModel):
 
 
 class PermissionVOResponse(BaseModel):
-    """权限响应（对应 TS PermissionEntity 序列化；bigint ID 转字符串）"""
+    """权限响应"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -140,7 +136,7 @@ class PermissionVOResponse(BaseModel):
 
 
 class PermissionPageResponse(BaseModel):
-    """权限分页响应（对应 TS page 返回 {items,total,page,pageSize}）"""
+    """权限分页响应"""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -151,6 +147,6 @@ class PermissionPageResponse(BaseModel):
 
 
 class PermissionTreeResponse(PermissionVOResponse):
-    """权限树节点（对应 TS getTree 的递归结构，children 嵌套同型节点）"""
+    """权限树节点"""
 
     children: list["PermissionTreeResponse"] = Field(default_factory=list)

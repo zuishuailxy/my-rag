@@ -12,8 +12,8 @@
     cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false \\
         .venv/bin/python scripts/reindex_all_kg.py [--dry-run] [--document-id ID ...]
 
-    --dry-run       只列出将重建的文档，不写任何数据
-    --document-id   只重建指定文档（可重复；缺省全量）
+    --dry-run 只列出将重建的文档，不写任何数据
+    --document-id 只重建指定文档（可重复；缺省全量）
 
 ⚠️ 每篇每块都会调一次 LLM 抽取，有 API 成本与耗时；Neo4j 不可用时直接报错退出。
 """
@@ -24,9 +24,9 @@ import sys
 
 sys.path.insert(0, ".")
 
-from app.db.session import async_session_factory  # noqa: E402
-from app.services.graph_build import graph_build_service  # noqa: E402
-from app.services.indexing import load_all_published_documents  # noqa: E402
+from app.db.session import async_session_factory # noqa: E402
+from app.services.graph_build import graph_build_service # noqa: E402
+from app.services.indexing import load_all_published_documents # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("ReindexAllKg")
@@ -49,7 +49,7 @@ async def main(dry_run: bool, document_ids: list[str] | None) -> int:
     logger.info("待重建 KG 的已发布文档 %d 篇", len(docs))
     if dry_run:
         for doc in docs:
-            logger.info("  - [dry-run] %s %s", doc.id, doc.title)
+            logger.info(" - [dry-run] %s %s", doc.id, doc.title)
         await graph_build_service.close()
         return 0
 
@@ -59,10 +59,10 @@ async def main(dry_run: bool, document_ids: list[str] | None) -> int:
         try:
             n = await graph_build_service.build_for_document(doc)
             total += n
-            logger.info("  ✓ %s %s entities=%d", doc.id, doc.title, n)
-        except Exception as err:  # noqa: BLE001 —— 单篇失败不影响其余
+            logger.info(" ✓ %s %s entities=%d", doc.id, doc.title, n)
+        except Exception as err: # noqa: BLE001 —— 单篇失败不影响其余
             failed += 1
-            logger.error("  ✗ %s %s：%s", doc.id, doc.title, err)
+            logger.error(" ✗ %s %s：%s", doc.id, doc.title, err)
 
     logger.info(
         "KG 重建完成：文档=%d, 失败=%d, 实体≈%d（总耗时含 LLM 抽取）",

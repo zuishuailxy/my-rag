@@ -1,8 +1,8 @@
 """
 用户-角色关联模型（PostgreSQL kh_user_role）
 
-已对照 TS src/user/entities/user-role.entity.ts 逐字段核验一致（2026-09-01）：
-id / userId / roleId / createdAt。TS 实体未声明 FK 与唯一约束（都在 DDL 里，
+（2026-09-01）：
+id / userId / roleId / createdAt。（都在 DDL 里，
 TypeORM 同步自数据库）；Python 侧在 ORM 层显式声明（ForeignKey + uk_kh_user_role_user_role
 + idx_kh_user_role_user_id），保证 create_all 语义完整。
 

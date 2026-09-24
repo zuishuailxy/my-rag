@@ -1,5 +1,5 @@
 """
-雪花 ID 生成器（对应 TS common/snowflake-id.ts）
+雪花 ID 生成器
 
 Twitter Snowflake 布局：41 位时间戳 + 10 位机器 ID + 12 位序列号 = 63 位，
 落在 PostgreSQL BIGINT（有符号 64 位）范围内。

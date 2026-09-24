@@ -1,10 +1,10 @@
 """
-PPTX 解析为 Markdown（对应 TS utils/parsers/ppt 的 parsePptx）
+PPTX 解析为 Markdown
 
 优先走自研 ZIP/XML 路径（按幻灯片输出 `## 幻灯片 N` + 标题/正文/表格）；
-解压或提取失败时降级到 python-pptx（对应 TS 的 officeparser 降级路径）。
+解压或提取失败时降级到 python-pptx。
 
-注意：TS 用 JSZip（异步）+ officeparser（异步），Python 侧 zipfile / python-pptx
+注意：（异步）+ officeparser（异步），Python 侧 zipfile / python-pptx
 均为同步，因此 parse_pptx 直接返回 str。
 """
 import io
@@ -76,7 +76,7 @@ def _parse_pptx_with_zip(buffer: bytes) -> str:
 
 
 def _parse_pptx_with_python_pptx(buffer: bytes) -> str:
-    """降级路径：python-pptx 按幻灯片提取文本与表格（对应 TS officeparser）"""
+    """降级路径：python-pptx 按幻灯片提取文本与表格"""
     from pptx import Presentation
 
     prs = Presentation(io.BytesIO(buffer))
@@ -180,7 +180,7 @@ def extract_runs_text(xml: str) -> str:
 
 
 def decode_xml(text: str) -> str:
-    """OOXML 文本实体反转义（与 TS 替换顺序一致）"""
+    """OOXML 文本实体反转义"""
     return (
         text.replace("&lt;", "<")
         .replace("&gt;", ">")

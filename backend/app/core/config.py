@@ -30,12 +30,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ---- JWT 认证（对应 TS auth.module.ts JwtModule + AuthService）----
-    # ⚠️ 刻意偏离 TS：TS 开发默认 'dev-secret-change-me' 仅 20 字节，PyJWT 对 <32 字节
+    # ---- JWT 认证----
+# 'dev-secret-change-me' 仅 20 字节，PyJWT 对 <32 字节
     # 的 HS256 密钥会发 InsecureKeyLengthWarning（RFC 7518 要求 ≥32 字节）。此处把开发
     # 默认值加长到 47 字节以消除告警；生产环境必须通过 JWT_SECRET 配置强随机密钥。
     JWT_SECRET: str = "dev-secret-change-me-please-use-32-bytes-random"
-    # 过期时长格式与 NestJS @nestjs/jwt 一致：<数字><s|m|h|d>，如 2h / 7d / 30m
+    # 过期时长格式：<数字><s|m|h|d>，如 2h / 7d / 30m
     JWT_ACCESS_EXPIRES: str = "2h"
     JWT_REFRESH_EXPIRES: str = "7d"
 
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # ---- 日志 ----
-    # 业务 logger 的输出级别。对应 TS NestJS 的默认输出（那边没有开关，恒 INFO），
+    # 业务 logger 的输出级别。，恒 INFO），
     # 这里加开关是为了排查时不必改代码。**与 DEBUG 刻意解耦**：DEBUG 管的是
     # /docs 与 /redoc 是否开放，两者职责不同，不该互相牵动。
     # 取值：DEBUG / INFO / WARNING / ERROR / CRITICAL（大小写不敏感）。
@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
-    # ---- 文档发布审核（对应 TS DOCUMENT_REQUIRE_APPROVAL）----
-    # 字符串而非 bool，保持与 TS `config.get(..., 'true') !== 'false'` 完全一致的判定：
+    # ---- 文档发布审核----
+    # 字符串而非 bool，(..., 'true') !== 'false'` 完全一致的判定：
     # 只有严格等于 "false" 才免审，其余任何值（含 TRUE/0/空串）都视为开启审核。
     DOCUMENT_REQUIRE_APPROVAL: str = "true"
 
@@ -104,30 +104,30 @@ class Settings(BaseSettings):
             f"?authSource={self.MONGO_AUTH_SOURCE}"
         )
 
-    # ---- Redis（密码重置验证码等；对应 TS RedisModule 全局单例）----
+    # ---- Redis----
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
-    # 空串视为未设密码（compose 里 redis:7-alpine 无密码；TS `password || undefined` 同义）
+    # 空串视为未设密码
     REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
 
-    # ---- 邮箱验证（注册激活 / 密码重置；对应 TS REQUIRE_EMAIL_VERIFICATION）----
+    # ---- 邮箱验证----
     # 默认 false：注册后立即可登录；true 时需邮件激活
     REQUIRE_EMAIL_VERIFICATION: bool = False
-    # 激活链接拼接用的基址（TS `config.get('APP_PUBLIC_URL', 'http://localhost:3000')`）。
-    # TS 原设计指向前端（链接 /auth/verify-email 是前端页面路由）；无前端阶段
+    # 激活链接拼接用的基址（('APP_PUBLIC_URL', 'http://localhost:3000')`）。
+# （链接 /auth/verify-email 是前端页面路由）；无前端阶段
     # 直接指向后端 API 时必须含全局前缀 /api/v1（如 http://localhost:8000/api/v1），
     # 否则邮件里的激活链接会 404
     APP_PUBLIC_URL: str = "http://localhost:3000"
 
-    # ---- SMTP 邮件（aiosmtplib；对应 TS @nestjs-modules/mailer + nodemailer）----
+    # ---- SMTP 邮件----
     MAIL_HOST: str = "smtp.qq.com"
     MAIL_PORT: int = 587
     # true=隐式 TLS（通常 465）；false=STARTTLS（通常 587）——与 nodemailer 的 secure 语义一致
     MAIL_SECURE: bool = False
     MAIL_USER: str = ""
     MAIL_PASS: str = ""
-    # 发件人（支持 "显示名 <addr@domain>" 格式，与 TS mail.from 一致）
+    # 发件人
     MAIL_FROM: str = "Knowledge Hub <no-reply@example.com>"
 
     # ---- RustFS（S3 兼容对象存储，替代 MinIO）----
@@ -144,11 +144,11 @@ class Settings(BaseSettings):
     # ---- CORS ----
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
 
-    # ---- Embedding（发布索引：文本向量，对齐架构 1024 维；对应 TS EmbeddingService）----
+    # ---- Embedding----
     EMBEDDING_PROVIDER: str = (
-        "local"  # local=确定性伪向量(开发/测试) | openai=OpenAI 兼容 API
+        "local" # local=确定性伪向量(开发/测试) | openai=OpenAI 兼容 API
     )
-    # API Key 按 TS 的 fallback 链：EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
+# EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     EMBEDDING_API_KEY: str | None = None
     DASHSCOPE_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
@@ -160,11 +160,11 @@ class Settings(BaseSettings):
     # DashScope text-embedding-v3 单次最多 10 条；超出会 400 InvalidParameter（代码内钳制）
     EMBEDDING_BATCH_SIZE: int = 10
 
-    # ---- Reranker（重排：DashScope text-rerank；对应 TS RerankerService）----
-    # 字符串而非 bool，与 TS `config.get(..., 'true') !== 'false'` 判定一致：
+    # ---- Reranker----
+    # 字符串而非 bool，(..., 'true') !== 'false'` 判定一致：
     # 仅严格等于 "false" 才关闭重排。
     RAG_RERANK_ENABLED: str = "true"
-    # API Key fallback 链与 TS 一致：RERANK_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
+    # API Key fallback 链：RERANK_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     RERANK_API_KEY: str | None = None
     # 模型 ID 以百炼控制台为准（qwen3-rerank 等；写错会 400）
     RAG_RERANK_MODEL: str = "gte-rerank-v2"
@@ -179,16 +179,16 @@ class Settings(BaseSettings):
             f"/api/v1/services/rerank/text-rerank/text-rerank"
         )
 
-    # ---- 混合检索（对应 TS HybridRetrievalService：RAG_HYBRID_TOP_K / RAG_RRF_C）----
+    # ---- 混合检索----
     # 多路召回每路的候选数 / 默认返回条数（RRF 前召回规模）
     RAG_HYBRID_TOP_K: int = 20
     # RRF 常数（与 ES RRF 默认一致）：score = Σ 1/(C + rank)
     RAG_RRF_C: int = 60
     # rerank relevance_score 下限（0–1），低于该值的候选不进入最终结果；<=0 表示不过滤。
-    # ⚠️ 这个阈值**跟 reranker 模型绑定**，不能照搬 TS 的 0.4：TS 用的 qwen3-rerank
+    # ⚠️ 这个阈值**跟 reranker 模型绑定**，：
     # 分档偏高；本项目 .env 用 gte-rerank-v2，实测
-    #   · 真正相关（「私车公用申请表」命中差旅制度）top 分只有 0.13~0.47
-    #   · 不相关 query（「今天天气」）约 0.006，偶发假阳 0.064
+    # · 真正相关（「私车公用申请表」命中差旅制度）top 分只有 0.13~0.47
+    # · 不相关 query（「今天天气」）约 0.006，偶发假阳 0.064
     # 用 0.4 会把**全部**合法命中过滤掉 → AI 回答「召回不到相关资料」，而文档搜索
     # （ES kh_document，不走 rerank）却能找到。0.1 实测能分开上述两组。
     # 换回 qwen3-rerank 时请一并把该值调回适配值。
@@ -200,7 +200,7 @@ class Settings(BaseSettings):
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672"
     RABBITMQ_CONNECT_TIMEOUT_MS: int = 15000
 
-    # ---- RAG 分块（对应 TS RAG_CHUNK_SIZE/OVERLAP，token 数）----
+    # ---- RAG 分块----
     RAG_CHUNK_SIZE: int = 512
     RAG_CHUNK_OVERLAP: int = 64
 
@@ -209,8 +209,8 @@ class Settings(BaseSettings):
     # 本地开发走宿主机映射端口 9200；容器内部署时覆盖为 http://es:9200
     ELASTICSEARCH_NODE: str = "http://localhost:9200"
 
-    # ---- KG 抽取（LLM 实体/关系抽取，DeepSeek OpenAI 兼容端点；对应 TS ExtractionService）----
-    # API Key fallback 链与 TS 一致：OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY
+    # ---- KG 抽取----
+    # API Key fallback 链：OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY
     LLM_API_KEY: str | None = None
     # DeepSeek OpenAI 兼容端点
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
@@ -225,27 +225,27 @@ class Settings(BaseSettings):
     # 单次抽取 LLM 超时（毫秒）
     KG_LLM_TIMEOUT_MS: int = 60000
 
-    # ---- AI 对话（RAG 问答：混合检索 → LLM 作答；对应 TS AiChatService）----
+    # ---- AI 对话----
     # 大模型 DeepSeek，复用上面的 LLM_BASE_URL / LLM_MODEL；逐个可独立覆盖。
     # OPENAI_API_KEY 在上方 API Key fallback 链区声明（EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY），
     # 此处复用同一字段，勿重复声明（pydantic 第二次赋值会静默覆盖）。
     OPENAI_BASE_URL: str | None = None
     # 模型覆盖：MODEL_NAME → LLM_MODEL（默认 deepseek-v4-flash）
     MODEL_NAME: str | None = None
-    # LLM 单次作答超时（毫秒，对应 TS AI_CHAT_TIMEOUT_MS）
+    # LLM 单次作答超时
     AI_CHAT_TIMEOUT_MS: int = 60000
-    # 流式对话思考开关（对应 TS LLM_ENABLE_THINKING）：严格 == "false" 才关，
+    # 流式对话思考开关：严格 == "false" 才关，
     # 默认开——deepseek-v4-flash 开思考后 reasoning_content 随流式 delta 返回
     LLM_ENABLE_THINKING: str = "true"
 
-    # ---- 检索改写（多轮追问 → 独立短查询；对应 TS chat-query-rewrite.service.ts）----
-    # 单次改写 LLM 超时（毫秒，TS `Number(config.get('AI_QUERY_REWRITE_TIMEOUT_MS', 15000))`）。
+    # ---- 检索改写----
+    # 单次改写 LLM 超时（毫秒，(config.get('AI_QUERY_REWRITE_TIMEOUT_MS', 15000))`）。
     # 改写是增强环节：超时/失败都回退原问题，绝不阻断检索。
-    # ⚠️ TS 的 `Number(...)` 会把写错的环境变量变成 NaN 一路传到 ChatOpenAI；
+# (...)` 会把写错的环境变量变成 NaN 一路传到 ChatOpenAI；
     # 这里声明为 int，非法值在启动时即报错（同 chat_short_memory 的处理）。
     AI_QUERY_REWRITE_TIMEOUT_MS: int = 15000
 
-    # ---- TypeSafe 结构化判定（意图识别；本次新增，TS 无对应依赖）----
+    # ---- TypeSafe 结构化判定----
     # TypeSafe 是判定式 SaaS（system_one → Noul/Choice/Score 类型化结果），只用来做
     # 检索前的 5 路意图分类；查询改写仍是生成式 LLM（路线 A：TypeSafe 管决策、LLM 管改写）。
     # 未配置则意图识别回退 LLM 的 need_retrieve 推导（见 chat_query_rewrite.py）。
@@ -263,31 +263,31 @@ class Settings(BaseSettings):
     LANGSMITH_PROJECT: str = "default"
     # 留空用官方 SaaS（https://api.smith.langchain.com）；自建网关才需覆盖
     LANGSMITH_ENDPOINT: str | None = None
-    # 联网搜索（Tavily，对应 TS WebSearchService；TS 原版是 Bocha，刻意迁移已文档化）
+    # 联网搜索
     TAVILY_API_KEY: str | None = None
 
-    # ---- 对话短期记忆（Redis 热窗口；对应 TS chat-short-memory.service.ts）----
+    # ---- 对话短期记忆----
     # 用途：最近若干条 human/ai 原文放 Redis，避免每轮问答都回 Postgres 拉历史；
     # 只存原文，不含检索资料 / 思考 / Mem0 系统消息（由 chat_memory.is_working_message 过滤）。
     # 窗口 key 为 `{PREFIX}:{userId}:{sessionId}:messages`，miss 时由调用方从库回填。
-    # ⚠️ TS 用 `Number(config.get(..., 86400))`，环境变量写错会得到 NaN 并一路传到 Redis；
-    # 这里声明为 int，非法值在启动时即报错（刻意优于 TS，不静默降级）。
+# (config.get(..., 86400))`，环境变量写错会得到 NaN 并一路传到 Redis；
+    # 这里声明为 int，非法值在启动时即报错。
     CHAT_SHORT_MEMORY_TTL_SECONDS: int = 86400
     CHAT_SHORT_MEMORY_MAX_MESSAGES: int = 20
     CHAT_SHORT_MEMORY_KEY_PREFIX: str = "kh:chat"
 
     # ---- 会话滚动摘要（滑出热窗口的旧历史 → 增量折叠成一段摘要）----
     # 存储：Redis 热缓存（`{PREFIX}:{uid}:{sid}:summary`，TTL 复用上方）
-    #       + Postgres `kh_ai_session_summary`（双写，Redis 优先 / DB 兜底）。
+    # + Postgres `kh_ai_session_summary`（双写，Redis 优先 / DB 兜底）。
     # 摘要目标字数：热窗口 20 条 ≈ 1500~2500 token，摘要占窗口 ~15% 比较合理；
     # 因为是**增量折叠**（旧摘要 + 新滑出 → 新摘要），prompt 里限死字数防止无限增长。
     # 超限会硬截断兜底（见 chat_summary.py）。
     CHAT_SUMMARY_MAX_CHARS: int = 400
 
-    # ---- 对话长期记忆（Mem0 托管平台；对应 TS chat-long-memory.service.ts）----
+    # ---- 对话长期记忆----
     # 未配置 MEM0_API_KEY 时整个长期记忆模块跳过（构造时 WARN，各方法直接返回空/不写）。
     # MEM0_HOST 留空则用 SDK 默认 https://api.mem0.ai（自建网关时才需覆盖）。
-    # 每层各取多少条（TS `Number(config.get('MEM0_TOP_K', 5))`）。
+    # 每层各取多少条（(config.get('MEM0_TOP_K', 5))`）。
     # ⚠️ 记忆的「抽取」在 Mem0 云侧完成，SDK 不暴露模型参数，只能用 custom_instructions
     # 约束输出；本进程只跑「分类器」（判断写 user 层 / session 层 / 都不写），走下方
     # OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY 链，本项目即 deepseek-v4-flash。

@@ -1,20 +1,20 @@
-"""用户管理 DTO（对应 TS user/dto/*.dto.ts）
+"""用户管理 DTO
 
-来源与命名对照（TS 语义化重命名约定）：
-  UpdateUserDto      → UserUpdateRequest
-  QueryUserDto       → UserPageQuery
-  UpdateProfileDto   → ProfileUpdateRequest
-  ChangePasswordDto  → ChangePasswordRequest
-  ResetPasswordDto   → ResetPasswordRequest
-  AssignRolesDto     → AssignRolesRequest
-  vo/user.vo.ts      → UserVOResponse（+ 分页 / 角色码 / 统计响应）
+来源与命名对照：
+  UpdateUserDto → UserUpdateRequest
+  QueryUserDto → UserPageQuery
+  UpdateProfileDto → ProfileUpdateRequest
+  ChangePasswordDto → ChangePasswordRequest
+  ResetPasswordDto → ResetPasswordRequest
+  AssignRolesDto → AssignRolesRequest
+  vo/user.vo.ts → UserVOResponse（+ 分页 / 角色码 / 统计响应）
 
-⚠️ 刻意优于 TS（防 PG 22001 → 500，与 role 模块同款）：
-TS 各字符串字段只有 @IsString()，超长会撞 PG 列宽变 500；
+（防 PG 22001 → 500，与 role 模块同款）：
+()，超长会撞 PG 列宽变 500；
 此处按 kh_user 列宽补 max_length（email 100 / realName 50 / avatar 500）。
 
-⚠️ 422 vs 400：TS class-validator 校验失败经全局 ValidationPipe 返回 **400**，
-FastAPI 返回 **422**——本项目沿用先例（verify-email token 缺失 422 刻意优于 TS），
+⚠️ 422 vs 400：，
+FastAPI 返回 **422**——本项目沿用先例，
 语义等价，不再为对齐状态码引入自定义异常处理。
 """
 
@@ -42,12 +42,10 @@ __all__ = [
 
 
 class CreateUserRequest(BaseModel):
-    """管理员创建用户（对应 TS CreateUserDto）
-
-    与 TS 一致：password 仅 @MinLength(6)（max_length=72 是字符数粗筛，
+    """管理员创建用户：password 仅 @MinLength(6)（max_length=72 是字符数粗筛，
     服务层再按 UTF-8 字节数兜底，同 register/changePassword 先例）；
     status 无取值约束，默认 1 由服务层处理；roleCodes 默认 ROLE_USER
-    也由服务层处理（TS 默认值在 service，不在 DTO）。
+    也由服务层处理。
     """
 
     model_config = ConfigDict(
@@ -82,10 +80,8 @@ class CreateUserRequest(BaseModel):
 
 
 class UpdateUserRequest(BaseModel):
-    """管理员更新用户（对应 TS UpdateUserDto；全字段可选，未传不改动）
-
-    与 TS 一致：status 无取值约束（任意数字都接受）；email 不做唯一性校验
-    （TS update 同样不查重，重复邮箱依赖库约束——无约束时两侧都是脏数据）。
+    """管理员更新用户：status 无取值约束（任意数字都接受）；email 不做唯一性校验
+。
     """
 
     model_config = ConfigDict(
@@ -103,7 +99,7 @@ class UpdateUserRequest(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    """当前用户更新自己资料（对应 TS UpdateProfileDto；全字段可选）"""
+    """当前用户更新自己资料"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -117,9 +113,9 @@ class ProfileUpdateRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    """修改密码请求体（对应 TS ChangePasswordDto）
+    """修改密码请求体
 
-    newPassword 与 TS 一致 MinLength(6)；max_length=72 是字符数粗筛，
+    newPassword MinLength(6)；max_length=72 是字符数粗筛，
     服务层再按 UTF-8 字节数兜底（bcrypt 上限，见 services/user.py docstring）。
     """
 
@@ -134,7 +130,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    """管理员重置密码请求体（对应 TS ResetPasswordDto）"""
+    """管理员重置密码请求体"""
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -146,7 +142,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 class AssignRolesRequest(BaseModel):
-    """全量替换用户角色（对应 TS AssignRolesDto）
+    """全量替换用户角色
 
     @ArrayNotEmpty → min_length=1：不允许空数组（清空全部角色不走此接口）。
     """
@@ -161,7 +157,7 @@ class AssignRolesRequest(BaseModel):
 
 
 class UserPageQuery(BaseModel):
-    """用户分页查询（对应 TS QueryUserDto；由路由层逐参数 Query() 组装）"""
+    """用户分页查询（；由路由层逐参数 Query() 组装）"""
 
     keyword: str | None = Field(default=None, description="用户名/姓名/邮箱 模糊匹配")
     role_code: str | None = Field(default=None, description="按角色编码筛选，如 ROLE_REVIEWER")
@@ -171,7 +167,7 @@ class UserPageQuery(BaseModel):
 
 
 class UserVOResponse(BaseModel):
-    """用户对外展示（对应 TS UserVO；不含 password）
+    """用户对外展示
 
     时间字段经 document_to_dict 同款 isoformat 口径（naive UTC，无时区后缀）。
     """
@@ -194,7 +190,7 @@ class UserVOResponse(BaseModel):
 
 
 class UserPageResponse(BaseModel):
-    """用户分页响应（对应 TS pageUsers 返回的内联 { items, total, page, pageSize }）"""
+    """用户分页响应"""
 
     items: list[UserVOResponse]
     total: int
@@ -205,7 +201,7 @@ class UserPageResponse(BaseModel):
 
 
 class UserRoleCodesResponse(BaseModel):
-    """用户角色码响应（对应 TS getUserRoles / assignRoles 的内联 { userId, roleCodes }）"""
+    """用户角色码响应"""
 
     user_id: str = Field(alias="userId")
     role_codes: list[str] = Field(alias="roleCodes")
@@ -214,11 +210,10 @@ class UserRoleCodesResponse(BaseModel):
 
 
 class UserPermissionCodesResponse(BaseModel):
-    """用户权限码响应（对应 TS getUserPermissions 的内联
-    { userId, permissionCodes, directPermissionIds }）
+    """用户权限码响应
 
     permissionCodes = 合并后的全部权限码（直接 + 角色）；directPermissionIds
-    = 用户直接授权（非经角色）的权限 ID 列表，与 TS 逐字段对齐。
+    = 用户直接授权（非经角色）的权限 ID 列表。
     """
 
     user_id: str = Field(alias="userId")
@@ -227,14 +222,14 @@ class UserPermissionCodesResponse(BaseModel):
 
 
 class UserPermissionIdsResponse(BaseModel):
-    """用户直接授权 ID 响应（对应 TS assignUserPermissions 的内联 { userId, permissionIds }）"""
+    """用户直接授权 ID 响应"""
 
     user_id: str = Field(alias="userId")
     permission_ids: list[str] = Field(alias="permissionIds")
 
 
 class UserStatsResponse(BaseModel):
-    """用户统计响应（对应 TS getUserStatistics 返回的内联对象）"""
+    """用户统计响应"""
 
     document_count: int = Field(alias="documentCount", description="文档总数（未删除）")
     view_count: int = Field(alias="viewCount", description="浏览量合计")

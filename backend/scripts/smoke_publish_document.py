@@ -54,7 +54,7 @@ def main() -> None:
             )
             assert r.status_code == 201, r.text
             doc_id = r.json()["id"]
-            assert r.json()["status"] == 0  # 草稿
+            assert r.json()["status"] == 0 # 草稿
 
             r = client.put(f"/api/v1/documents/{doc_id}/publish")
             print("1) PUT /publish:", r.status_code)
@@ -63,17 +63,16 @@ def main() -> None:
             assert data["status"] == 1, "应为已发布"
             assert data["publishTime"] is not None, "publishTime 未写入"
             assert data["content"] == "正文内容 hello", "返回正文缺失"
-            print("   status=1, publishTime=", data["publishTime"])
+            print(" status=1, publishTime=", data["publishTime"])
 
             # 2) 已发布再发布 → 幂等 200
             r = client.put(f"/api/v1/documents/{doc_id}/publish")
             print("2) 重复发布:", r.status_code)
             assert r.status_code == 200 and r.json()["status"] == 1
 
-            # 3) 归档 → 重新上架（can_publish_from 允许 Archived 作为来源，TS 同款；
-            #    Archived 即使需审也走 direct_publish 直接上架）
-            #    归档必须走 archive 接口：PATCH 不允许改 status
-            #    （唯一例外是 Published→Draft，见「文档模块CRUD」约定）
+            # 3) 归档 → 重新上架
+            # 归档必须走 archive 接口：PATCH 不允许改 status
+            # （唯一例外是 Published→Draft，见「文档模块CRUD」约定）
             r = client.put(f"/api/v1/documents/{doc_id}/archive")
             assert r.status_code == 200 and r.json()["status"] == 2, r.text
             r = client.put(f"/api/v1/documents/{doc_id}/publish")

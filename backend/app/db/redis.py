@@ -1,7 +1,7 @@
 """
-Redis 客户端封装（对应 TS src/redis/redis.service.ts + redis.module.ts）
+Redis 客户端封装
 
-- TS RedisModule 是 @Global()：客户端随应用启动创建、onModuleDestroy 时 quit；
+()：客户端随应用启动创建、onModuleDestroy 时 quit；
   Python 侧用全局单例 + main.py lifespan 的 start()/close() 接管（与 es.py 同款生命周期）。
 - 方法一一对照：get / set(key, value, ttlSeconds?) / del（Python 里改名 delete，
   因 del 是关键字）/ ttl；onModuleDestroy → close()。
@@ -38,7 +38,7 @@ class RedisService:
         """创建客户端 + 健康检查；失败只告警不阻断启动（对齐 es.py 降级风格）"""
         if self._client is not None:
             return
-        # TS：password || undefined——空串视为未设密码
+        # password || undefined——空串视为未设密码
         password = settings.REDIS_PASSWORD or None
         self._client = Redis(
             host=settings.REDIS_HOST,
@@ -60,7 +60,7 @@ class RedisService:
             logger.warning("Redis 连接失败（后续命令会自动重连）：%s", err)
 
     async def close(self) -> None:
-        """关闭连接（应用退出时调用，对应 TS onModuleDestroy 的 quit；安全幂等）"""
+        """关闭连接"""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -72,7 +72,7 @@ class RedisService:
         return value if value is None else str(value)
 
     async def set(self, key: str, value: str, ttl_seconds: int | None = None) -> None:
-        """写入字符串值；ttl_seconds 非空时以 EX 秒级过期（对应 TS `set(key, value, 'EX', ttl)`）"""
+        """写入字符串值；ttl_seconds 非空时以 EX 秒级过期（)`）"""
         c = self._require_client()
         if ttl_seconds is not None:
             await c.set(key, value, ex=ttl_seconds)
@@ -80,7 +80,7 @@ class RedisService:
         await c.set(key, value)
 
     async def delete(self, *keys: str) -> int:
-        """删除 key（对应 TS del；返回实际删除的个数，供调用方判断是否存在）"""
+        """删除 key"""
         c = self._require_client()
         return int(await c.delete(*keys))
 
@@ -96,5 +96,5 @@ class RedisService:
         return self._client
 
 
-# 全局单例（对应 TS @Global() RedisModule 导出的 RedisService）
+# 全局单例（) RedisModule 导出的 RedisService）
 redis_service = RedisService()

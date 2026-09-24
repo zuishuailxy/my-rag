@@ -1,5 +1,5 @@
 """
-DOCX 解析为 Markdown（对应 TS utils/parsers/docx.ts）
+DOCX 解析为 Markdown
 
 整体流程：
 1. mammoth（官方 Python 移植版）把 DOCX 转为 HTML（保留标题 / 列表 / 表格等结构）；

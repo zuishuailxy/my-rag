@@ -14,7 +14,7 @@ from app.pipeline.types import DocumentChunk
 
 logger = logging.getLogger("EsChunkIndexService")
 
-# chunk 关键词索引名（对应 TS 的 CHUNK_INDEX）
+# chunk 关键词索引名
 CHUNK_INDEX = "kh_chunk"
 
 # 单节点开发环境：1 分片 0 副本
@@ -23,7 +23,7 @@ CHUNK_INDEX_SETTINGS: dict = {
     "number_of_replicas": 0,
 }
 
-# 字段名保持 camelCase 与 TS 侧 kh_chunk 同构；content/标题走 IK 分词
+# content/标题走 IK 分词
 CHUNK_MAPPINGS: dict = {
     "properties": {
         "chunk_id": {"type": "keyword"},
@@ -41,7 +41,7 @@ CHUNK_MAPPINGS: dict = {
         "category_id": {"type": "keyword"},
         "author_id": {"type": "keyword"},
         "team_id": {"type": "keyword"},
-        # 可见性字段（检索过滤用；对齐 TS kh_chunk 的 is_public）
+        # 可见性字段
         "is_public": {"type": "boolean"},
         "doc_status": {"type": "integer"},
         "publish_time": {"type": "date"},
@@ -98,12 +98,12 @@ class EsChunkIndexService:
         except Exception as err:
             message = str(err)
             if "index_not_found" in message:
-                return True  # 索引不存在视为已清空
+                return True # 索引不存在视为已清空
             logger.warning("ES chunk 删除失败：documentId=%s, %s", document_id, message)
             return False
 
     async def ensure_visibility_mapping(self) -> bool:
-        """给已有索引补可见性字段（对应 TS ensureVisibilityMapping）
+        """给已有索引补可见性字段
 
         老 mapping 没有 is_public（本项目早期只写了 author_id / team_id），
         put_mapping 是增量安全的：已有字段不变，只新增缺失字段。
@@ -121,7 +121,7 @@ class EsChunkIndexService:
                 },
             )
             return True
-        except Exception as err:  # noqa: BLE001 —— 索引不存在等情形均降级
+        except Exception as err: # noqa: BLE001 —— 索引不存在等情形均降级
             logger.warning("kh_chunk 可见性 mapping 更新失败：%s", err)
             return False
 
@@ -132,7 +132,7 @@ class EsChunkIndexService:
         team_id: str | int | None,
         author_id: str | int | None,
     ) -> bool:
-        """已发布文档只改公开/团队/作者时，批量改 chunk 可见性（对应 TS updateVisibility）
+        """已发布文档只改公开/团队/作者时，批量改 chunk 可见性
 
         免去重新分块 + 重新嵌入，直接用 update_by_query 就地改三个可见性字段。
         与 PG 侧无关：PG 向量通道按 JOIN kh_document 实时取可见性，无需同步。
@@ -168,7 +168,7 @@ class EsChunkIndexService:
                 resp.get("updated", 0),
             )
             return True
-        except Exception as err:  # noqa: BLE001
+        except Exception as err: # noqa: BLE001
             message = str(err)
             if "index_not_found" in message:
                 return True

@@ -21,13 +21,13 @@ from app.models.base import Base
 
 class ReviewResult(IntEnum):
     """
-    审核结果（对应 TS ReviewResult 枚举）
+    审核结果
 
     注意：待审不是枚举值，而是 review_result IS NULL。
     """
 
-    APPROVED = 1  # 通过
-    REJECTED = 2  # 驳回
+    APPROVED = 1 # 通过
+    REJECTED = 2 # 驳回
 
 
 class DocumentReview(Base):

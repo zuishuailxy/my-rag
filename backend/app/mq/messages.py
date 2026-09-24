@@ -1,5 +1,5 @@
 """
-管线消息定义（对应 TS messages/pipeline.messages）
+管线消息定义
 """
 from typing import Literal, TypedDict
 
@@ -7,8 +7,7 @@ from typing import Literal, TypedDict
 class ReindexMessage(TypedDict):
     """RAG 重建 / 删除消息（rag.reindex.exchange）
 
-    复用一个结构：type 区分重建（BY_DOC_IDS）与删除向量块（DELETE_BY_DOC_IDS），
-    与 TS DocumentPipelinePublisher 一致。
+    复用一个结构：type 区分重建（BY_DOC_IDS）与删除向量块（DELETE_BY_DOC_IDS）。
     """
 
     # 任务 ID（uuid4）
@@ -24,7 +23,7 @@ class SearchIndexMessage(TypedDict):
 
     只传 documentId：消费者按 ID 从 Postgres + Mongo 拉取文档全文后再写
     ES kh_document。早期版本曾在消息内携带 1000 字正文快照，因队列字符
-    限制改为按 ID 拉库（对齐 TS 新版 SearchIndexMessage）。
+    限制改为按 ID 拉库。
     type 区分写入（INDEX）与删除（DELETE）。
     """
 
@@ -39,8 +38,7 @@ class SearchIndexMessage(TypedDict):
 class KgBuildMessage(TypedDict):
     """KG 知识图谱构建 / 删除消息（kg.graph.exchange）
 
-    type 区分建图（BUILD_BY_DOC_IDS / BUILD_ALL）与删除（DELETE_BY_DOC_IDS），
-    与 TS 一致。
+    type 区分建图（BUILD_BY_DOC_IDS / BUILD_ALL）与删除（DELETE_BY_DOC_IDS）。
     """
 
     # 任务 ID（uuid4）

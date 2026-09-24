@@ -1,24 +1,24 @@
-"""角色管理接口（对应 NestJS RoleController）
+"""角色管理接口
 
-- GET    /roles/list        启用角色列表（不含 status）
-- GET    /roles/{role_id}   角色详情（含 status）
-- POST   /roles             创建角色（201）
-- PUT    /roles/{role_id}   更新角色
-- DELETE /roles/{role_id}   删除角色（硬删除；仍有关联用户 400）
-- GET    /roles/{role_id}/permissions   角色已授权权限 ID 列表
-- PUT    /roles/{role_id}/permissions   全量替换角色权限
+- GET /roles/list 启用角色列表（不含 status）
+- GET /roles/{role_id} 角色详情（含 status）
+- POST /roles 创建角色（201）
+- PUT /roles/{role_id} 更新角色
+- DELETE /roles/{role_id} 删除角色（硬删除；仍有关联用户 400）
+- GET /roles/{role_id}/permissions 角色已授权权限 ID 列表
+- PUT /roles/{role_id}/permissions 全量替换角色权限
 
-鉴权：TS 在 **Controller 类级**标 @Roles(RoleCode.ADMIN) → 本 router 全部接口
+鉴权：(RoleCode.ADMIN) → 本 router 全部接口
 @roles(RoleCode.ADMIN)（需登录 + ADMIN 角色，403 早于业务 400/404）。
 /permissions 两个端点额外叠 @RequirePermission('system:role') 细粒度权限守卫
-（dependencies=[Depends(require_permission(...))]），与 TS 双层守卫一致。
+（dependencies=[Depends(require_permission(...))]）。
 
 路由顺序：`/roles/list` 是字面量段，必须注册在 `/roles/{role_id}` 之前
 （否则会被动态路径吞掉）；`/{role_id}/permissions` 是带静态后缀的二级段，
 不与 `/{role_id}` 冲突，但注册在 `/{role_id}` 之后更符合阅读顺序，与
 document 路由的同款约定一致。
 
-状态码：NestJS @Post 默认 201，其余 200。
+状态码：，其余 200。
 """
 
 from typing import Annotated
@@ -48,7 +48,7 @@ _DB = Annotated[AsyncSession, Depends(get_db_session)]
 
 
 def _brief(role: Role) -> RoleBriefResponse:
-    """实体 → 简要响应（bigint 转字符串；list/create 不回 status，对齐 TS 内联对象）"""
+    """实体 → 简要响应"""
     return RoleBriefResponse(
         id=str(role.id),
         role_name=role.role_name,

@@ -5,7 +5,7 @@
     用 POST /search 关键字搜到一篇 PG 里**已改成「私有 + 前端开发组」**的文档。
     根因：需审模式（DOCUMENT_REQUIRE_APPROVAL=true）下 PATCH **同时**改正文与可见性时，
     DocumentService._sync_pipeline_after_update 的 content_changed 分支把可见性同步
-    整个 return 掉了 —— TS 的条件是
+
         `isPublished && contentChanged && !isRequireApproval()`
     需审时该分支本就不成立、应继续往下走；移植时把 `!isRequireApproval()`
     挪进了 if 体内，等于「需审也 return」。
@@ -54,8 +54,8 @@ TEST_DOC_ID = 990000000000000902
 CHUNK_ID = "smoke-visibility-sync-chunk-1"
 
 # 种子团队（只作字段值，不校验存在性；kh_document.team_id 无外键）
-TEAM_BACKEND = "8000000000000000002"   # 后端开发组（旧值）
-TEAM_FRONTEND = "750598282475999232"   # 前端开发组（新值）
+TEAM_BACKEND = "8000000000000000002" # 后端开发组（旧值）
+TEAM_FRONTEND = "750598282475999232" # 前端开发组（新值）
 
 # 操作者 = 文档作者本人（写权校验只放行 ADMIN 或作者）
 AUTHOR = AuthUser(user_id="1000000000000000003", username="smoke-vis-sync", roles=["ROLE_USER"])
@@ -88,13 +88,13 @@ async def cleanup() -> None:
         result = await session.execute(
             sa_delete(DocumentEntity).where(DocumentEntity.id == TEST_DOC_ID)
         )
-        await session.commit()  # 不 commit 会被回滚，留下残留行
-        deleted_pg = int(result.rowcount or 0)  # type: ignore[attr-defined]
+        await session.commit() # 不 commit 会被回滚，留下残留行
+        deleted_pg = int(result.rowcount or 0) # type: ignore[attr-defined]
     removed = await get_document_content_collection().delete_one(
         {"documentId": str(TEST_DOC_ID)}
     )
     print(
-        f"   清理：PG 删 {deleted_pg} 行，Mongo 删 {removed.deleted_count} 条，ES/Neo4j 记录已删"
+        f" 清理：PG 删 {deleted_pg} 行，Mongo 删 {removed.deleted_count} 条，ES/Neo4j 记录已删"
     )
 
 
@@ -197,9 +197,9 @@ async def main() -> None:
         "Neo4j 驱动不可用，请检查 docker/neo4j"
     )
 
-    await cleanup()  # 幂等清残留
+    await cleanup() # 幂等清残留
     await prepare()
-    print("   0) 前置 ✓ 已发布 + 公开 + 后端开发组，三处索引写入旧值快照")
+    print(" 0) 前置 ✓ 已发布 + 公开 + 后端开发组，三处索引写入旧值快照")
 
     # 1) 需审模式下 PATCH：正文 + 可见性同时改
     original_flag = settings.DOCUMENT_REQUIRE_APPROVAL
@@ -216,7 +216,7 @@ async def main() -> None:
             )
     finally:
         settings.DOCUMENT_REQUIRE_APPROVAL = original_flag
-    print("   1) PATCH ✓ 正文 + is_public=false + team_id=前端开发组（需审模式）")
+    print(" 1) PATCH ✓ 正文 + is_public=false + team_id=前端开发组（需审模式）")
 
     # 2) Mongo 版本递增 → 本次确实是 content_changed=True
     mdoc = await get_document_content_collection().find_one(
@@ -228,7 +228,7 @@ async def main() -> None:
         f"version 应为 1→2，实际 {mdoc['version']}；"
         "若不是，说明本次 PATCH 没带正文、场景前提不成立"
     )
-    print("   2) Mongo ✓ version 1 → 2（正文确实变了，场景成立）")
+    print(" 2) Mongo ✓ version 1 → 2（正文确实变了，场景成立）")
 
     # 3) PG 控制项
     async with async_session_factory() as session:
@@ -237,7 +237,7 @@ async def main() -> None:
         assert entity.is_public is False, entity.is_public
         assert str(entity.team_id) == TEAM_FRONTEND, entity.team_id
         assert int(entity.status) == int(DocumentStatus.PUBLISHED), entity.status
-    print("   3) PG ✓ is_public=false / team_id=前端开发组 / status 仍为已发布")
+    print(" 3) PG ✓ is_public=false / team_id=前端开发组 / status 仍为已发布")
 
     # 4) ES kh_document：可见性字段必须已刷成新值
     c = es_service.client
@@ -250,7 +250,7 @@ async def main() -> None:
     assert src["teamId"] == TEAM_FRONTEND, (
         f"ES kh_document.teamId 仍是 {src['teamId']}（旧团队），团队可见性判定失效"
     )
-    print("   4) ES kh_document ✓ isPublic=false / teamId=前端开发组")
+    print(" 4) ES kh_document ✓ isPublic=false / teamId=前端开发组")
 
     # 5) ES kh_chunk：同上（chunk 混合检索的关键词通道）
     csrc = (await c.get(index=CHUNK_INDEX, id=CHUNK_ID))["_source"]
@@ -260,7 +260,7 @@ async def main() -> None:
     assert csrc["team_id"] == TEAM_FRONTEND, (
         f"ES kh_chunk.team_id 仍是 {csrc['team_id']}"
     )
-    print("   5) ES kh_chunk ✓ is_public=false / team_id=前端开发组")
+    print(" 5) ES kh_chunk ✓ is_public=false / team_id=前端开发组")
 
     # 6) Neo4j 文档节点：图谱四端点按这三个属性过滤
     driver = graph_build_service._driver
@@ -277,7 +277,7 @@ async def main() -> None:
         f"Neo4j d.isPublic 仍是 {record['p']} —— /graph/* 仍会返回该文档及其实体"
     )
     assert record["t"] == TEAM_FRONTEND, f"Neo4j d.teamId 仍是 {record['t']}"
-    print("   6) Neo4j ✓ isPublic=false / teamId=前端开发组")
+    print(" 6) Neo4j ✓ isPublic=false / teamId=前端开发组")
 
     # 7) 需审语义：只就地刷可见性字段，不重建索引（正文保持旧值）
     assert src["content"] == OLD_CONTENT, (
@@ -285,7 +285,7 @@ async def main() -> None:
         f"实际前 20 字：{str(src.get('content'))[:20]}"
     )
     assert src["title"] == "可见性同步冒烟文档", src.get("title")
-    print("   7) 需审语义 ✓ 未重建索引（ES 正文仍为旧值），仅就地刷可见性字段")
+    print(" 7) 需审语义 ✓ 未重建索引（ES 正文仍为旧值），仅就地刷可见性字段")
 
     await cleanup()
     print("\n可见性同步冒烟测试全部通过 ✅")

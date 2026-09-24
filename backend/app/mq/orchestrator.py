@@ -1,5 +1,5 @@
 """
-知识管线编排器（对应 TS PipelineOrchestrator）
+知识管线编排器
 
 <p>由 DocumentPipelineConsumer 在消费到 MQ 消息后调用；本类负责
 「加载文档快照 → 调具体服务」，不直接碰 RabbitMQ。</p>
@@ -30,7 +30,7 @@ class PipelineOrchestrator:
     async def handle_rag_reindex(
         self, message_type: str, document_ids: list[str]
     ) -> None:
-        """处理 RAG 消息（对应 TS handleRagReindex）：按 type 分发
+        """处理 RAG 消息：按 type 分发
 
         - DELETE_BY_DOC_IDS → 清向量块
         - BY_DOC_IDS → 加载快照 → 逐篇（分块 → 嵌入 → 删旧 → 写新）
@@ -50,7 +50,7 @@ class PipelineOrchestrator:
             try:
                 async with async_session_factory() as session:
                     await reindex_document(session, doc)
-            except Exception as err:  # 单篇失败只记日志，不影响同批其余文档（对齐 TS）
+            except Exception as err: # 单篇失败只记日志，不影响同批其余文档
                 logger.error("RAG 索引失败：documentId=%s, %s", doc.id, err)
 
     async def handle_rag_delete(self, document_ids: list[str]) -> None:
@@ -64,7 +64,7 @@ class PipelineOrchestrator:
             try:
                 async with async_session_factory() as session:
                     await VectorIndexService().delete_by_doc_id(session, pk)
-            except Exception as err:  # 单篇失败只记日志，不影响同批其余文档
+            except Exception as err: # 单篇失败只记日志，不影响同批其余文档
                 logger.error("RAG 向量块清理失败：documentId=%s, %s", raw_id, err)
 
     # ----------------------------------------------------------------- Search
@@ -72,7 +72,7 @@ class PipelineOrchestrator:
     async def handle_search_index(
         self, message_type: str, document_id: str
     ) -> None:
-        """处理 Search 消息（对应 TS handleSearchIndex）：按 type 分发
+        """处理 Search 消息：按 type 分发
 
         - DELETE → 从 kh_document 移除（向量块由 RAG delete 腿清理）
         - INDEX → 按文档 ID 从 Postgres + Mongo 拉全文，写入 ES kh_document
@@ -107,7 +107,7 @@ class PipelineOrchestrator:
     async def handle_kg_build(
         self, message_type: str, document_ids: list[str]
     ) -> None:
-        """处理 KG 建图消息（对应 TS handleKgBuild）：按 type 分发
+        """处理 KG 建图消息：按 type 分发
 
         - BUILD_*：读正文 → 分块 → 抽实体关系 → 写 Neo4j
         - DELETE_*：删文档节点及其 chunk / 孤儿实体
@@ -132,7 +132,7 @@ class PipelineOrchestrator:
         await graph_build_service.build_batch(docs)
 
     async def _load_all_published_documents(self) -> list[PipelineDocument]:
-        """加载全部已发布文档快照（对应 TS loadAllPublishedDocuments）"""
+        """加载全部已发布文档快照"""
         async with async_session_factory() as session:
             return await load_all_published_documents(session)
 

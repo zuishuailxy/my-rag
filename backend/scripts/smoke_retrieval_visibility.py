@@ -3,10 +3,10 @@
 覆盖范围：公开 ∪ 本人 ∪ 所在团队 三条可见路径，以及 ADMIN/REVIEWER 不受限。
 
 数据准备：创建 4 篇已发布文档（同一关键词，便于一次查询全部命中）：
-  PUB          is_public=true,  author=admin
-  OWN          is_public=false, author=user(种子 003)   → 仅本人可见
-  TEAM_MEMBER  is_public=false, author=admin, team=user 所在团队
-  TEAM_OTHER   is_public=false, author=admin, team=user 不在的团队
+  PUB is_public=true, author=admin
+  OWN is_public=false, author=user(种子 003) → 仅本人可见
+  TEAM_MEMBER is_public=false, author=admin, team=user 所在团队
+  TEAM_OTHER is_public=false, author=admin, team=user 不在的团队
 
 断言两条检索链路，各自覆盖上述可见性矩阵：
   1) chunk 级 POST /api/v1/rag/search（ES kh_chunk 关键词 + PG doc_chunk 向量 → RRF → rerank）
@@ -31,26 +31,26 @@ import time
 
 sys.path.insert(0, ".")
 
-import httpx  # noqa: E402
-from sqlalchemy import delete, text  # noqa: E402
+import httpx # noqa: E402
+from sqlalchemy import delete, text # noqa: E402
 
-from app.core.config import settings  # noqa: E402
-from app.db.es import es_service  # noqa: E402
-from app.db.mongo import get_document_content_collection  # noqa: E402
-from app.db.session import async_session_factory, engine  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models.document import DocumentEntity  # noqa: E402
-from app.pipeline.types import to_search_index_doc  # noqa: E402
-from app.schemas.auth import AuthUser  # noqa: E402
-from app.services.es_index import CHUNK_INDEX  # noqa: E402
-from app.services.indexing import load_pipeline_document  # noqa: E402
-from app.services.retrieval import HybridRetrievalService  # noqa: E402
-from app.services.search import _keyword_recall  # noqa: E402
-from app.services.search_index import DOCUMENT_INDEX, search_index_service  # noqa: E402
-from app.services.team import team_service  # noqa: E402
+from app.core.config import settings # noqa: E402
+from app.db.es import es_service # noqa: E402
+from app.db.mongo import get_document_content_collection # noqa: E402
+from app.db.session import async_session_factory, engine # noqa: E402
+from app.main import app # noqa: E402
+from app.models.document import DocumentEntity # noqa: E402
+from app.pipeline.types import to_search_index_doc # noqa: E402
+from app.schemas.auth import AuthUser # noqa: E402
+from app.services.es_index import CHUNK_INDEX # noqa: E402
+from app.services.indexing import load_pipeline_document # noqa: E402
+from app.services.retrieval import HybridRetrievalService # noqa: E402
+from app.services.search import _keyword_recall # noqa: E402
+from app.services.search_index import DOCUMENT_INDEX, search_index_service # noqa: E402
+from app.services.team import team_service # noqa: E402
 
 sys.path.insert(0, "scripts")
-from smoke_auth import (  # noqa: E402
+from smoke_auth import ( # noqa: E402
     SEED_ADMIN_ID,
     SEED_ADMIN_USERNAME,
     SEED_REVIEWER_ID,
@@ -84,7 +84,7 @@ def check(step: str, ok: bool, detail: str) -> None:
 
 
 def skip(step: str, detail: str) -> None:
-    _skipped.append(f"⚠️  {step}: {detail}")
+    _skipped.append(f"⚠️ {step}: {detail}")
 
 
 async def _create_doc(
@@ -93,7 +93,7 @@ async def _create_doc(
 ) -> str:
     """创建并索引一篇已发布文档，返回文档 ID
 
-    headers 决定作者是谁：document.create 恒以登录者为作者（对齐 TS，防伪造 authorId），
+    headers 决定作者是谁：document.create 恒以登录者为作者，
     故「本人私有」用例必须用该用户自己的 token 创建，不能由 admin 代建。
     """
     hdrs = headers or bearer_headers()
@@ -124,7 +124,7 @@ async def _cleanup_docs(doc_ids: list[str]) -> None:
                     query={"term": {"document_id": doc_id}},
                     refresh=True,
                 )
-            except Exception:  # noqa: BLE001 —— 索引不存在视为已清空
+            except Exception: # noqa: BLE001 —— 索引不存在视为已清空
                 pass
         try:
             # 文档级索引 _id 即文档 ID（index_document 以 doc_id 作 _id）
@@ -133,7 +133,7 @@ async def _cleanup_docs(doc_ids: list[str]) -> None:
                 query={"ids": {"values": list(doc_ids)}},
                 refresh=True,
             )
-        except Exception:  # noqa: BLE001
+        except Exception: # noqa: BLE001
             pass
     async with engine.begin() as conn:
         await conn.execute(
@@ -221,7 +221,7 @@ async def _hit_document_ids(client: httpx.AsyncClient, headers: dict) -> set[str
 
 async def main() -> None:
     print("=== 文档检索可见性 E2E 冒烟 ===")
-    engine.echo = False  # 压掉 SQLAlchemy echo
+    engine.echo = False # 压掉 SQLAlchemy echo
 
     await es_service.start()
     assert es_service.client is not None, "ES 客户端不可用，请检查 docker/elasticsearch"
@@ -236,7 +236,7 @@ async def main() -> None:
     others = [t for t in all_team_ids if t not in my_team_ids]
     assert others, "库里只有一个团队，无法构造「非成员团队」用例"
     other_team = others[0]
-    print(f"   user(003) 团队={my_team_ids}，测试用成员团队={member_team}，非成员团队={other_team}")
+    print(f" user(003) 团队={my_team_ids}，测试用成员团队={member_team}，非成员团队={other_team}")
 
     doc_ids: list[str] = []
     try:
@@ -262,7 +262,7 @@ async def main() -> None:
                 client, f"可见性冒烟TEAMOUT{tag}", False, other_team
             )
             doc_ids = [pub, own, team_in, team_out]
-            print(f"   准备：4 篇文档已发布并索引 pub={pub} own={own} in={team_in} out={team_out}")
+            print(f" 准备：4 篇文档已发布并索引 pub={pub} own={own} in={team_in} out={team_out}")
 
             # 1.5) 文档级索引（ES kh_document）：按生产同一路径写入，供 /search 可见性验证
             written = await _index_documents_es(doc_ids)
@@ -370,7 +370,7 @@ async def main() -> None:
                 )
 
             # 5) 可见性就地变更（安全回归）：公开 → 私有且正文不变
-            #    若不同步 chunk 可见性，ES 关键词侧会按旧值继续召回 → 越权可见
+            # 若不同步 chunk 可见性，ES 关键词侧会按旧值继续召回 → 越权可见
             r = await client.patch(
                 f"{BASE}/documents/{pub}", json={"isPublic": False}, headers=admin_headers
             )
@@ -482,7 +482,7 @@ async def main() -> None:
             and res["es_doc"] in (0, "ES 不可用"),
             f"残留 {res}",
         )
-        print(f"   清理：4 篇文档已移除，残留检查 {res}")
+        print(f" 清理：4 篇文档已移除，残留检查 {res}")
 
     print()
     for line in _results:

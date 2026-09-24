@@ -1,5 +1,5 @@
 """
-RustFS 文件存储服务（S3 兼容，对应 NestJS RustfsService / StorageModule）
+RustFS 文件存储服务
 
 - 客户端：boto3（同步 SDK），阻塞调用通过 asyncio.to_thread 放入线程池，不阻塞事件循环
 - 上传返回 URL：{public_base}/{bucket}/{key}
@@ -156,7 +156,7 @@ def guess_ext(content_type: str) -> str:
     }.get(content_type, "")
 
 
-# 全局单例（对应 NestJS @Injectable + 模块 provider）
+# 全局单例
 rustfs_service = RustfsService()
 
 
