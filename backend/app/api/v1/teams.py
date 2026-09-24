@@ -20,7 +20,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth_route import auth_router, roles

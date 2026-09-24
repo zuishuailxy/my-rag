@@ -3,7 +3,7 @@
 字段名保持 camelCase，与 ES kh_document 文档（SearchIndexService 写入）一致。
 """
 
-from typing import Any, List
+from typing import List
 
 from pydantic import BaseModel, Field
 

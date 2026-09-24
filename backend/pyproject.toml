@@ -45,10 +45,26 @@ package = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 让 `pytest`（控制台脚本）也能 import app.*：否则只有 `python -m pytest` 会把 cwd 入 sys.path
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# 明确的规则集（ruff 默认集会随版本变化，CI 需要可复现的判定）
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    "E501",  # 行长度：大量中文注释 / 长字符串
+    "E712",  # SQLAlchemy 的 col == True/False 是 SQL 表达式，非布尔比较
+    "E402",  # scripts/* 里 sys.path.insert 之后的 import
+]
+
+[tool.ruff.lint.per-file-ignores]
+# __init__.py 里 import 模型是为让 ORM 注册到 Base.metadata，属副作用导入
+"app/models/__init__.py" = ["F401"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -67,4 +83,7 @@ follow_imports = "skip"
 dev = [
     "httpx>=0.28.1",
     "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.8",
 ]

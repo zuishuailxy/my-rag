@@ -16,7 +16,7 @@ import json
 import aio_pika
 from aio_pika import ExchangeType
 
-from app.mq.constants import RAG_REINDEX_EXCHANGE, RAG_REINDEX_QUEUE
+from app.mq.constants import RAG_REINDEX_EXCHANGE
 from app.mq.rabbitmq import RabbitMqService, rabbitmq_service
 
 TEST_EXCHANGE = "kh.test.exchange"

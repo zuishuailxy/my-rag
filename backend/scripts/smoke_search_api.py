@@ -17,7 +17,6 @@ smoke_search_hybrid.py 同款方案。
 前置：docker 的 postgres / elasticsearch 已就绪（连接读 backend/.env）。
 """
 import asyncio
-import re
 import sys
 import time
 

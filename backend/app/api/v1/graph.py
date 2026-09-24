@@ -16,7 +16,7 @@ DocumentAccessScope，交由 services/graph_build.py 在各条 Cypher 里按
 """
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import Depends, Query
 
 from app.api.auth_route import auth_router
 from app.api.deps import get_current_user

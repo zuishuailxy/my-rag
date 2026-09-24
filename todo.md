@@ -6,15 +6,15 @@
 ## P0 · 最该做（面试硬指标 / AI 岗深度）
 
 - [x] **README** —— 从空文件补成完整仓库门面（定位 / 架构图 / 快速启动 / 核心设计 / API / 边界）。
-- [ ] **单元测试（pytest）** —— 当前只有 43 个真实依赖 E2E 冒烟，缺纯逻辑单测。建议覆盖：
-  - [ ] RRF 融合（`search.py`）
-  - [ ] 分块器 `chunker`（边界 / overlap）
-  - [ ] `to_eval` / `grade_hits` / `_to_plan`（纯函数）
-  - [ ] `merge_graph_hits` / `_evidence_snippet` / `normalize_entity_name`
-  - [ ] `_pack_retrieve_result`（全局编号 / 事件）
-  - [ ] citation 解析 `[n]`、权限矩阵 `roles/permissions`
-  - [ ] 入参校验（超长 → 400 而非 500）
-- [ ] **CI（GitHub Actions）** —— `ruff + mypy + pytest` + 关键冒烟；PR/推送自动跑。
+- [x] **单元测试（pytest）** —— `backend/tests/`，26 个纯逻辑用例（mock 外部依赖，不连 PG/ES/Neo4j）：
+  - [x] RRF 融合（`search.hybrid_search`，mock 两路召回 + PG）
+  - [x] 分块器 `chunker`（块序号 / 稳定 ID / heading 继承）
+  - [x] `to_eval`（retry 前缀映射）、`_to_plan`（意图→工具开关）、`summarize_hits`（截断回归）
+  - [x] `normalize_entity_name` / `split_graph_keywords` / `merge_graph_hits` / `_evidence_snippet`
+  - [x] `_pack_retrieve_result`（全局编号 / 事件）、citation 解析 `[n]`
+  - [x] 可见性：`empty_scope` / `neo4j_access_params` / `neo4j_document_access_where`
+  - [ ] `grade_hits`（需 mock TypeSafe/LLM）、RBAC 权限矩阵、入参校验（超长 → 400）
+- [x] **CI（GitHub Actions）** —— `.github/workflows/ci.yml`：后端 `ruff + mypy(0 issue) + pytest`，前端 `tsc -b + build`；PR / push 自动跑。
 - [ ] **RAG 评测集** —— 量化检索/问答质量（AI 岗最能体现深度）：
   - [ ] 构造 30~50 条 `(问题, 期望文档/答案)`
   - [ ] 检索指标 `recall@k` / `MRR`

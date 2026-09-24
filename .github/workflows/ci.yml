@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端（ruff + mypy + pytest）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      RABBITMQ_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖（含 dev：pytest / ruff / mypy）
+        run: uv sync --frozen
+
+      - name: Ruff（静态检查）
+        run: uv run ruff check app scripts tests
+
+      - name: Mypy（类型检查）
+        run: uv run mypy app
+
+      - name: Pytest（单元测试，纯逻辑、不依赖外部服务）
+        run: uv run pytest -q
+
+  frontend:
+    name: 前端（tsc + build）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm exec tsc -b
+
+      - name: 生产构建
+        run: pnpm run build

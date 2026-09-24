@@ -19,7 +19,6 @@ API 创建的用户由 cleanup 按 username 清单硬删（先子表后主表）
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import AsyncIterator
 
 import httpx
 from sqlalchemy import text
@@ -28,7 +27,6 @@ from app.common.snowflake import next_snowflake_id
 from app.db.session import async_session_factory, engine
 from app.main import app
 from app.models.user import User
-from app.schemas.auth import BCRYPT_MAX_PASSWORD_BYTES
 from app.services.user import _hash_password
 from scripts.smoke_auth import SEED_USER_ID, SEED_USER_USERNAME, bearer_headers
 

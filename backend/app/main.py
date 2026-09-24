@@ -3,7 +3,6 @@ FastAPI 应用入口
 """
 
 import asyncio
-from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 

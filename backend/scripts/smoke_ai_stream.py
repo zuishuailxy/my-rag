@@ -90,7 +90,7 @@ async def main() -> None:
         )
         types = _types_of(events)
         check("start 首帧", bool(types) and types[0] == "start", f"首帧={types[0] if types else '无'}")
-        check("finish 收口", types[-1] == "finish", f"末帧={types[-1]}, DONE={'data: [DONE]' in [l.strip() for l in lines]}")
+        check("finish 收口", types[-1] == "finish", f"末帧={types[-1]}, DONE={'data: [DONE]' in [ln.strip() for ln in lines]}")
 
         def _idx(t: str) -> int:
             return types.index(t) if t in types else -1

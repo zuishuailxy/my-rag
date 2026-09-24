@@ -22,12 +22,6 @@ from app.models.team_member import (
     MEMBER_ROLE_LEADER,
     MEMBER_ROLE_MEMBER,
 )
-from app.models.team import Team, TEAM_STATUS_DISABLED, TEAM_STATUS_ENABLED
-from app.models.team_member import (
-    TeamMember,
-    MEMBER_ROLE_LEADER,
-    MEMBER_ROLE_MEMBER,
-)
 from app.models.user import User
 from app.models.user_permission import UserPermission
 from app.models.user_role import UserRole
