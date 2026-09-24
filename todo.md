@@ -13,7 +13,9 @@
   - [x] `normalize_entity_name` / `split_graph_keywords` / `merge_graph_hits` / `_evidence_snippet`
   - [x] `_pack_retrieve_result`（全局编号 / 事件）、citation 解析 `[n]`
   - [x] 可见性：`empty_scope` / `neo4j_access_params` / `neo4j_document_access_where`
-  - [ ] `grade_hits`（需 mock TypeSafe/LLM）、RBAC 权限矩阵、入参校验（超长 → 400）
+  - [x] `grade_hits`（注入假判定器：空召回跳过 / 切题 / 不切题 / 失败放行）
+  - [x] RBAC 权限矩阵（mock PG 会话：ADMIN 追加操作权限 / 直接+角色合并去重 / 非法 uid）
+  - [x] 入参校验（超长字段被拦 → HTTP 422，不落库变 500）
 - [x] **CI（GitHub Actions）** —— `.github/workflows/ci.yml`：后端 `ruff + mypy(0 issue) + pytest`，前端 `tsc -b + build`；PR / push 自动跑。
 - [ ] **RAG 评测集** —— 量化检索/问答质量（AI 岗最能体现深度）：
   - [ ] 构造 30~50 条 `(问题, 期望文档/答案)`
