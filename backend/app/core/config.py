@@ -216,9 +216,12 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
     # 模型：deepseek-v4-flash（DeepSeek-V4-Flash）
     LLM_MODEL: str = "deepseek-v4-flash"
-    # 单 chunk 最多实体 / 关系数，防止图爆炸
-    KG_MAX_ENTITIES: int = 12
-    KG_MAX_RELATIONS: int = 15
+    # 单 chunk 最多实体 / 关系数，防止图爆炸。
+    # ⚠️ 实测 12/15 对中文密集文档偏小：01-travel-expense-policy 两块都**正好抽满 12**，
+    # 「私车公用申请表」这类实体被挤掉 → 后续图谱对话检索按实体名匹配就查不到。
+    # 放宽到 20/20（仍有限，防止图无限膨胀）。改完需重跑建图脚本才生效（旧图是旧上限抽的）。
+    KG_MAX_ENTITIES: int = 20
+    KG_MAX_RELATIONS: int = 20
     # 单次抽取 LLM 超时（毫秒）
     KG_LLM_TIMEOUT_MS: int = 60000
 

@@ -22,8 +22,9 @@ Neo4j 不可用时跳过写入（不抛错阻断发布消费）；
 """
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypedDict
 
 from neo4j import (
     AsyncDriver,
@@ -64,6 +65,35 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _evidence_snippet(
+    content: str | None, *names: str, window: int = 180
+) -> str | None:
+    """从关系所在 chunk 里取「实体附近」的片段作为出处（找不到实体则取开头）。
+
+    关系的出处就是抽取它的 chunk（写入时记在 r.chunkId）；这里只截实体附近的窗口，
+    避免把整块塞进模型上下文。
+    """
+    if not content:
+        return None
+    text = re.sub(r"\s+", " ", content).strip()
+    idx = -1
+    for name in names:
+        if not name:
+            continue
+        pos = text.find(name)
+        if pos >= 0 and (idx < 0 or pos < idx):
+            idx = pos
+    if idx < 0:
+        return text[:window] + ("…" if len(text) > window else "")
+    start = max(0, idx - window // 2)
+    end = min(len(text), start + window)
+    return (
+        ("…" if start > 0 else "")
+        + text[start:end]
+        + ("…" if end < len(text) else "")
+    )
+
+
 def _opt_str(value: Any) -> str | None:
     """bigint / int / str / None → 字符串 / None
 
@@ -77,6 +107,152 @@ def _opt_str(value: Any) -> str | None:
     if isinstance(value, str):
         return value or None
     return str(value)
+
+
+# ---- 对话 RAG 用的图谱命中（对应 TS GraphChatHit 及同文件工具函数）----
+
+
+class GraphChatEntity(TypedDict):
+    name: str
+    type: str | None
+    description: str | None
+
+
+class GraphChatRelation(TypedDict):
+    source: str
+    relation: str
+    target: str
+    # 关系出处：抽取该关系的 chunk 里、两个实体附近的片段
+    #（None = 旧边无 chunkId，需重建图谱才有）
+    evidence: str | None
+
+
+class GraphChatDocument(TypedDict):
+    documentId: str
+    title: str
+
+
+class GraphChatHit(TypedDict):
+    """对话 RAG 用的图谱命中：实体 + 关系类型 + 来源文档（对应 TS GraphChatHit）"""
+
+    query: str
+    entities: list[GraphChatEntity]
+    relations: list[GraphChatRelation]
+    documents: list[GraphChatDocument]
+
+
+# 书名号：抽取常把同一实体写成《X》和 X 两种形式，匹配/MERGE 前统一去掉
+_BOOK_TITLE_TRANS = str.maketrans("", "", "《》")
+
+
+def normalize_entity_name(name: str) -> str:
+    """实体名归一：去掉书名号《》及首尾空白（《发票管理办法》→ 发票管理办法）。
+
+    抽取对同一实体可能产出带/不带书名号两种写法，而 KnowledgeEntity 按 name 建唯一
+    约束，不归一会并存两个节点（实测《发票管理办法》与发票管理办法）。归一把它们并到
+    一个节点，原始写法进 aliases 保留可检索。
+    """
+    return (name or "").translate(_BOOK_TITLE_TRANS).strip()
+
+
+def split_graph_keywords(keyword: str | list[str]) -> list[str]:
+    """把关键词拆成短名（对应 TS splitGraphKeywords）。
+
+    模型常把「发票 报销」写成一项；图匹配要拆成短名，否则对不上节点。
+    按空白 / `/` 拆分，去空、去重（大小写不敏感）；并去书名号（与实体名归一乎）。
+    """
+    seen: set[str] = set()
+    kws: list[str] = []
+    parts = keyword if isinstance(keyword, list) else [keyword]
+    for part in parts:
+        for raw in re.split(r"[\s/]+", str(part)):
+            kw = normalize_entity_name(raw)
+            if not kw:
+                continue
+            key = kw.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            kws.append(kw)
+    return kws
+
+
+def format_graph_context(hit: GraphChatHit) -> str:
+    """给模型看的图谱上下文：只写关系与来源，不当制度原文（对应 TS formatGraphContext）"""
+    if not hit["entities"] and not hit["relations"]:
+        return ""
+    lines: list[str] = []
+    if hit["relations"]:
+        lines.append("关系：")
+        for rel in hit["relations"]:
+            line = f"- {rel['source']} → {rel['target']}（{rel['relation']}）"
+            evidence = rel.get("evidence")
+            if evidence:
+                line += f"\n  出处：{evidence}"
+            lines.append(line)
+    else:
+        lines.append("实体：" + "、".join(entity["name"] for entity in hit["entities"]))
+    if hit["documents"]:
+        titles = [doc["title"] for doc in hit["documents"] if doc["title"]]
+        if titles:
+            lines.append("来源文档：" + "；".join(titles))
+    return "\n".join(lines)
+
+
+def format_graph_system_text(hit: GraphChatHit) -> str:
+    """带免责声明的图谱上下文（对应 TS formatGraphSystemText）"""
+    body = format_graph_context(hit)
+    if not body:
+        return ""
+    return (
+        f"【本轮知识图谱】\n{body}\n\n"
+        "以上只说明实体之间的关系，不能当制度原文；制度/流程以知识库检索资料为准。"
+    )
+
+
+def merge_graph_hits(base: GraphChatHit, extra: GraphChatHit) -> GraphChatHit:
+    """合并两次图谱命中，按实体名 / 关系三元组 / 文档 id 去重（对应 TS mergeGraphHits）"""
+    names = {entity["name"] for entity in base["entities"]}
+    entities = list(base["entities"])
+    for entity in extra["entities"]:
+        if entity["name"] in names:
+            continue
+        names.add(entity["name"])
+        entities.append(entity)
+
+    rel_keys = {
+        f"{rel['source']}\t{rel['relation']}\t{rel['target']}"
+        for rel in base["relations"]
+    }
+    relations = list(base["relations"])
+    for rel in extra["relations"]:
+        key = f"{rel['source']}\t{rel['relation']}\t{rel['target']}"
+        if key in rel_keys:
+            continue
+        rel_keys.add(key)
+        relations.append(rel)
+
+    doc_ids = {doc["documentId"] for doc in base["documents"]}
+    documents = list(base["documents"])
+    for doc in extra["documents"]:
+        if doc["documentId"] in doc_ids:
+            continue
+        doc_ids.add(doc["documentId"])
+        documents.append(doc)
+
+    queries = list(
+        dict.fromkeys(
+            q.strip()
+            for q in (f"{base['query']}/{extra['query']}").split("/")
+            if q.strip()
+        )
+    )
+    return {
+        "query": " / ".join(queries),
+        "entities": entities,
+        "relations": relations,
+        "documents": documents,
+    }
 
 
 class GraphBuildService:
@@ -371,6 +547,13 @@ class GraphBuildService:
         count = 0
 
         for entity in result.entities:
+            # 归一实体名（去书名号）：把《X》与 X 并到一个节点
+            name = normalize_entity_name(entity.name)
+            if not name:
+                continue
+            aliases = list(entity.aliases)
+            if entity.name != name and entity.name not in aliases:
+                aliases.append(entity.name)  # 原始写法（带《）进别名
             await self._run_write(session,
                 """
                 MERGE (e:KnowledgeEntity {name: $name})
@@ -378,12 +561,14 @@ class GraphBuildService:
                               e.aliases = $aliases, e.createdAt = $now, e.updatedAt = $now
                 ON MATCH SET e.type = coalesce($type, e.type),
                              e.description = CASE WHEN $description <> '' THEN $description ELSE e.description END,
+                             e.aliases = coalesce(e.aliases, [])
+                               + [a IN $aliases WHERE NOT a IN coalesce(e.aliases, [])],
                              e.updatedAt = $now
                 """,
-                name=entity.name,
+                name=name,
                 type=entity.type,
                 description=entity.description or "",
-                aliases=entity.aliases,
+                aliases=aliases,
                 now=now,
             )
             count += 1
@@ -396,22 +581,30 @@ class GraphBuildService:
                     MERGE (c)-[:MENTIONS]->(e)
                     """,
                     chunkId=result.chunk_id,
-                    name=entity.name,
+                    name=name,
                 )
 
         for rel in result.relations:
+            source = normalize_entity_name(rel.source)
+            target = normalize_entity_name(rel.target)
+            if not source or not target:
+                continue
             await self._run_write(session,
                 """
                 MATCH (a:KnowledgeEntity {name: $source})
                 MATCH (b:KnowledgeEntity {name: $target})
                 MERGE (a)-[r:RELATED_TO]->(b)
-                ON CREATE SET r.relation = $relType, r.weight = $weight, r.createdAt = datetime()
-                ON MATCH SET r.weight = coalesce($weight, r.weight)
+                ON CREATE SET r.relation = $relType, r.weight = $weight,
+                              r.chunkId = $chunkId, r.createdAt = datetime()
+                ON MATCH SET r.weight = coalesce($weight, r.weight),
+                             r.chunkId = coalesce(r.chunkId, $chunkId)
                 """,
-                source=rel.source,
-                target=rel.target,
+                source=source,
+                target=target,
                 relType=rel.relation,
                 weight=rel.weight,
+                # 关系出处：记下抽取它的 chunk，供对话检索回取片段
+                chunkId=result.chunk_id,
             )
 
         return count
@@ -603,6 +796,186 @@ class GraphBuildService:
             }
             for row in records
         ]
+
+    async def retrieve_for_chat(
+        self,
+        keyword: str | list[str],
+        limit: int = 8,
+        scope: DocumentAccessScope | None = None,
+    ) -> GraphChatHit:
+        """对话 RAG 图谱检索（对应 TS retrieveForChat）。
+
+        按短实体名找可见实体（相等 / 前缀 / 后缀 + 别名，**不用 CONTAINS**，避免「发票」
+        命中整篇制度标题），再查这些实体之间的关系与来源文档。关系、文档用同一 session
+        顺序查，避免并发共用 session 丢边。Neo4j 不可用 / 无关键词时返回空命中。
+        """
+        kws = split_graph_keywords(keyword)
+        empty: GraphChatHit = {
+            "query": " / ".join(kws),
+            "entities": [],
+            "relations": [],
+            "documents": [],
+        }
+        if self._driver is None:
+            logger.warning("跳过图谱对话检索（Neo4j 不可用）")
+            return empty
+        if not kws:
+            return empty
+
+        cap = min(max(limit, 1), 20)
+        vis = neo4j_access_params(scope)
+        logger.info(
+            "图谱对话检索开始：kws=%s limit=%d unrestricted=%s",
+            " / ".join(kws),
+            cap,
+            vis.get("unrestricted"),
+        )
+        async with self._driver.session() as session:
+            try:
+                # 先找实体：短词对 name/aliases 做相等、前缀、后缀；
+                # 命中实体必须出现在当前用户可见文档的分块里
+                ent_result = await session.run(
+                    f"""
+                    MATCH (e:KnowledgeEntity)
+                    // 书名号归一：e.name / aliases 都去《》再比，能匹配旧节点（带《）与新节点
+                    WITH e,
+                         toLower(replace(replace(e.name, '《', ''), '》', '')) AS ename
+                    WHERE any(kw IN $kws WHERE
+                      ename = toLower(kw)
+                      OR ename STARTS WITH toLower(kw)
+                      OR ename ENDS WITH toLower(kw)
+                      OR any(a IN coalesce(e.aliases, []) WHERE
+                        toLower(replace(replace(toString(a), '《', ''), '》', '')) = toLower(kw)
+                        OR toLower(replace(replace(toString(a), '《', ''), '》', ''))
+                           STARTS WITH toLower(kw)
+                        OR toLower(replace(replace(toString(a), '《', ''), '》', ''))
+                           ENDS WITH toLower(kw)
+                      )
+                    )
+                    AND (
+                      $unrestricted OR EXISTS {{
+                        MATCH (d:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                              -[:MENTIONS]->(e)
+                        WHERE {neo4j_document_access_where('d')}
+                      }}
+                    )
+                    RETURN e.name AS name, e.type AS type,
+                           e.description AS description
+                    ORDER BY
+                      CASE
+                        WHEN any(kw IN $kws WHERE ename = toLower(kw)) THEN 0
+                        WHEN any(kw IN $kws WHERE ename STARTS WITH toLower(kw)
+                          OR ename ENDS WITH toLower(kw)) THEN 1
+                        ELSE 2
+                      END,
+                      size(e.name)
+                    LIMIT $limit
+                    """,
+                    kws=kws,
+                    limit=cap,
+                    **vis,
+                )
+                ent_records = await ent_result.data()
+                # ⚠️ Neo4j record 的值类型是 Any：name 理论非空（WHERE 就用它匹配），
+                # 但仍按「取不到就跳过」处理 —— TypedDict 要求 str，而 str(None)
+                # 会写出字面量 "None" 污染下游的展示与实体匹配。
+                entities: list[GraphChatEntity] = []
+                for row in ent_records:
+                    name = row.get("name")
+                    if not name:
+                        continue
+                    entities.append(
+                        {
+                            "name": str(name),
+                            "type": _opt_str(row.get("type")),
+                            "description": _opt_str(row.get("description")),
+                        }
+                    )
+
+                names = [entity["name"] for entity in entities]
+                if not names:
+                    logger.info("图谱对话检索无实体：kws=%s", " / ".join(kws))
+                    return empty
+
+                # 只取本轮命中实体之间的边，不要扩到图上其它节点。
+                # 关系出处：抽取该关系的 chunk（写入时记在 r.chunkId）→ 取实体附近片段。
+                rel_result = await session.run(
+                    """
+                    MATCH (a:KnowledgeEntity)-[r:RELATED_TO]->(b:KnowledgeEntity)
+                    WHERE a.name IN $names AND b.name IN $names
+                    OPTIONAL MATCH (c:DocumentChunk {chunkId: r.chunkId})
+                    RETURN a.name AS source,
+                           coalesce(nullif(r.relation, 'RELATED_TO'), '关联') AS relation,
+                           b.name AS target,
+                           c.content AS evidence
+                    """,
+                    names=names,
+                )
+                seen: set[str] = set()
+                relations: list[GraphChatRelation] = []
+                for row in await rel_result.data():
+                    # 关系两端必须存在（MATCH 已保证，这里同时做类型收窄与兜底）
+                    source = row.get("source")
+                    target = row.get("target")
+                    if not source or not target:
+                        continue
+                    relation = str(row.get("relation") or "关联")
+                    source, target = str(source), str(target)
+                    key = f"{source}\t{relation}\t{target}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    relations.append(
+                        {
+                            "source": source,
+                            "relation": relation,
+                            "target": target,
+                            "evidence": _evidence_snippet(
+                                row.get("evidence"), source, target
+                            ),
+                        }
+                    )
+
+                # 这些实体来自哪些当前用户可见的文档（给前端/模型当来源）
+                doc_result = await session.run(
+                    f"""
+                    MATCH (d:KnowledgeDocument)-[:HAS_CHUNK]->(:DocumentChunk)
+                          -[:MENTIONS]->(e:KnowledgeEntity)
+                    WHERE e.name IN $names
+                      AND ($unrestricted OR {neo4j_document_access_where('d')})
+                    RETURN DISTINCT d.id AS documentId, d.title AS title
+                    LIMIT 8
+                    """,
+                    names=names,
+                    **vis,
+                )
+                documents: list[GraphChatDocument] = []
+                for row in await doc_result.data():
+                    doc_id = row.get("documentId")
+                    if not doc_id:
+                        continue
+                    documents.append(
+                        {
+                            "documentId": str(doc_id),
+                            "title": str(row.get("title") or ""),
+                        }
+                    )
+                logger.info(
+                    "图谱对话检索完成：kws=%s entities=%d rels=%d docs=%d",
+                    " / ".join(kws),
+                    len(entities),
+                    len(relations),
+                    len(documents),
+                )
+                return {
+                    "query": " / ".join(kws),
+                    "entities": entities,
+                    "relations": relations,
+                    "documents": documents,
+                }
+            except Exception as err:
+                logger.warning("图谱对话检索失败：%s", err)
+                return empty
 
     async def get_overview(
         self,

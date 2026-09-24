@@ -100,7 +100,8 @@ def build_extraction_system_prompt(max_entities: int, max_relations: int) -> str
 1. 只抽取文中明确提到的、有实际意义的实体，不要臆测
 2. 不要抽取过于泛化的词（如「系统」「功能」「数据」「问题」）
 3. 实体名使用文中原文；别名放入 aliases
-4. 关系必须有文中依据（同句或相邻句），且 source/target 必须是已抽取实体的 name
+4. 关系必须有文中依据：**优先抽同一句内共现的实体对**，其次相邻句；不要跨段硬凑。
+   source/target 必须是已抽取实体的 name
 5. 每个片段最多 {max_entities} 个实体、{max_relations} 个关系
 6. 无法归类时用实体类型 CONCEPT、关系类型 RELATED_TO
 
