@@ -54,6 +54,7 @@ from langgraph.config import get_stream_writer
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.document_access import access_from_user, empty_scope
 from app.core.config import settings
 from app.pipeline.types import ChunkHit
 from app.schemas.ai import ChatStreamRequest, CreateSessionRequest
@@ -61,10 +62,15 @@ from app.schemas.auth import AuthUser
 from app.services.agentic_retrieve import GradedRetrieve, retrieve_and_grade
 from app.services.chat_long_memory import chat_long_memory_service
 from app.services.chat_memory import db_rows_to_messages
-from app.services.chat_query_rewrite import KH_INTERNAL_TAG, chat_query_rewrite_service
+from app.services.chat_query_rewrite import (
+    KH_INTERNAL_TAG,
+    ChatRoutePlan,
+    chat_query_rewrite_service,
+)
 from app.services.chat_session import chat_session_service, title_from_question
 from app.services.chat_short_memory import chat_short_memory_service
 from app.services.chat_summary import chat_session_summary_service
+from app.services.graph_build import format_graph_context, graph_build_service
 from app.services.retrieval import hybrid_retrieval_service
 from app.services.web_search import web_search_service
 
@@ -236,6 +242,15 @@ class _RewriteQueryInput(BaseModel):
     focus: str | None = Field(default=None, description="希望改写时强调的缺口，可空")
 
 
+class _GraphSearchInput(BaseModel):
+    """retrieve_graph 工具参数"""
+
+    query: str = Field(
+        min_length=1,
+        description="短实体名，多个用空格或 / 分隔（如「发票 / 报销」），不要整句",
+    )
+
+
 @tool("web_search", description=(
     "联网搜索（Tavily）。知识库循环结束后仍不足、或本轮只需公开时效信息时再调用。"
     "不要用网页替代已切题的知识库资料。"
@@ -279,18 +294,38 @@ def _build_agent_llm() -> ChatDeepSeek | None:
         timeout=timeout_s,
         max_retries=0,
         stream_usage=False,
-        extra_body={"thinking": {"type": "enabled" if thinking_enabled else "disabled"}},
+        extra_body={
+            "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
+            # 知识库 + 图谱需要同一步并行调用，显式打开并行 tool call（对齐 TS modelKwargs）
+            "parallel_tool_calls": True,
+        },
     )
 
 
-def system_for_plan(plan: dict[str, Any]) -> str:
+def system_for_plan(plan: ChatRoutePlan) -> str:
     """按本轮意图写 agent 系统提示（对应 TS systemForPlan），规定 Agentic RAG 循环。"""
     prompt = (
         "你是企业知识库助手，必须按 Agentic RAG 循环作答，不要跳步。"
         "结合对话历史和记忆里的用户背景，但制度/流程以本轮检索资料为准。"
         f"本轮意图：{plan['label']}。"
     )
-    if plan["allow_retrieve"]:
+    if plan["allow_retrieve"] and plan["allow_graph"]:
+        graph_hint = " / ".join(plan["graph_queries"]) or "从问题抽出的短实体名"
+        prompt += (
+            f"知识库建议检索词「{plan['query']}」，图谱建议检索词「{graph_hint}」。"
+            "第一步必须在同一次回复里并行调用 retrieve_knowledge 和 retrieve_graph，两个都要调："
+            "不要先查库再决定是否查图，不要只调其中一个，也不要等一个返回再调另一个。"
+            "retrieve_graph 的 query 必须是短实体名（空格或 / 分隔），不要整句。"
+            "两个工具的检索词/实体都只针对【当前问题】：记忆与历史只用于理解用户背景，"
+            "不要把记忆或上文里其它话题的实体拿去检索。"
+            "循环：① 并行检索；② 若知识库 eval.ok 则用文档 context 作答并标 [n]，"
+            "图谱只看实体关系、不能当制度原文；"
+            "③ 若 insufficient，先 rewrite_query，再用新词再次 retrieve_knowledge"
+            "（知识库最多两次）；图谱词变了才再调 retrieve_graph；④ 两次后仍不足再考虑联网。"
+            "eval.ok 后不要再检索、不要改写。不要第三次 retrieve_knowledge。"
+            "图谱为空不要编造关系。不要用记忆替代文档。"
+        )
+    elif plan["allow_retrieve"]:
         prompt += (
             f"建议检索词「{plan['query']}」，可改写成更准的 query。"
             "循环：① retrieve_knowledge；② 若 eval.ok 则用 context 作答并标 [n]；"
@@ -300,6 +335,8 @@ def system_for_plan(plan: dict[str, Any]) -> str:
         )
     else:
         prompt += "不要调用 retrieve_knowledge 或 rewrite_query。"
+    if not plan["allow_graph"]:
+        prompt += "不要调用 retrieve_graph。"
     if plan["intent"] == "chitchat":
         prompt += "这是闲聊，直接回应，不要调用任何工具。"
     if plan["intent"] == "profile":
@@ -450,7 +487,7 @@ class AiStreamService:
         user: AuthUser,
         default_top_k: int,
         persist_sources: list[dict[str, Any]],
-        plan: dict[str, Any],
+        plan: ChatRoutePlan,
         question: str,
     ) -> Any | None:
         """按本轮意图挂工具现建 agent（对应 TS createTurnAgent）
@@ -462,6 +499,7 @@ class AiStreamService:
             return None
         retrieval = hybrid_retrieval_service
         rewrite = chat_query_rewrite_service
+        graph = graph_build_service
         tools: list[Any] = []
         turn_state: dict[str, Any] = {"retrieve_count": 0, "last_retrieve": None}
 
@@ -471,6 +509,7 @@ class AiStreamService:
                 args_schema=_RetrieveKnowledgeInput,
                 description=(
                     "检索企业知识库一次（仅当前用户可见文档）并评估是否切题。不会自动再查。"
+                    "首次必须与 retrieve_graph 在同一次并行调用。"
                     "eval.ok 为 false 时先 rewrite_query，再用新词再调本工具。本轮最多两次。"
                 ),
             )
@@ -559,16 +598,71 @@ class AiStreamService:
 
             tools.extend([retrieve_knowledge, rewrite_query])
 
+        if plan["allow_graph"]:
+
+            @tool(
+                "retrieve_graph",
+                args_schema=_GraphSearchInput,
+                description=(
+                    "检索知识图谱实体与关系（仅当前用户可见文档抽取出的图）。"
+                    "入参必须是短实体名，多个用空格或 / 分隔，例如「发票 / 报销」，不要整句。"
+                    "只从【当前用户问题】抽实体，不要用【用户长期记忆】/【当前会话记忆】"
+                    "或历史对话里其它话题的实体。"
+                    "首次检索知识库时必须与 retrieve_knowledge 在同一次并行调用。"
+                    "图谱只说明实体关系，不能当制度原文。仅当还要查其他实体名时再单独再调。"
+                ),
+            )
+            async def retrieve_graph(query: str) -> dict[str, Any]:
+                keywords = [
+                    *plan["graph_queries"],
+                    *([query.strip()] if query.strip() else []),
+                ]
+                logger.info(
+                    "图谱检索(工具)：question=%r plan=%s input=%r → kws=%s",
+                    question[:80],
+                    "/".join(plan["graph_queries"]) or "-",
+                    query[:60],
+                    "/".join(keywords) or "-",
+                )
+                scope = access_from_user(user) if user is not None else empty_scope()
+                hit = await graph.retrieve_for_chat(keywords, limit=8, scope=scope)
+                insufficient = not hit["entities"] and not hit["relations"]
+                logger.info(
+                    "图谱检索(工具)结果：entities=%d relations=%d documents=%d insufficient=%s",
+                    len(hit["entities"]),
+                    len(hit["relations"]),
+                    len(hit["documents"]),
+                    insufficient,
+                )
+                _stream_writer()({"type": "data-graph", "data": hit})
+                return {
+                    "query": hit["query"],
+                    "entities": hit["entities"],
+                    "relations": hit["relations"],
+                    "documents": hit["documents"],
+                    "context": format_graph_context(hit),
+                    "insufficient": insufficient,
+                }
+
+            tools.append(retrieve_graph)
+
         if plan["allow_web"]:
             tools.append(_web_search)
 
-        # 单次 invoke 最多 6 次模型调用（对齐 TS modelCallLimitMiddleware）：避免循环打爆；
+        logger.info(
+            "本轮工具挂载：intent=%s query=%r graph=%s tools=%s",
+            plan["intent"],
+            plan["query"][:60],
+            "/".join(plan["graph_queries"]) or "-",
+            [t.name for t in tools],
+        )
+        # 单次 invoke 最多 8 次模型调用（对齐 TS modelCallLimitMiddleware）：避免循环打爆；
         # 超限正常结束而非抛错。工具内部的评估/改写 LLM 调用已用 kh-internal 隔离、不计入。
         return create_agent(
             model=self._llm,
             tools=tools,
             system_prompt=system_for_plan(plan),
-            middleware=[ModelCallLimitMiddleware(run_limit=6, exit_behavior="end")],
+            middleware=[ModelCallLimitMiddleware(run_limit=8, exit_behavior="end")],
         )
 
     async def stream_chat(
@@ -622,7 +716,9 @@ class AiStreamService:
                 "intent": plan["intent"],
                 "label": plan["label"],
                 "query": plan["query"],
+                "graphQueries": plan["graph_queries"],
                 "allowRetrieve": plan["allow_retrieve"],
+                "allowGraph": plan["allow_graph"],
                 "allowWeb": plan["allow_web"],
             },
         )

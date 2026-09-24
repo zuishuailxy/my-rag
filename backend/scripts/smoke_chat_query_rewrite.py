@@ -23,9 +23,9 @@
 11. 不足后改写 rewrite_after_retrieve（对应 TS rewriteAfterRetrieve）：irrelevant/
     empty 共用 RETRY_REWRITE_PROMPT，消息含问题/上次词/不足原因/命中摘要；结果为空/
     异常/未配 → 回退原问题，原问题=上次词 → 空串（永不 None）。
-12. 改写门控 rewrite()（检索前：消解指代 vs 自足）：TypeSafe 判「自足/依赖上文/
-    无需检索」，自足→不调 LLM、无关→need_retrieve=False、依赖上文→LLM 改写；
-    门控不可用回退 LLM；真实门控需 key + SDK（否则 SKIP）。
+12. 改写门控 + 图谱词（B 方案）：TypeSafe 判「自足/依赖上文/无需检索」；只有依赖上文的
+    追问（或门控不可用）才调一次 LLM，同时产出 standalone_query + graph_queries；
+    自足问题跳过（图谱词由模型在 retrieve_graph 入参里现抽）；真实门控需 key + SDK。
 13. agentic_retrieve 编排（对应 TS agentic-retrieve.ts）：首轮切题不重试、跑偏改写
     再查（retried_ok）、空命中改写失败→empty、检索异常→error、on_eval/on_rewrite
     回调与 camelCase payload；to_eval 映射。
@@ -140,6 +140,8 @@ class _FakeAnswer:
     def __init__(self, choice: str, confidence: float):
         self.choice = choice
         self.confidence = confidence
+        # _route_intent 成功时会打 probabilities，假对象要提供
+        self.probabilities = {choice: confidence}
 
 
 class _FakeTypeSafeResponse:
@@ -375,43 +377,61 @@ async def main() -> None:
         chat_query_rewrite_service._typesafe_client_cls = None
         chat_query_rewrite_service._typesafe_choice_cls = None
 
-        # 8a) _to_plan 纯函数：5 路意图 → 工具开关 + 中文 label
-        assert chat_query_rewrite_service._to_plan("kb", "q") == {
+        # 8a) _to_plan 纯函数：5 路意图 → 工具开关 + 中文 label + graph_queries
+        assert chat_query_rewrite_service._to_plan("kb", "q", [" 发票 ", "报销", ""]) == {
             "intent": "kb", "label": "知识库", "query": "q",
-            "allow_retrieve": True, "allow_web": False,
-        }, "_to_plan(kb) 应只开检索"
+            "graph_queries": ["发票", "报销"],
+            "allow_retrieve": True, "allow_graph": True, "allow_web": False,
+        }, "_to_plan(kb) 应开检索+图谱并清洗 graph_queries"
         assert chat_query_rewrite_service._to_plan("chitchat", "q")["allow_retrieve"] is False
+        assert chat_query_rewrite_service._to_plan("chitchat", "q")["allow_graph"] is False
         assert chat_query_rewrite_service._to_plan("chitchat", "q")["allow_web"] is False
         assert chat_query_rewrite_service._to_plan("profile", "q")["allow_retrieve"] is False
         assert chat_query_rewrite_service._to_plan("web", "q")["allow_retrieve"] is False
         assert chat_query_rewrite_service._to_plan("web", "q")["allow_web"] is True
         assert chat_query_rewrite_service._to_plan("kb_then_web", "q")["allow_retrieve"] is True
+        assert chat_query_rewrite_service._to_plan("kb_then_web", "q")["allow_graph"] is True
         assert chat_query_rewrite_service._to_plan("kb_then_web", "q")["allow_web"] is True
+        assert (
+            chat_query_rewrite_service._to_plan("web", "q", ["发票"])["graph_queries"] == []
+        ), "非 kb 意图应清空 graph_queries"
         assert set(INTENT_LABEL) == set(CHAT_INTENTS), "每个意图都应有中文名"
-        print("   8a) _to_plan 纯函数 ✓ 5 路意图 → 工具开关、label 齐全")
+        print("   8a) _to_plan 纯函数 ✓ 5 路意图 → 工具开关、label、graph_queries 清洗")
 
-        # 8b) 无历史 → intent=kb 兜底 + query=原问题（不调 TypeSafe 也不调 LLM）
+        # 8b) 无历史 → intent=kb 兜底 + query=原问题（kb 轮次会尝试抽图谱词，失败则回退）
         plan = await chat_query_rewrite_service.classify("年假有多少天？", [])
         assert plan == {
             "intent": "kb", "label": "知识库", "query": "年假有多少天？",
-            "allow_retrieve": True, "allow_web": False,
+            "graph_queries": [], "allow_retrieve": True, "allow_graph": True,
+            "allow_web": False,
         }, f"无历史应兜底 kb，实际 {plan}"
         print("   8b) 无历史 → intent=kb 兜底 + query=原问题 ✓")
 
-        # 8c) 有历史 + need_retrieve=True → kb + query 改写
-        fake = _FakeRewriter(RewriteResult(standalone_query="差旅审批流程", need_retrieve=True))
+        # 8c) 有历史 + need_retrieve=True → kb + query 改写 + graph_queries
+        fake = _FakeRewriter(
+            RewriteResult(
+                standalone_query="差旅审批流程",
+                need_retrieve=True,
+                graph_queries=[" 差旅 ", "审批"],
+            )
+        )
         chat_query_rewrite_service._rewriter = fake
         plan = await chat_query_rewrite_service.classify("那谁审批？", history)
         assert plan["intent"] == "kb" and plan["allow_retrieve"] is True and plan["allow_web"] is False, f"实际 {plan}"
         assert plan["query"] == "差旅审批流程", f"query 应改写，实际 {plan}"
-        print("   8c) 有历史 + need_retrieve=True → intent=kb、query 改写 ✓")
+        assert plan["graph_queries"] == ["差旅", "审批"], f"graph_queries 应去空白，实际 {plan}"
+        print("   8c) 有历史 + need_retrieve=True → intent=kb、query 改写、graph_queries ✓")
 
-        # 8d) 有历史 + need_retrieve=False → chitchat + 不检索
+        # 8d) 有历史 + need_retrieve=False → chitchat + 不检索/不查图
         fake = _FakeRewriter(RewriteResult(standalone_query="谢谢你", need_retrieve=False))
         chat_query_rewrite_service._rewriter = fake
         plan = await chat_query_rewrite_service.classify("谢谢你", history)
-        assert plan["intent"] == "chitchat" and plan["allow_retrieve"] is False, f"实际 {plan}"
-        print("   8d) 有历史 + need_retrieve=False → intent=chitchat、不检索 ✓")
+        assert (
+            plan["intent"] == "chitchat"
+            and plan["allow_retrieve"] is False
+            and plan["allow_graph"] is False
+        ), f"实际 {plan}"
+        print("   8d) 有历史 + need_retrieve=False → intent=chitchat、不检索/不查图 ✓")
 
         # 8e) LLM 异常 → intent=kb 兜底 + query=原问题（失败不阻断）
         fake = _FakeRewriter(error=RuntimeError("模拟超时"))
@@ -511,6 +531,23 @@ async def main() -> None:
             assert bad is not None, "真实判定失败（返回 None），未验证"
             assert bad.relevant is False, f"无关文档应 relevant=False，实际 {bad}"
             print(f"   9e) 真实切题判定 ✓ 切题→True、无关→False（reason={bad.reason!r}）")
+
+        # 9f) 评估上下文必须保留 chunk 后段：
+        #     回归：关键句（如「私车公用申请表」）常在 chunk 中后段（实测第 644 字），
+        #     截 180 会让评估器只看到开头的「差旅管理办法」标题 → 误判不切题 → 丢合法命中。
+        long_hit = ChunkHit(
+            chunkId="cl",
+            documentId="dl",
+            documentTitle="差旅与费用报销管理办法",
+            content=("出差交通费按职级报销，经济舱或二等座。" * 30)
+            + "私车公用需填写《私车公用申请表》并经 Leader 审批。",
+            heading="交通费",
+            score=0.2,
+        )
+        assert "私车公用申请表" in summarize_hits([long_hit]), (
+            "评估上下文必须保留 chunk 后段（_RELEVANCE_SNIPPET_LEN 不能太短）"
+        )
+        print("   9f) 评估上下文保留 chunk 后段 ✓（防 180 截断误判回归）")
 
         # 10) TypeSafe(jev) 切题判定：优先于 LLM，失败才回退
         chat_query_rewrite_service._typesafe_client_cls = _FakeTypeSafeClient
@@ -648,34 +685,64 @@ async def main() -> None:
         ), "原问题与上次检索词相同应返回空串"
         print("   11c) 空结果/异常/未配 → 回退原问题；原问题=上次词 → 空串 ✓")
 
-        # 12) 改写门控 rewrite()：TypeSafe 判自足/依赖上文/无需检索，只有追问才调 LLM
+        # 12) 改写门控：TypeSafe 判自足/依赖上文/无需检索；
+        #     kb 轮次即使自足也要调 LLM（抽 graph_queries），非 kb 自足才跳过。
         chat_query_rewrite_service._typesafe_client_cls = _FakeTypeSafeClient
         chat_query_rewrite_service._typesafe_choice_cls = _FakeChoice
         _FakeTypeSafeClient.error = None
 
-        # 12a) 问题自足 → 不调 LLM，直接用原问题
-        _FakeTypeSafeClient.answers = {"rewrite_gate": "standalone"}
+        # 12a) B 方案：自足 kb → 跳过 LLM，query=原问题、graph_queries 空（图谱词由模型给）
+        _FakeTypeSafeClient.answers = {"intent": "kb", "rewrite_gate": "standalone"}
+        spy = _FakeRewriter(
+            RewriteResult(
+                standalone_query="不该被调用",
+                need_retrieve=True,
+                graph_queries=["年假"],
+            )
+        )
+        chat_query_rewrite_service._rewriter = spy
+        plan = await chat_query_rewrite_service.classify("年假有多少天？", history)
+        assert plan["intent"] == "kb" and plan["allow_graph"] is True, f"实际 {plan}"
+        assert plan["query"] == "年假有多少天？", f"实际 {plan['query']}"
+        assert plan["graph_queries"] == [], f"自足不预抽，实际 {plan['graph_queries']}"
+        assert spy.messages is None, "B 方案：自足 kb 应跳过 LLM"
+        print("   12a) 自足 kb → 跳过 LLM、graph_queries 空（图谱词由模型给）✓")
+
+        # 12b) 非 kb（web）自足 → 跳过 LLM
+        _FakeTypeSafeClient.answers = {"intent": "web", "rewrite_gate": "standalone"}
         spy = _FakeRewriter(
             RewriteResult(standalone_query="不该被调用", need_retrieve=True)
         )
         chat_query_rewrite_service._rewriter = spy
-        plan = await chat_query_rewrite_service.rewrite("年假有多少天？", history)
-        assert plan == {"query": "年假有多少天？", "need_retrieve": True}, f"实际 {plan}"
-        assert spy.messages is None, "自足问题不应调 LLM 改写"
+        plan = await chat_query_rewrite_service.rewrite("今天天气怎么样？", history)
+        assert plan == {"query": "今天天气怎么样？", "need_retrieve": False}, (
+            f"实际 {plan}"
+        )
+        assert spy.messages is None, "非 kb 自足问题不应调 LLM"
         assert _FakeTypeSafeClient.last_questions is not None
         _gate_obj = _FakeTypeSafeClient.last_questions["rewrite_gate"]
         assert set(_gate_obj.criteria) == set(REWRITE_GATE_CHOICES), "应传三路 Choice"
-        print("   12a) 自足 → 跳过 LLM 改写，直接用原问题 ✓")
+        print("   12b) 非 kb 自足 → 跳过 LLM 改写 ✓")
 
-        # 12b) 无需检索（寒暄）→ 不调 LLM，need_retrieve=False
-        _FakeTypeSafeClient.answers = {"rewrite_gate": "no_retrieve"}
+        # 12c) 无需检索（寒暄）→ 不调 LLM，need_retrieve=False
+        _FakeTypeSafeClient.answers = {
+            "intent": "chitchat",
+            "rewrite_gate": "no_retrieve",
+        }
+        spy = _FakeRewriter(
+            RewriteResult(standalone_query="不该被调用", need_retrieve=True)
+        )
+        chat_query_rewrite_service._rewriter = spy
         plan = await chat_query_rewrite_service.rewrite("谢谢你", history)
         assert plan == {"query": "谢谢你", "need_retrieve": False}, f"实际 {plan}"
         assert spy.messages is None, "寒暄不应调 LLM 改写"
-        print("   12b) 无需检索 → 跳过改写，need_retrieve=False ✓")
+        print("   12c) 无需检索 → 跳过改写，need_retrieve=False ✓")
 
-        # 12c) 依赖上文 → 才调 LLM 改写消解指代
-        _FakeTypeSafeClient.answers = {"rewrite_gate": "needs_context"}
+        # 12d) kb + 依赖上文 → LLM 改写消解指代
+        _FakeTypeSafeClient.answers = {
+            "intent": "kb",
+            "rewrite_gate": "needs_context",
+        }
         fake = _FakeRewriter(
             RewriteResult(standalone_query="差旅审批流程", need_retrieve=True)
         )
@@ -683,9 +750,9 @@ async def main() -> None:
         plan = await chat_query_rewrite_service.rewrite("那谁审批？", history)
         assert plan == {"query": "差旅审批流程", "need_retrieve": True}, f"实际 {plan}"
         assert fake.messages is not None, "依赖上文应调 LLM 改写"
-        print("   12c) 依赖上文 → LLM 改写消解指代 ✓")
+        print("   12d) 依赖上文 → LLM 改写消解指代 ✓")
 
-        # 12d) 门控不可用（TypeSafe 关闭）→ 回退 LLM 改写（保持旧行为，零回归）
+        # 12e) 门控不可用（TypeSafe 关闭）→ 仍回退 LLM（kb_like 兜底）
         chat_query_rewrite_service._typesafe_client_cls = None
         chat_query_rewrite_service._typesafe_choice_cls = None
         fake = _FakeRewriter(
@@ -695,16 +762,16 @@ async def main() -> None:
         plan = await chat_query_rewrite_service.rewrite("那谁审批？", history)
         assert plan == {"query": "差旅审批流程", "need_retrieve": True}, f"实际 {plan}"
         assert fake.messages is not None, "门控不可用应回退 LLM 改写"
-        print("   12d) 门控不可用 → 回退 LLM 改写（零回归）✓")
+        print("   12e) 门控不可用 → 回退 LLM 改写（零回归）✓")
 
-        # 12e) 真实 TypeSafe 门控（需要 key + SDK）
+        # 12f) 真实 TypeSafe 门控（需要 key + SDK）
         if not settings.TYPESAFE_API_KEY:
-            print("   12e) SKIP —— 未配置 TYPESAFE_API_KEY，真实改写门控未验证（SKIP 不算通过）")
+            print("   12f) SKIP —— 未配置 TYPESAFE_API_KEY，真实改写门控未验证（SKIP 不算通过）")
         else:
             try:
                 import typesafe_sdk  # noqa: F401
             except ImportError:
-                print("   12e) SKIP —— typesafe_sdk 未安装，真实改写门控未验证（SKIP 不算通过）")
+                print("   12f) SKIP —— typesafe_sdk 未安装，真实改写门控未验证（SKIP 不算通过）")
             else:
                 _real_svc4 = ChatQueryRewriteService()
                 assert _real_svc4._typesafe_client_cls is not None
@@ -714,7 +781,7 @@ async def main() -> None:
                 assert g2 == "standalone", f"「年假有多少天？」应自足，实际 {g2!r}"
                 g3 = await _real_svc4._route_rewrite_gate("谢谢你")
                 assert g3 == "no_retrieve", f"「谢谢你」应无需检索，实际 {g3!r}"
-                print(f"   12e) 真实改写门控 ✓ 那谁审批→{g1}、年假→{g2}、谢谢你→{g3}")
+                print(f"   12f) 真实改写门控 ✓ 那谁审批→{g1}、年假→{g2}、谢谢你→{g3}")
 
         # 13) agentic_retrieve 编排（对应 TS agentic-retrieve.ts，依赖注入不碰全局单例）
         # 13a) 首轮切题 → 直接返回 hits，不重试

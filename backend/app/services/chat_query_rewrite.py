@@ -2,8 +2,10 @@
 
 角色：多轮对话里用户常问「那谁审批？」「这个怎么办？」这类依赖上文的追问，
 直接拿去混合检索会召回一堆无关制度。本服务做三件事：
-  1. **查询改写**：先用 TypeSafe 判「自足 / 依赖上文 / 无需检索」，只有依赖上文的
-     追问才调 LLM 结合最近几轮改写成一条可独立检索的短查询（廉价判别卡住昂贵生成）；
+  1. **查询改写 + 图谱短实体名**：只有依赖上文的追问才调一次 LLM，同时产出
+     「可独立检索的短查询 standalone_query」与「图谱用的短实体名 graph_queries」；
+     自足问题不调（图谱词由模型在 retrieve_graph 入参里现抽）。是否改写先用 TypeSafe
+     判「自足 / 依赖上文 / 无需检索」（TypeSafe 判别式，生成不了实体名）；
   2. **意图路由**：判断本轮意图（chitchat / profile / kb / web / kb_then_web），
      据此给出工具开关（allow_retrieve / allow_web）——这是 agentic RAG 的「决策层」；
   3. **切题判定 + 不足改写**：检索后判断召回文档与问题是否切题（TypeSafe 的两路
@@ -97,8 +99,12 @@ __all__ = [
 # 改写温度固定 0（对齐 TS `temperature: 0`）：改写要可复现，不要自由发挥
 _REWRITE_TEMPERATURE = 0.0
 
-# 命中资料正文送入评估/改写的截断长度（对应 TS summarizeHits 的 180）
-_RELEVANCE_SNIPPET_LEN = 180
+# 命中资料正文送入评估/改写的截断长度。
+# ⚠️ **刻意偏离 TS summarizeHits 的 180**：中文 chunk 约 700~1000 字，关键句常在中后段
+#（实测「私车公用」在 759 字 chunk 的第 644 字），截 180 会让评估器只看到 chunk 开头的
+# 「差旅管理办法」标题，误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。
+# 放到能覆盖整块，评估/改写才看得到真正相关的内容。
+_RELEVANCE_SNIPPET_LEN = 1200
 
 # 本轮路由意图（对应 TS CHAT_INTENTS 字面量联合）
 CHAT_INTENTS = ("chitchat", "profile", "kb", "web", "kb_then_web")
@@ -155,6 +161,13 @@ class RewriteResult(BaseModel):
     need_retrieve: bool = Field(
         description="是否需要查知识库。寒暄、致谢、与制度无关的闲聊为 false"
     )
+    graph_queries: list[str] = Field(
+        default_factory=list,
+        description=(
+            "图谱短实体名：2~6 个、每个 2~4 字，必须拆开（发票如何报销→发票、报销）；"
+            "寒暄/偏好/纯联网为空数组"
+        ),
+    )
 
 
 class RelevanceResult(BaseModel):
@@ -196,17 +209,26 @@ class HitGrade:
     text: str
 
 
-# 改写系统提示词（与 TS REWRITE_PROMPT 逐字一致）
+# 改写 + 图谱短实体名系统提示词（对齐 TS ROUTE_PROMPT 的 standalone_query / graph_queries 部分）
 REWRITE_PROMPT = (
-    "你是企业知识库的检索改写器。根据对话把当前问题改写成一条可独立检索的短查询。\n"
+    "你是企业知识库的检索改写器。根据对话把当前问题改写成一条可独立检索的短查询，"
+    "并抽出图谱要用的短实体名。\n"
     "\n"
-    "## 要求\n"
+    "## standalone_query\n"
     "- 消解「这个 / 那个 / 谁负责 / 怎么办」等指代，补全省略的主题\n"
     "- 只保留检索需要的实体、事项、动作，一句中文，尽量不超过 40 字\n"
     "- 不要编造上文没出现的专有名词、条款号、系统名\n"
     "- 不要复述助手给出的制度条文、时限、流程细节\n"
     "- 当前问题已经完整、不依赖上文时，standalone_query 用原问题略作精炼即可\n"
     "- 寒暄、致谢、与知识库无关 → need_retrieve=false，standalone_query 仍给原问题\n"
+    "\n"
+    "## graph_queries（图谱短实体名）\n"
+    "- **只从当前问题的主题抽**：可结合上文消解「这个/那个/它」的指代，"
+    "但**不要带入上文其它话题的实体**（上一轮问私车公用、本轮问出差申请，就只给「出差申请」相关）\n"
+    "- 每个词 2～4 个字的实体短名（人/岗/制度对象），不要整句、不要问号\n"
+    "- 必须拆开：发票如何报销 → 发票、报销；发票报销流程和要求 → 发票、报销\n"
+    "- 禁止：流程、要求、办法、如何、怎么、什么、是什么\n"
+    "- 寒暄、偏好、纯联网 → 空数组\n"
     "- 输出不要解释"
 )
 
@@ -251,14 +273,18 @@ class ChatRoutePlan(TypedDict):
     intent         —— 5 路意图
     label          —— 意图中文名（过程条展示）
     query          —— 改写后的检索词（给 RAG / 联网用）
+    graph_queries  —— 图谱用的短实体名（整句对不上图节点）
     allow_retrieve —— kb / kb_then_web 才挂 retrieve_knowledge
+    allow_graph    —— 与 allow_retrieve 相同：查知识库的轮次才查图谱
     allow_web      —— web / kb_then_web 才挂 web_search
     """
 
     intent: ChatIntent
     label: str
     query: str
+    graph_queries: list[str]
     allow_retrieve: bool
+    allow_graph: bool
     allow_web: bool
 
 
@@ -341,7 +367,10 @@ def _build_retry_writer():
 
 
 def summarize_hits(hits: Sequence[ChunkHit], limit: int = 5) -> str:
-    """把命中资料拼成摘要（对应 TS summarizeHits：序号 + 标题/章节 + 分数 + 摘要）"""
+    """把命中资料拼成摘要（对应 TS summarizeHits：序号 + 标题/章节 + 分数 + 摘要）
+
+    截断长度用 `_RELEVANCE_SNIPPET_LEN`（刻意比 TS 长，见该常量注释）。
+    """
     lines = []
     for i, hit in enumerate(hits[:limit], start=1):
         heading = f" / {hit.heading}" if hit.heading else ""
@@ -409,19 +438,25 @@ class ChatQueryRewriteService:
         # 1. 意图：优先 TypeSafe，None 表示不可用（后面用 LLM 推导兜底）
         intent = await self._route_intent(question, context)
 
-        # 2. 查询改写：先用 TypeSafe 判自足/依赖上文，只有追问才值得调 LLM 消解指代
+        # 2. 只有依赖上文的追问（gate=needs_context / 门控不可用）才调一次 LLM，
+        #    同时产出 standalone_query + graph_queries。
+        #    自足问题不调：query 用原问题，图谱短实体名交给模型在 retrieve_graph
+        #    入参里现抽（retrieve_graph 工具照常挂载，见 ai_stream.create_turn_agent）。
         query = question
+        graph_queries: list[str] = []
         llm_need_retrieve: bool | None = None
-        if context:
-            gate = await self._route_rewrite_gate(question)
+        if self._rewriter is not None:
+            gate = (
+                await self._route_rewrite_gate(question) if context else "standalone"
+            )
             if gate == "no_retrieve":
                 llm_need_retrieve = False
             elif gate != "standalone":
-                # needs_context（或门控不可用）→ LLM 改写消解指代
                 result = await self._invoke_rewriter(question, context)
                 if result is not None:
                     query = result.standalone_query.strip() or question
                     llm_need_retrieve = result.need_retrieve
+                    graph_queries = result.graph_queries
 
         if intent is None:
             intent = "kb" if llm_need_retrieve is not False else "chitchat"
@@ -431,13 +466,16 @@ class ChatQueryRewriteService:
                 intent,
             )
 
-        plan = self._to_plan(intent, query)
+        plan = self._to_plan(intent, query, graph_queries)
         logger.info(
-            "意图路由：question=%r → intent=%s query=%r allow_retrieve=%s allow_web=%s",
+            "意图路由：question=%r → intent=%s query=%r graph=%s "
+            "allow_retrieve=%s allow_graph=%s allow_web=%s",
             question[:80],
             plan["intent"],
             plan["query"][:80],
+            "/".join(plan["graph_queries"]) or "-",
             plan["allow_retrieve"],
+            plan["allow_graph"],
             plan["allow_web"],
         )
         return plan
@@ -726,25 +764,42 @@ class ChatQueryRewriteService:
 
         优先显式传 api_key（本项目惯例）；个别 SDK 版本只认环境变量时会抛
         TypeError，此时退回无参构造（靠进程环境变量 TYPESAFE_API_KEY）。
+
+        ⚠️ 必须显式判 None：`_typesafe_client_cls` 的注解是 `Any | None`，
+        `Optional[Any]` **不可调用**（mypy 报 `"None" not callable`）。三个调用点
+        虽都在外面判过 `is None`，但那不收窄本方法里的属性类型；在这里判一次既不
+        改变行为（判过 None 的调用点永远走不到 raise），也让「直接调本方法」的路径
+        得到明确错误而不是 TypeError。
         """
+        cls = self._typesafe_client_cls
+        if cls is None:
+            raise RuntimeError("TypeSafe 客户端不可用（未安装 SDK 或未配置 key）")
         try:
-            return self._typesafe_client_cls(api_key=settings.TYPESAFE_API_KEY)
+            return cls(api_key=settings.TYPESAFE_API_KEY)
         except TypeError:
-            return self._typesafe_client_cls()
+            return cls()
 
     @staticmethod
-    def _to_plan(intent: ChatIntent, query: str) -> ChatRoutePlan:
+    def _to_plan(
+        intent: ChatIntent, query: str, graph_queries: list[str] | None = None
+    ) -> ChatRoutePlan:
         """意图 → 工具开关（对应 TS toPlan）
 
-        allow_retrieve：kb / kb_then_web 才挂 retrieve_knowledge；
-        allow_web：web / kb_then_web 才挂 web_search。
+        allow_retrieve / allow_graph：kb / kb_then_web 才挂 retrieve_knowledge /
+        retrieve_graph；allow_web：web / kb_then_web 才挂 web_search。
+        graph_queries 仅 kb 轮次保留（其余意图一律清空）。
         识别失败时 classify 已落到 kb，避免内部问题漏检。
         """
+        kb = intent in ("kb", "kb_then_web")
         return {
             "intent": intent,
             "label": INTENT_LABEL[intent],
             "query": query,
-            "allow_retrieve": intent in ("kb", "kb_then_web"),
+            "graph_queries": (
+                [q.strip() for q in (graph_queries or []) if q.strip()] if kb else []
+            ),
+            "allow_retrieve": kb,
+            "allow_graph": kb,
             "allow_web": intent in ("web", "kb_then_web"),
         }
 

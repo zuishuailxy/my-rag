@@ -123,6 +123,15 @@ async def retrieve_and_grade(
         rows = await retrieval.retrieve(used_query, top_k, user)
         raw_hits = [ChunkHit.from_row(row) for row in rows]
         grade = await rewrite.grade_hits(question, raw_hits)
+        if raw_hits and not grade.ok:
+            # 方便定位「检索得到但被判不切题」的静默丢弃：把被判掉的命中列出来
+            logger.info(
+                "检索有命中但判不切题：query=%r raw=%d reason=%s top=%s",
+                used_query[:80],
+                len(raw_hits),
+                grade.reason,
+                [(h.documentTitle[:24], round(h.score, 3)) for h in raw_hits[:3]],
+            )
         return GradedRetrieve(
             raw_hits=raw_hits,
             hits=raw_hits if grade.ok else [],
