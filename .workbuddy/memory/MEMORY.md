@@ -12,6 +12,7 @@ TS(NestJS) → Python(FastAPI) 重写：逐文件对照 TS 源码核验（贴源
 - ⚠️ 本机 `HTTP_PROXY=127.0.0.1:53304` 无 NO_PROXY + vite 只监听 IPv6 `[::1]:5173` → `127.0.0.1:5173` 必得 **502（假象）**，用 `localhost` 或 unset 代理。
 
 ## 运行 / 验证
+- ⚠️ **提交前必须跑 `mypy --no-incremental app/`（全量）**：默认增量的 mypy **只重查变更模块**，未改动文件的存量错误不会被报出来 → 门禁假绿（09-24 实测：HEAD 上一直藏着 3 个错误，前几次「0 issue」都是假绿）。mem0 的 `follow_imports=skip` override 之后全量**不 OOM**，此前「只能用增量」的经验已过时。查「HEAD 是否本来就红」用 `git worktree add <tmp> HEAD` + 主仓 venv 跑 mypy，零风险（不动工作区 / 不用 stash），完事 `git worktree remove --force`。
 - `cd /abs/backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/xxx.py`（cwd 会漂移，必须带 cd）。
 - 标准 = 真实依赖 E2E 冒烟 + `mypy app/` 0 issue。冒烟用「裸 app + `httpx.ASGITransport`」，**不要 TestClient**（与 asyncpg 冲突）；不污染种子；别依赖脆弱前提（总行数、基址）；临时用户先删子表后主表、Redis 激活键 **token/user 两侧都删**。
 - 新增/改动断言必须做**回退法证伪**（改坏实现看断言是否真报错），否则常是假绿/假红（09-18 两次实证）。
@@ -50,6 +51,13 @@ TS(NestJS) → Python(FastAPI) 重写：逐文件对照 TS 源码核验（贴源
   ⚠️⚠️ **`delete_all(user_id, run_id)` 忽略 run_id、清空整个 user 记忆**（实测 4/1/1 → 0/0/0，120s 不复原）→ TS 的 `deleteAll({userId,runId})` 做 clearSession = 「删一个会话抹掉该用户全部长期记忆」。本项目 `clear_session` 改为 `get_all(filters={user_id,run_id})` 列 id → 逐条 `delete(id)`。
   ⚠️ `add()` 是**异步**抽取（`status=PENDING`，实测 6~9s 后才可检索）→ 冒烟必须轮询。结果取 `res["results"][]["memory"]`；客户端必须 `AsyncMemoryClient`（同步版阻塞事件循环）。
   ⚠️ **pyproject 必须保留 `[[tool.mypy.overrides]] module=["mem0","mem0.*"] follow_imports="skip"`**，否则 mypy 跟随 mem0 依赖图 → 本机 OOM 被杀 exit 137。
+
+## Agentic RAG / 图谱检索（09-24）
+- **四工具**（kb / kb_then_web）：`retrieve_knowledge` / `rewrite_query` / `retrieve_graph` / `web_search`，由 `ChatRoutePlan.allow_*` 决定挂载（`allow_graph` 与 `allow_retrieve` 同值；`graph_queries` 只在 kb 类意图保留）。⚠️ **自足问题不调 LLM → `graph_queries` 为空**，图谱短实体名由模型在 `retrieve_graph` 入参里现抽（工具照挂）；只有依赖上文的追问才调一次 LLM、同时产出 `standalone_query` + `graph_queries`。system 要求首次**并行**调 knowledge + graph（配 `parallel_tool_calls`），`run_limit` 已 6→8。
+- ⚠️ **`_RELEVANCE_SNIPPET_LEN` = 1200 是刻意偏离 TS 的 180**：中文 chunk 关键句常在中后段（私车公用 → 759 字 chunk 的第 644 字），截 180 会让评估器只看到开头就误判「不切题」→ 合法命中被静默丢弃。别以「对齐 TS」为由改回。
+- ⚠️ **`retrieve_for_chat` 用短名「相等 / 前缀 / 后缀 + 别名」匹配，绝不能改成 CONTAINS**（「发票」会命中整篇制度标题）；只取本轮命中实体之间的边、不外扩；关系与文档**同一 session 顺序查**（并发共用 session 会丢边）。
+- ⚠️ **实体名归一是双边的**：写入侧（`_write_extraction`）去书名号再 MERGE；检索侧也必须去书名号比较，否则匹配不上历史节点。历史节点跑 `scripts/normalize_kg_names.py` —— APOC `mergeNodes` 的 `properties` **必须 'discard'**，用 'combine' 会把 description 合成列表、冲爆 `GraphOverviewResponse` 的 `nodes[].description: str`。
+- ⚠️ **`KG_MAX_ENTITIES` / `KG_MAX_RELATIONS` 已放宽 20/20，但旧图是旧上限抽的** → 改完必须重跑 `scripts/reindex_all_kg.py`（先清后建幂等、支持 `--dry-run`）才生效，否则「私车公用申请表」这类被挤掉的实体仍查不到。
 
 ## 踩坑速查
 - redis-py 默认 bytes；EmailStr 拒收 `.test`（冒烟用 example.com）。
