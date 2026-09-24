@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { getToolName, isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
 import { AnswerMarkdown, SourceCiteList } from "./SourceCiteList";
-import type { ChatSource } from "../types";
+import ForceGraph from "./ForceGraph";
+import type { ChatSource, GraphViewEdge, GraphViewNode } from "../types";
 
 export type RetrieveHit = {
   index: number;
@@ -19,13 +20,28 @@ export type ChatIntent =
   | "web" // 联网
   | "kb_then_web"; // 先知识库，不足再联网
 
-/** data-intent：本轮路由，决定是否展示知识库/联网范围 */
+/** data-intent：本轮路由，决定是否展示知识库/图谱/联网范围 */
 export type IntentPart = {
   intent: ChatIntent;
   label: string;
   query: string;
+  graphQueries?: string[];
   allowRetrieve: boolean;
+  allowGraph: boolean;
   allowWeb: boolean;
+};
+
+/** data-graph：对话过程卡里用与图谱页相同的力导向图 */
+export type GraphHit = {
+  query?: string;
+  entities?: Array<{
+    name: string;
+    type?: string | null;
+    description?: string | null;
+  }>;
+  relations?: Array<{ source: string; relation: string; target: string }>;
+  documents?: Array<{ documentId: string; title: string }>;
+  error?: string;
 };
 
 /** data-eval：ok 表示资料切题，不是「有召回条数」 */
@@ -53,6 +69,7 @@ export type KhUIMessage = UIMessage<
     sources: ChatSource[];
     intent: IntentPart;
     eval: EvalPart;
+    graph: GraphHit;
     session: { sessionId: string };
   }
 >;
@@ -71,16 +88,12 @@ type WebSearchResult = {
 };
 
 export function sourcesFromParts(parts: KhUIMessage["parts"]): ChatSource[] {
-  // ⚠️ 后端每次检索都推**全量** data-sources（agentic 循环最多两次检索 = 多个 data part）；
-  // AI SDK 对**无 id** 的 data part 是 append 而非 replace，所以这里取**最后一个**快照。
-  // 取第一个会拿到首轮「不切题」时空的 []，导致引用区不显示。
-  let latest: ChatSource[] = [];
   for (const part of parts) {
     if (part.type === "data-sources" && Array.isArray(part.data)) {
-      latest = part.data;
+      return part.data;
     }
   }
-  return latest;
+  return [];
 }
 
 /** 只保留回答里实际标了 [n] 的资料，避免无关召回也占引用区 */
@@ -196,10 +209,15 @@ export function ChatMessageParts({
   const hasRewrite = parts.some(
     (part) => isToolUIPart(part) && getToolName(part) === "rewrite_query",
   );
+  const hasGraph = parts.some(
+    (part) =>
+      part.type === "data-graph" ||
+      (isToolUIPart(part) && getToolName(part) === "retrieve_graph"),
+  );
 
   return (
     <>
-      {renderProcessParts(parts, hasRetrieve, hasIntent, hasRewrite)}
+      {renderProcessParts(parts, hasRetrieve, hasIntent, hasRewrite, hasGraph)}
       {texts.map((part, i) =>
         part.type === "text" ? (
           <div key={`text-${i}`} className="kh-bubble-md">
@@ -224,12 +242,13 @@ export function ChatMessageParts({
   );
 }
 
-/** 回答正文前的过程条：意图 → 检索 → 评估 → 改写 → 再检索 → 联网 → 思考。 */
+/** 回答正文前的过程条：意图 → 思考 → 知识库/图谱工具 → 评估 → 改写 → 联网。 */
 function renderProcessParts(
   parts: KhUIMessage["parts"],
   hasRetrieve: boolean,
   hasIntent: boolean,
   hasRewrite: boolean,
+  hasGraph: boolean,
 ) {
   const nodes: ReactNode[] = [];
   let reasoningBuf: string[] = [];
@@ -277,6 +296,7 @@ function renderProcessParts(
       if (part.data.stage === "retrieve" && hasRetrieve) return;
       if (part.data.stage === "intent" && hasIntent) return;
       if (part.data.stage === "rewrite" && hasRewrite) return;
+      if (part.data.stage === "graph" && hasGraph) return;
       nodes.push(
         <TraceItem key={i} kind="status" tone="pending">
           <div className="kh-trace-status">{part.data.text}</div>
@@ -295,8 +315,26 @@ function renderProcessParts(
       return;
     }
 
+    if (part.type === "data-graph") {
+      // Agent 的 retrieve_graph 工具卡已含力导向图，避免与 data-graph 双卡
+      if (
+        parts.some(
+          (p) => isToolUIPart(p) && getToolName(p) === "retrieve_graph",
+        )
+      ) {
+        return;
+      }
+      nodes.push(<GraphCard key={i} data={part.data} />);
+      return;
+    }
+
     if (isToolUIPart(part) && getToolName(part) === "retrieve_knowledge") {
       nodes.push(<RetrieveToolCard key={i} part={part} />);
+      return;
+    }
+
+    if (isToolUIPart(part) && getToolName(part) === "retrieve_graph") {
+      nodes.push(<GraphToolCard key={i} part={part} />);
       return;
     }
 
@@ -362,10 +400,17 @@ function IntentCard({ data }: { data: IntentPart }) {
               <dd>{data.query}</dd>
             </div>
           ) : null}
+          {data.graphQueries?.length ? (
+            <div>
+              <dt>图谱词</dt>
+              <dd>{data.graphQueries.join(" / ")}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>范围</dt>
             <dd>
               <span className={data.allowRetrieve ? "on" : "off"}>知识库</span>
+              <span className={data.allowGraph ? "on" : "off"}>图谱</span>
               <span className={data.allowWeb ? "on" : "off"}>联网</span>
             </dd>
           </div>
@@ -373,6 +418,146 @@ function IntentCard({ data }: { data: IntentPart }) {
       </div>
     </TraceItem>
   );
+}
+
+function graphHitToView(data: GraphHit): {
+  nodes: GraphViewNode[];
+  edges: GraphViewEdge[];
+} {
+  const nodes: GraphViewNode[] = [];
+  const seen = new Set<string>();
+  for (const entity of data.entities ?? []) {
+    const id = `entity:${entity.name}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    nodes.push({
+      id,
+      name: entity.name,
+      kind: "entity",
+      type: entity.type,
+      description: entity.description,
+    });
+  }
+  for (const doc of data.documents ?? []) {
+    const id = `doc:${doc.documentId}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    nodes.push({
+      id,
+      name: doc.title || doc.documentId,
+      kind: "document",
+      documentId: doc.documentId,
+    });
+  }
+  const edges: GraphViewEdge[] = [];
+  const edgeKeys = new Set<string>();
+  const pushEdge = (edge: GraphViewEdge) => {
+    const key = `${edge.source}\t${edge.relation}\t${edge.target}`;
+    if (edgeKeys.has(key)) return;
+    if (!seen.has(edge.source) || !seen.has(edge.target)) return;
+    edgeKeys.add(key);
+    edges.push(edge);
+  };
+  for (const rel of data.relations ?? []) {
+    pushEdge({
+      source: `entity:${rel.source}`,
+      target: `entity:${rel.target}`,
+      relation: rel.relation,
+      kind: "related",
+    });
+  }
+  const entityIds = nodes.filter((n) => n.kind === "entity").map((n) => n.id);
+  const docIds = nodes.filter((n) => n.kind === "document").map((n) => n.id);
+  const mentionAll = docIds.length * entityIds.length <= 16;
+  for (const docId of docIds) {
+    const targets = mentionAll ? entityIds : entityIds.slice(0, 1);
+    for (const entityId of targets) {
+      pushEdge({
+        source: docId,
+        target: entityId,
+        relation: "提及",
+        kind: "mentions",
+      });
+    }
+  }
+  return { nodes, edges };
+}
+
+function GraphCard({ data, pending }: { data: GraphHit; pending?: boolean }) {
+  const entities = data.entities ?? [];
+  const relations = data.relations ?? [];
+  const empty = !entities.length && !relations.length;
+  const failed = Boolean(data.error) || (!pending && empty);
+  const tone = pending ? "pending" : failed ? "failed" : "ok";
+  const label = pending
+    ? "正在检索知识图谱"
+    : data.error
+      ? "图谱检索失败"
+      : empty
+        ? "图谱中没有匹配实体"
+        : "已检索实体关系";
+  const view = useMemo(() => graphHitToView(data), [data]);
+
+  return (
+    <TraceItem kind="graph" tone={tone}>
+      <details className="kh-sheet" open>
+        <summary className="kh-panel-head">
+          <span className="kh-panel-type">图谱</span>
+          <span className="kh-panel-title">{label}</span>
+          {data.query ? (
+            <span className="kh-panel-sub">{data.query}</span>
+          ) : null}
+          {!pending && entities.length ? (
+            <b className="kh-panel-n">{entities.length}</b>
+          ) : null}
+        </summary>
+        {data.error ? (
+          <div className="kh-step-err">{data.error}</div>
+        ) : !pending && !empty ? (
+          <div className="kh-trace-graph-canvas">
+            <ForceGraph nodes={view.nodes} edges={view.edges} />
+          </div>
+        ) : null}
+      </details>
+    </TraceItem>
+  );
+}
+
+function GraphToolCard({
+  part,
+}: {
+  part: {
+    state: string;
+    input?: unknown;
+    output?: unknown;
+    errorText?: string;
+  };
+}) {
+  const input = asRecord(part.input);
+  const pending =
+    part.state === "input-streaming" || part.state === "input-available";
+  const rec = parseToolPayload(part.output);
+  const hit: GraphHit = {
+    query:
+      (typeof rec?.query === "string" && rec.query) ||
+      (typeof input.query === "string" ? input.query : ""),
+    entities: Array.isArray(rec?.entities)
+      ? (rec.entities as GraphHit["entities"])
+      : [],
+    relations: Array.isArray(rec?.relations)
+      ? (rec.relations as GraphHit["relations"])
+      : [],
+    documents: Array.isArray(rec?.documents)
+      ? (rec.documents as GraphHit["documents"])
+      : [],
+    error:
+      typeof rec?.error === "string"
+        ? rec.error
+        : part.state === "output-error"
+          ? part.errorText || "图谱检索失败"
+          : undefined,
+  };
+  return <GraphCard data={hit} pending={pending} />;
 }
 
 function EvalCard({ data }: { data: EvalPart }) {

@@ -33,10 +33,14 @@ function categoryIndex(node: GraphViewNode) {
   return 1;
 }
 
-function symbolSize(node: GraphViewNode, degree: number) {
-  if (node.kind === "document") return 32;
-  if (node.kind === "tag") return 16;
-  return 18 + Math.min(degree, 8);
+function symbolSize(node: GraphViewNode, degree: number, scale = 1) {
+  if (node.kind === "document") return Math.round(32 * scale);
+  if (node.kind === "tag") return Math.round(16 * scale);
+  return Math.round((18 + Math.min(degree, 8)) * scale);
+}
+
+function isChatCanvas(height: number) {
+  return height > 0 && height < 560;
 }
 
 function shortName(name: string) {
@@ -52,7 +56,6 @@ function kindLabel(node: GraphViewNode) {
 }
 
 function edgeLineStyle(kind: GraphViewEdge["kind"]) {
-  // curveness: 边弯曲程度，避免多条边重叠成一条直线
   if (kind === "mentions") {
     return {
       color: "#1677ff",
@@ -97,7 +100,7 @@ function bindHandle(chartRef: Props["chartRef"], chart: ECharts) {
     exportPng: () => {
       const url = chart.getDataURL({
         type: "png",
-        pixelRatio: 2, // 导出倍率，2 比屏幕更清晰
+        pixelRatio: 2,
         backgroundColor: "#fafafa",
       });
       const a = document.createElement("a");
@@ -108,9 +111,19 @@ function bindHandle(chartRef: Props["chartRef"], chart: ECharts) {
   };
 }
 
+function graphDataKey(nodes: GraphViewNode[], edges: GraphViewEdge[]) {
+  return [
+    nodes.map((node) => node.id).join("\0"),
+    edges
+      .map((edge) => `${edge.source}\t${edge.target}\t${edge.kind}`)
+      .join("\0"),
+  ].join("|");
+}
+
 function buildOption(
   nodes: GraphViewNode[],
   edges: GraphViewEdge[],
+  compact: boolean,
 ): EChartsOption {
   const degree = new Map<string, number>();
   for (const edge of edges) {
@@ -119,10 +132,13 @@ function buildOption(
   }
 
   return {
+    animation: false,
+    animationDuration: 0,
+    animationDurationUpdate: 0,
     backgroundColor: "transparent",
     tooltip: {
-      trigger: "item", // 悬停节点/边时出提示，不跟坐标轴
-      confine: true, // 提示框限制在图表内，避免被裁切
+      trigger: "item",
+      confine: true,
       formatter: (raw) => {
         const params = raw as {
           dataType?: string;
@@ -142,28 +158,39 @@ function buildOption(
     series: [
       {
         type: "graph",
-        layout: "force", // 力导向：节点互相排斥、边拉近，自动铺开
-        roam: true, // 允许滚轮缩放、拖动画布
-        roamTrigger: "global", // 空白处也能拖拽平移
-        draggable: true, // 节点可拖拽
-        zoom: 1, // 初始缩放
-        scaleLimit: { min: 0.25, max: 4 }, // 缩放上下限
-        left: 40,
-        right: 40,
-        top: 24,
-        bottom: 48, // 四周留白，给图例/缩放按钮腾位置
-        categories: [...CATEGORIES], // 图例分类，决定节点颜色
+        layout: "force",
+        roam: true,
+        roamTrigger: "global",
+        draggable: true,
+        zoom: compact ? 1.35 : 1,
+        scaleLimit: { min: 0.25, max: 4 },
+        left: compact ? 20 : 40,
+        right: compact ? 20 : 40,
+        top: compact ? 20 : 24,
+        bottom: compact ? 32 : 48,
+        categories: [...CATEGORIES],
         data: nodes.map((node) => ({
           id: node.id,
           name: node.name,
           category: categoryIndex(node),
-          symbolSize: symbolSize(node, degree.get(node.id) ?? 1), // 节点圆点大小
+          symbolSize: symbolSize(
+            node,
+            degree.get(node.id) ?? 1,
+            compact ? 1.28 : 1,
+          ),
           label: {
             show: true,
             position: "bottom" as const,
-            distance: 8, // 文字离节点的间距
+            distance: 8,
             color: "#434343",
-            fontSize: node.kind === "document" ? 12 : 11,
+            fontSize:
+              node.kind === "document"
+                ? compact
+                  ? 13
+                  : 12
+                : compact
+                  ? 12
+                  : 11,
             fontWeight: node.kind === "document" ? 600 : 400,
             formatter: () => shortName(node.name),
           },
@@ -172,33 +199,41 @@ function buildOption(
           source: edge.source,
           target: edge.target,
           relation: edge.relation,
-          silent: true, // 边不响应点击/悬停高亮，避免挡节点
+          silent: true,
           lineStyle: edgeLineStyle(edge.kind),
         })),
-        force: {
-          repulsion: 160, // 节点互斥力，越大越散
-          gravity: 0.1, // 向中心聚拢，防止飞出画布
-          edgeLength: 70, // 理想边长
-          friction: 0.5, // 阻尼，越大停得越快
-          layoutAnimation: false, // 关掉入场动画，大数据更稳
-        },
-        labelLayout: { hideOverlap: true, moveOverlap: "shiftY" }, // 重叠标签隐藏或纵向错开
+        // layoutAnimation 必须开，关掉节点会叠在原点只剩箭头空转
+        force: compact
+          ? {
+              repulsion: 240,
+              gravity: 0.05,
+              edgeLength: 110,
+              friction: 0.72,
+              layoutAnimation: true,
+            }
+          : {
+              repulsion: 160,
+              gravity: 0.12,
+              edgeLength: 70,
+              friction: 0.68,
+              layoutAnimation: true,
+            },
+        labelLayout: { hideOverlap: true, moveOverlap: "shiftY" },
         lineStyle: { opacity: 0.9 },
         emphasis: {
-          focus: "adjacency", // 高亮当前节点及其相邻边/点
-          scale: 1.12, // 悬停时节点略放大
+          focus: "adjacency",
+          scale: 1.12,
           lineStyle: { width: 2.6 },
           label: { fontWeight: 700 },
         },
         blur: {
-          // focus=adjacency 时，非相邻元素走这里，压暗背景
           itemStyle: { opacity: 0.2 },
           lineStyle: { opacity: 0.08 },
           label: { opacity: 0.15 },
         },
-        edgeSymbol: ["none", "arrow"], // 起点无标记，终点画箭头
+        edgeSymbol: ["none", "arrow"],
         edgeSymbolSize: [0, 8],
-        edgeLabel: { show: false }, // 边上不写字，关系名放 tooltip
+        edgeLabel: { show: false },
       },
     ],
   };
@@ -211,50 +246,87 @@ export default function ForceGraph({
   chartRef,
 }: Props) {
   const elRef = useRef<HTMLDivElement>(null);
+  const chartInnerRef = useRef<ECharts | null>(null);
   const clickRef = useRef(onNodeClick);
   const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
   clickRef.current = onNodeClick;
   nodesRef.current = nodes;
+  edgesRef.current = edges;
+  const dataKey = graphDataKey(nodes, edges);
 
   useEffect(() => {
     const el = elRef.current;
     if (!el) return;
 
-    let chart: ECharts | null = null;
     let disposed = false;
     let lastSize = { w: 0, h: 0 };
 
-    const render = () => {
-      if (disposed || el.clientWidth < 80 || el.clientHeight < 80) return;
-      const sizeChanged =
-        el.clientWidth !== lastSize.w || el.clientHeight !== lastSize.h;
-      lastSize = { w: el.clientWidth, h: el.clientHeight };
-      if (!chart) {
-        chart = echarts.init(el);
-        chart.on("click", (params) => {
-          if (params.dataType !== "node") return;
-          const id = String((params.data as { id?: string }).id ?? "");
-          const node = nodesRef.current.find((n) => n.id === id);
-          if (node) clickRef.current?.(node);
-        });
-        bindHandle(chartRef, chart);
-        chart.setOption(buildOption(nodes, edges), { notMerge: true });
-        return;
-      }
-      if (sizeChanged) chart.resize();
+    const applyOption = (chart: ECharts) => {
+      chart.setOption(
+        buildOption(
+          nodesRef.current,
+          edgesRef.current,
+          isChatCanvas(el.clientHeight),
+        ),
+        { notMerge: true },
+      );
     };
 
-    render();
-    const ro = new ResizeObserver(render);
-    ro.observe(el);
+    const mount = () => {
+      if (disposed || chartInnerRef.current) return;
+      if (el.clientWidth < 80 || el.clientHeight < 80) return;
+      const chart = echarts.init(el);
+      chartInnerRef.current = chart;
+      lastSize = { w: el.clientWidth, h: el.clientHeight };
+      chart.on("click", (params) => {
+        if (params.dataType !== "node") return;
+        const id = String((params.data as { id?: string }).id ?? "");
+        const node = nodesRef.current.find((n) => n.id === id);
+        if (node) clickRef.current?.(node);
+      });
+      bindHandle(chartRef, chart);
+      applyOption(chart);
+    };
 
+    const onResize = () => {
+      if (disposed) return;
+      if (!chartInnerRef.current) {
+        mount();
+        return;
+      }
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w === lastSize.w && h === lastSize.h) return;
+      lastSize = { w, h };
+      chartInnerRef.current.resize();
+    };
+
+    mount();
+    const ro = new ResizeObserver(onResize);
+    ro.observe(el);
     return () => {
       disposed = true;
       ro.disconnect();
-      chart?.dispose();
+      chartInnerRef.current?.dispose();
+      chartInnerRef.current = null;
       if (chartRef) chartRef.current = null;
     };
-  }, [chartRef, nodes, edges]);
+  }, [chartRef]);
+
+  useEffect(() => {
+    const chart = chartInnerRef.current;
+    if (!chart) return;
+    const el = elRef.current;
+    chart.setOption(
+      buildOption(
+        nodesRef.current,
+        edgesRef.current,
+        isChatCanvas(el?.clientHeight ?? 0),
+      ),
+      { notMerge: true },
+    );
+  }, [dataKey]);
 
   return <div ref={elRef} className="kh-force-wrap" />;
 }
@@ -278,9 +350,9 @@ export function EntityTypePie({ items }: PieProps) {
       series: [
         {
           type: "pie",
-          radius: ["42%", "68%"], // 内外半径，做成环形图
+          radius: ["42%", "68%"],
           center: ["50%", "50%"],
-          avoidLabelOverlap: true, // 标签自动错开
+          avoidLabelOverlap: true,
           itemStyle: { borderColor: "#fff", borderWidth: 2 },
           label: { fontSize: 11, color: "#595959" },
           data,

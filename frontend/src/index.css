@@ -468,9 +468,14 @@ body,
 
 .kh-trace-eval.failed .kh-trace-node,
 .kh-trace-kb.failed .kh-trace-node,
+.kh-trace-graph.failed .kh-trace-node,
 .kh-trace-web.failed .kh-trace-node {
   border-color: #ff4d4f;
   background: #ff4d4f;
+}
+
+.kh-trace-graph .kh-trace-node {
+  border-color: #2f54eb;
 }
 
 .kh-trace-web .kh-trace-node {
@@ -544,6 +549,11 @@ body,
 
 .kh-trace-kb .kh-panel-type {
   background: #e6f4ff;
+}
+
+.kh-trace-graph .kh-panel-type {
+  background: #f0f5ff;
+  color: #2f54eb;
 }
 
 .kh-trace-web .kh-panel-type {
@@ -692,6 +702,63 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   color: #8c8c8c;
+  font-size: 12px;
+}
+
+.kh-sheet-kicker {
+  padding: 8px 12px 0;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.kh-trace-graph-canvas {
+  position: relative;
+  height: 460px;
+  margin: 0 8px 10px;
+  border: 1px solid #f5f5f5;
+  border-radius: 6px;
+  background: #fafafa;
+  overflow: hidden;
+}
+
+.kh-trace-graph-canvas .kh-force-wrap {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+}
+
+.kh-sheet-kicker+.kh-sheet-docs,
+.kh-sheet-kicker+.kh-sheet-rels {
+  padding-top: 2px;
+}
+
+.kh-sheet-rels {
+  margin: 0;
+  padding: 0 12px 10px;
+  list-style: none;
+  border-top: 1px solid #f5f5f5;
+}
+
+.kh-sheet-rels li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f5f5f5;
+  font-size: 13px;
+  color: #262626;
+}
+
+.kh-sheet-rels li:last-child {
+  border-bottom: 0;
+}
+
+.kh-sheet-rels code {
+  padding: 0 6px;
+  border-radius: 2px;
+  background: #f0f5ff;
+  color: #2f54eb;
   font-size: 12px;
 }
 

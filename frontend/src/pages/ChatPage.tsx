@@ -299,7 +299,7 @@ export default function ChatPage() {
           知识问答
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          只会检索你有权限的文档（公开、所在团队、自己写的）。先识别意图再检索；资料不切题时由助手改写问题再查，仍不足才按需联网。
+          只会检索你有权限的文档（公开、所在团队、自己写的）。先识别意图，再按需检索知识库、图谱或联网；资料不切题时由助手改写问题再查。
         </Typography.Paragraph>
         <div className="kh-chat-log-wrap">
           <div
