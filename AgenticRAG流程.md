@@ -27,7 +27,7 @@
 | 检索时机 | agent 之前，固定一次 | agent 循环内，模型决定 |
 | 谁决定重试 | 代码写死一次纠正重试 | 模型（看 `eval.ok` / `insufficient`） |
 | 多跳 | 不支持 | 支持（检索→改写→再检索） |
-| 工具 | 只有 `web_search` | `retrieve_knowledge` / `rewrite_query` / `web_search` |
+| 工具 | 只有 `web_search` | `retrieve_knowledge` / `rewrite_query` / `retrieve_graph` / `web_search` |
 | 意图 | `classify` 没接主流程 | `classify` 决定挂哪些工具 + `data-intent` |
 | 延迟 | 可预测 | 多轮模型调用，较高 |
 | 可复现 | 强 | 弱（模型自主） |
@@ -85,8 +85,10 @@ start → data-session → data-status(intent) → data-intent
 ```python
 { "intent": "kb" | "chitchat" | "profile" | "web" | "kb_then_web",
   "label": "知识库",
-  "query": "差旅审批流程",        # 建议检索词
+  "query": "差旅审批流程",           # 建议检索词（知识库用）
+  "graph_queries": ["差旅", "审批"],   # 图谱短实体名（仅 kb）
   "allow_retrieve": True,
+  "allow_graph": True,             # 与 allow_retrieve 相同
   "allow_web": False }
 ```
 
@@ -95,12 +97,17 @@ start → data-session → data-status(intent) → data-intent
 | 判定 | 原语 | 说明 |
 |---|---|---|
 | 意图 | TypeSafe `Choice`（5 路） | 判别式，便宜快 |
-| 是否要改写 | TypeSafe `Choice`（3 路：standalone / needs_context / no_retrieve） | 自足就跳过 LLM |
-| 改写文本 | LLM `RewriteResult` | TypeSafe 生成不了自由文本 |
+| 是否要改写 | TypeSafe `Choice`（3 路：standalone / needs_context / no_retrieve） | 非 kb 自足才跳过 LLM |
+| 改写文本 + 图谱短实体名 | LLM `RewriteResult`（`standalone_query` + `graph_queries`） | TypeSafe 生成不了自由文本/实体名 |
+
+**只有依赖上文的追问（gate=`needs_context` / 门控不可用）才调一次 LLM，同时产出 `standalone_query` + `graph_queries`。** 自足问题跳过：
+- 自足 → `query` 用原问题、`graph_queries` 为空；图谱短实体名由模型在 `retrieve_graph` 入参里现抽（图谱工具照常挂载）；
+- 依赖上文 → LLM 改写消解指代，并预抽图谱短实体名（作提示）；
+- `no_retrieve`（寒暄）→ 跳过。
 
 回退：TypeSafe 未装 / 未配 key / 失败 → 用 LLM 的 `need_retrieve` 推导（True→kb，False→chitchat），再不行落 `kb`（宁可多检索不漏制度）。
 
-> 与 TS 差异：TS 的 `classify` 用 LLM 结构化输出（`routeSchema` 一次给出 intent + standalone_query）；本项目把「意图/是否改写」换成 TypeSafe，改写仍是 LLM。对调用方契约一致。
+> 与 TS 差异：TS 的 `classify` 用 LLM 结构化输出（`routeSchema` 一次给出 intent + standalone_query + graph_queries）；本项目把「意图」换成 TypeSafe，改写 + 图谱词仍是一次 LLM 调用（`RewriteResult`）。对调用方契约一致。
 
 ### 4.3 记忆与摘要
 
@@ -134,15 +141,15 @@ HumanMessage：
 |---|---|---|---|
 | chitchat | ✗ | ✗ | 无 |
 | profile | ✗ | ✗ | 无 |
-| kb | ✓ | ✗ | retrieve_knowledge, rewrite_query |
+| kb | ✓ | ✗ | retrieve_knowledge, rewrite_query, retrieve_graph |
 | web | ✗ | ✓ | web_search |
-| kb_then_web | ✓ | ✓ | retrieve_knowledge, rewrite_query, web_search |
+| kb_then_web | ✓ | ✓ | retrieve_knowledge, rewrite_query, retrieve_graph, web_search |
 
-系统提示由 `system_for_plan(plan)` 生成，写死循环规则：`retrieve_knowledge → 若 eval.ok 用 context 作答并标 [n] → 若 insufficient 先 rewrite_query 再查（最多两次）→ 两次后仍不足才联网 → 不要第三次`，并按意图加禁用语（`不要调用 web_search` / `禁止编造制度` / `不要调用任何工具` 等）。
+系统提示由 `system_for_plan(plan)` 生成。`allow_retrieve && allow_graph`（kb / kb_then_web）时要求**第一步在同一次回复里并行调用 `retrieve_knowledge` 和 `retrieve_graph`**，再按循环走：`若 eval.ok 用文档 context 作答并标 [n] → insufficient 先 rewrite_query 再查（最多两次）→ 图谱词变了才再调 retrieve_graph → 仍不足才联网`；并按意图加禁用语（`不要调用 web_search` / `禁止编造制度` / `不要调用任何工具` / `不要调用 retrieve_graph` 等）。
 
-中间件：`ModelCallLimitMiddleware(run_limit=6, exit_behavior="end")`（工具内部的评估/改写 LLM 已隔离，不计入）。
+模型开了 `parallel_tool_calls`（`extra_body`）；中间件 `ModelCallLimitMiddleware(run_limit=8, exit_behavior="end")`（工具内部的评估/改写 LLM 已隔离，不计入）。
 
-### 4.5 agent 循环（三个工具）
+### 4.5 agent 循环（四个工具）
 
 #### `retrieve_knowledge(query, top_k?)`
 
@@ -170,6 +177,21 @@ query = rewrite_after_retrieve(question, last.used_query, last.grade, last.raw_h
 if not query:         返回 {error, previousQuery, reason}
 返回 {query, previousQuery, reason, focus}
 ```
+
+#### `retrieve_graph(query: string)`
+
+```
+keywords = [*plan.graph_queries, *(query 非空则加入)]   # plan 词 + 工具入参
+hit = graph_build_service.retrieve_for_chat(keywords, limit=8, scope=access_from_user(user))
+push data-graph(hit)                      # 给前端画关系
+return {query, entities, relations, documents,
+        context: format_graph_context(hit),
+        insufficient: not entities and not relations}
+```
+- 只返回「实体关系 + 来源文档」，**不是制度原文**；系统提示明确要求仍用 `retrieve_knowledge` 取条文。
+- 入参是短实体名（空格 / `/` 分隔）；`plan.graph_queries` **仅在「本轮依赖上文、走了 LLM 改写」时有值**（作提示），自足轮次为空，靠模型自己抽。
+- 图匹配用短实体名的**相等 / 前缀 / 后缀 + 别名**（不用 CONTAINS，避免「发票」命中整篇制度标题）。
+- Neo4j 不可用时返回空命中，不阻断作答。
 
 #### `web_search(query, count?)`
 
@@ -263,6 +285,14 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 
 返回 `{query, previousQuery, reason, focus}` 或 `{error}`。
 
+### `retrieve_graph`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `query` | string | 短实体名，多个用空格或 `/` 分隔，如 `发票 / 报销`（不要整句） |
+
+返回 `{query, entities[], relations[], documents[], context, insufficient}`。实际 `keywords = plan.graph_queries + 工具入参`。
+
 ### `web_search`
 
 | 字段 | 类型 | 说明 |
@@ -279,8 +309,9 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 | `start` / `finish` / `error` | — | 协议帧 |
 | `data-session` | `{sessionId}` | 会话 id |
 | `data-status` | `{stage, text}` | 过程条：`intent` / `rewrite` |
-| `data-intent` | `{intent, label, query, allowRetrieve, allowWeb}` | 意图卡 |
+| `data-intent` | `{intent, label, query, graphQueries, allowRetrieve, allowGraph, allowWeb}` | 意图卡 |
 | `data-eval` | `{ok, reason, text, retried, query, retryQuery}` | 检索切题评估卡 |
+| `data-graph` | `{query, entities, relations, documents}` | 图谱关系卡（`retrieve_graph`） |
 | `data-sources` | `[{index, documentId, documentTitle, heading, excerpt, score}]` | 全量快照；多次检索重复推送 |
 | `source-document` | `{sourceId, mediaType, title}` | 逐条来源 |
 | `tool-input-start` / `tool-input-available` / `tool-output-available` | — | 工具调用展示 |
@@ -306,7 +337,8 @@ _spawn(summary.fold(...))                                  # fire-and-forget
 7. **TypeSafe 判别式**：意图/切题/是否改写走 TypeSafe `Choice`，改写/评估回退走 LLM。TypeSafe 不可用不影响主流程。
 8. **sources 落库**：只存回答中实际引用 `[n]` 的条目，未标注存空列表。
 9. **`data-sources` 取最后一个**：后端每次推全量、AI SDK 无 id 会 append；前端聚合时必须取最后一份快照。
-10. **前端 `API_BASE` 必须 import**：`ChatPage` 里拼 `DefaultChatTransport.api` 用到，漏 import 会构建失败 + 运行时 `ReferenceError`。
+10. **评估上下文不能太短**：`summarize_hits` 送入评估器的正文截断用 `_RELEVANCE_SNIPPET_LEN`，**刻意比 TS `summarizeHits` 的 180 长（本项目 1200，覆盖实测最大 1016 字的 chunk）**。中文 chunk 约 700~1000 字，关键句常在中后段（实测「私车公用」在 759 字 chunk 的第 644 字）；截 180 会让评估器只看到 chunk 开头的「差旅管理办法」标题 → 误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。这是「文档搜得到、stream 查不到」的常见根因。
+11. **前端 `API_BASE` 必须 import**：`ChatPage` 里拼 `DefaultChatTransport.api` 用到，漏 import 会构建失败 + 运行时 `ReferenceError`。
 
 ---
 
@@ -319,7 +351,7 @@ backend/app/services/
 │   ├── system_for_plan       #   按意图写循环系统提示
 │   ├── _pack_retrieve_result #   命中→persist_sources + data-* 事件 + context
 │   └── AiStreamService
-│       ├── create_turn_agent     # 每轮建 agent，闭包挂三个工具
+│       ├── create_turn_agent     # 每轮建 agent，闭包挂四个工具
 │       └── stream_chat           # SSE 生成器
 ├── chat_query_rewrite.py     # TypeSafe classify / gradeHits / rewriteAfterRetrieve
 │   ├── classify              # 意图 + 建议检索词 + 工具开关（检索前追问消解在这）
@@ -327,6 +359,7 @@ backend/app/services/
 │   ├── grade_hits            # HitGrade（empty/relevant/irrelevant）
 │   └── rewrite_after_retrieve# 不足后改写（单一 RETRY_REWRITE_PROMPT，永不 None）
 ├── agentic_retrieve.py       # retrieve_and_grade / retrieve_until_relevant / to_eval
+├── graph_build.py            # KG 构建 + retrieve_for_chat（图谱对话检索）/ format / merge
 └── retrieval.py              # 混合检索：embed + ES 关键词 + PG 向量 + RRF + rerank
 ```
 
@@ -341,6 +374,7 @@ stream_chat
                                    → chat_query_rewrite_service.grade_hits
                                          → check_relevance (TypeSafe Choice → LLM 回退)
        └─ rewrite_query      → chat_query_rewrite_service.rewrite_after_retrieve
+       └─ retrieve_graph     → graph_build_service.retrieve_for_chat
        └─ web_search         → web_search_service.search
 ```
 
@@ -421,7 +455,8 @@ cd frontend && pnpm exec tsc -b && pnpm run build
 | `data-eval` | `data-eval` | `EvalCard`（每次评估一张） |
 | `data-sources` | `data-sources` | 引用区（**取最后一个**） |
 | `source-document` | `source-document` | 引用条目 |
-| `tool-input-*` / `tool-output-*` | `tool-<name>` | `RetrieveToolCard` / `RewriteToolCard` / `WebSearchCard` |
+| `data-graph` | `data-graph` | 图谱关系卡（`retrieve_graph`） |
+| `tool-input-*` / `tool-output-*` | `tool-<name>` | `RetrieveToolCard` / `RewriteToolCard` / `RetrieveGraphCard` / `WebSearchCard` |
 | `reasoning-*` | `reasoning` | `ThinkBlock` |
 | `text-*` | `text` | `AnswerMarkdown` |
 
