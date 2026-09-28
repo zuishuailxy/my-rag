@@ -32,8 +32,13 @@
       + `scripts/sweep_chunk_size.py`（chunk size，重建索引后评测，跑完恢复原尺寸）。
       实测：minScore 0.4 → recall@5 0.28（过杀）；chunk 256 → 负例误召 0.25，512/1024 一致。结论写进 README。
 - [x] **扩评测集** —— 55 条（49 正 + 6 负），覆盖 5 篇文档（差旅 / 发布 / 考勤 / 申论 / 简历）；新增 26 题。
-- [ ] **调参实验（扩展）** —— 扫 hybrid_top_k / rrf_c / embedding 模型；**加更难/多跳的题**（当前 recall 仍满分，问题太直接）。
-- [ ] **rerank 降级门控** —— rerank 配额耗尽（403）时检索降级为 RRF、`minScore` 不生效、负例全进；可加「无 rerank 时按 RRF 分 / 关键词命中数兜底过滤」。
+- [x] **调参实验（扩展）** —— `hybrid_top_k` / `rrf_c` 扫描完成：55 条上指标完全一致（recall@5 / hit@1 / MRR 均 1.00）
+      —— 库太小没区分度，**记为结论而非跳过**（避免为了有结论而编调参）。
+- [ ] **加更难 / 多跳的评测题** —— 当前 recall 满分，题目太直接；近义改写 + 跨文档多跳题才能拉开 recall。
+- [ ] **扫 embedding 模型** —— 换 embedding 需全量重建索引（同 chunk 扫描套路）。
+- [x] **rerank 降级门控** —— rerank 不可用时不再直接返回 RRF，改用**向量余弦相似度**兜底
+      （`RAG_MIN_VECTOR_SCORE=0.37`）：负例空召回率 0.00 → 0.83、recall 不掉。
+      阈值来自实测（正例期望文档 ≥0.381 / 负例全候选 5/6 ≤0.355）；剩余 1 条硬负例 0.418，向量分分不开。
 - [x] **评测脚本提示 rerank 不可用** —— `eval_retrieval.py` 统计 `RerankerService` 告警，降级时显式提示。
 - [x] **reranker 换型 + 阈值重校** —— 换 `qwen3.7-text-rerank`（原 `gte-rerank-v2` 仅免费额度可用，耗尽即 403）；
       `minScore` 由 gte 时代的 `0.1` 重校为 **`0.7`**（55 条实测安全区间 0.55~0.84，取中点）

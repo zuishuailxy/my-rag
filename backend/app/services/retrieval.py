@@ -4,7 +4,8 @@ chunk 级混合检索编排
 链路：
   1. 查询向量化（失败降级为 None，仅走关键词）
   2. 粗召回：ES 关键词 + PG 向量 → RRF 融合（hybrid_search，候选数 = RAG_HYBRID_TOP_K）
-  3. 精排：全部融合候选交给 Reranker（fused.length，非先截 topK），失败则保持 RRF 顺序
+  3. 精排：全部融合候选交给 Reranker（fused.length，非先截 topK）；
+     失败（配额 / 网络 / 未配 Key）则降级为 RRF 顺序，并用向量余弦相似度兜底过滤
   4. 过滤：minScore > 0 时按 rerank relevance_score 下限过滤，再截 topK
 返回 topK 条 chunk 详情（dict，camelCase，对齐 schema）。
 """
@@ -28,11 +29,17 @@ class HybridRetrievalService:
         hybrid_top_k: int | None = None,
         rrf_c: int | None = None,
         min_score: float | None = None,
+        min_vector_score: float | None = None,
     ) -> None:
         # 缺省由 search.hybrid_search / settings 读配置；此处可显式覆盖
         self._hybrid_top_k = hybrid_top_k
         self._rrf_c = rrf_c
         self._min_score = settings.RAG_MIN_SCORE if min_score is None else min_score
+        self._min_vector_score = (
+            settings.RAG_MIN_VECTOR_SCORE
+            if min_vector_score is None
+            else min_vector_score
+        )
 
     async def retrieve(
         self, query: str, top_k: int = 5, user: AuthUser | None = None
@@ -92,7 +99,23 @@ class HybridRetrievalService:
             )
             return ordered
 
-        return fused[:top_k]
+        # rerank 不可用：保持 RRF 顺序；若调用方要求过滤（minScore > 0），
+        # 改用向量余弦相似度兜底 —— 否则阈值整体失效，无关问题会全部漏进来
+        # （实测负例空召回率 1.00 → 0.00）。显式关过滤（minScore <= 0）时不介入。
+        if self._min_score <= 0:
+            return fused[:top_k]
+        fallback = [
+            r
+            for r in fused
+            if (r.get("vectorScore") or 0.0) >= self._min_vector_score
+        ]
+        logger.warning(
+            "rerank 不可用，降级为向量相似度兜底：minVectorScore=%s, fused=%d, kept=%d",
+            self._min_vector_score,
+            len(fused),
+            len(fallback),
+        )
+        return fallback[:top_k]
 
 
 # 全局单例

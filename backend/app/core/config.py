@@ -195,6 +195,16 @@ class Settings(BaseSettings):
     # 而文档搜索（ES kh_document，不走 rerank）却能找到。
     RAG_MIN_SCORE: float = 0.7
 
+    # ---- rerank 降级兜底----
+    # rerank 不可用（配额 / 网络 / 未配 Key）时的兜底门槛：改用向量余弦相似度过滤候选。
+    # 55 条评测集实测（关闭 rerank）：正例（期望文档的向量分）最低 0.381；负例（全候选最高分）
+    # 5/6 ≤ 0.355 → 取 0.37：过滤 5/6 负例且**零误杀**（负例空召回率 0.00 → 0.83）。
+    # 余下 1 条硬负例（问「食堂菜单」命中差旅餐饮补贴）高至 0.418，与正例下界重叠，
+    # 向量分**无法**分开 —— 完整过滤仍需 reranker，这里只做兜底、不追求等价。
+    # ⚠️ 与 embedding 模型绑定；样本量小，扩库后需复核。
+    # 仅在调用方要求过滤（RAG_MIN_SCORE > 0）时生效，不改变「显式关过滤」的语义。
+    RAG_MIN_VECTOR_SCORE: float = 0.37
+
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
     RABBITMQ_ENABLED: bool = True
     # 本地开发走宿主机映射端口 5672；容器内由 compose 覆盖为 amqp://rabbitmq:5672
