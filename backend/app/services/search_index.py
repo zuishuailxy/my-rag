@@ -310,7 +310,7 @@ class SearchIndexService:
 
 
 def _utc_iso() -> str:
-    """ES date 字段用的 UTC ISO-8601（).toISOString()）"""
+    """ES date 字段用的 UTC ISO-8601（toISOString(）"""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 

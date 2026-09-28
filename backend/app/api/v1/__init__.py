@@ -1,7 +1,7 @@
 """
 API v1 路由
 
-鉴权：所有子 router 用 auth_router()（= APIRouter(route_class=AuthRoute)），
+鉴权：所有子 router 用 auth_router()（= APIRouter(route_class=AuthRoute），
 默认**全部需要登录**，公开接口在 endpoint 上标 @public()。
 见 app/api/auth_route.py 的说明。
 """

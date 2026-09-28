@@ -5,10 +5,9 @@
 - GET|POST /api/v1/ai/sessions：会话分页 / 新建
 - GET /api/v1/ai/sessions/{id}/messages：会话消息列表
 - PATCH|DELETE /api/v1/ai/sessions/{id}：改名 / 删除
-均需 `search` 权限（)）。
+均需 `search` 权限。
 
-状态码刻意差异：/rag/search 与 /ai/chat 是查询类 POST，本项目统一返回 200（
-`@Post()）；口径与理由见 api/v1/search.py 模块注释。
+状态码刻意差异：/rag/search 与 /ai/chat 是查询类 POST，本项目统一返回 200（`@Post(）；口径与理由见 api/v1/search.py 模块注释。
 """
 from typing import Annotated, Any, cast
 
@@ -106,7 +105,7 @@ def _message_vo(m: AiMessage) -> MessageResponse:
 async def rag_search(dto: RagSearchRequest, user: _USER) -> list[HybridChunkItem]:
     """RAG 混合检索：只召回不生成回答，返回 kh_chunk 命中详情
 
-    传当前用户计算可见性范围（) user)）。
+    传当前用户计算可见性范围（user）。
     """
     items = await hybrid_retrieval_service.retrieve(
         dto.query.strip(), top_k=dto.topK, user=user

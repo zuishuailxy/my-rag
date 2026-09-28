@@ -73,8 +73,7 @@ class UserService:
         return (await session.scalars(stmt)).first()
 
     async def find_by_email(self, session: AsyncSession, email: str) -> User | None:
-        """按邮箱查未删除用户；不做小写归一（，
-        Redis 侧验证码 key 才 lower()，）"""
+        """按邮箱查未删除用户；不做小写归一（Redis 侧验证码 key 才 lower()）"""
         stmt = select(User).where(User.email == email, User.deleted.is_(False))
         return (await session.scalars(stmt)).first()
 

@@ -61,7 +61,7 @@ WRITE_MAX_ATTEMPTS = 3
 
 
 def _now_iso() -> str:
-    """当前时间 ISO-8601 字符串（).toISOString()）"""
+    """当前时间 ISO-8601 字符串（toISOString(）"""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -1023,7 +1023,7 @@ class GraphBuildService:
         etype = (entity_type or "").strip() or None
         date_from = (from_time or "").strip() or None
         date_to = (to_time or "").strip() or None
-        # 默认 24，夹取 1..80（), 80)）
+        # 默认 24，夹取 1..80（80）
         limit = min(max(doc_limit if doc_limit is not None else 24, 1), 80)
         # 可见性参数（$unrestricted / $accessUserId / $accessTeamIds）
         vis = neo4j_access_params(scope)

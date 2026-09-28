@@ -3,7 +3,7 @@
 
 （2026-09-01）：
 id / userId / roleId / createdAt。（都在 DDL 里，
-TypeORM 同步自数据库）；Python 侧在 ORM 层显式声明（ForeignKey + uk_kh_user_role_user_role
+Python 侧在 ORM 层显式声明（ForeignKey + uk_kh_user_role_user_role
 + idx_kh_user_role_user_id），保证 create_all 语义完整。
 
 ⚠️ schema 真相源是 init-scripts/postgresql/init.sql：改字段请先改那里的 DDL 再同步本模型，

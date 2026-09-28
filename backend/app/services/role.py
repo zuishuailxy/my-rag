@@ -22,7 +22,7 @@ from app.schemas.role import RoleCreateRequest, RoleUpdateRequest
 
 
 class RoleService:
-    """角色 CRUD（路由层全部 @roles(ADMIN)）"""
+    """角色 CRUD（路由层全部 @roles(ADMIN）"""
 
     async def list_all(self, session: AsyncSession) -> list[Role]:
         """全部**启用**角色，按 roleName 升序"""

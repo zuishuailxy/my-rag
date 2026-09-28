@@ -1,5 +1,5 @@
 """
-文档相关 DTO 与响应模型（对应 TypeORM CreateDocumentDto / QueryDocumentDto 等）
+文档相关 DTO 与响应模型
 """
 
 from datetime import datetime
@@ -34,7 +34,7 @@ class DocumentCreate(BaseModel):
 
 
 class DocumentQuery(BaseModel):
-    """文档列表查询参数（对应 TypeORM QueryDocumentDto）"""
+    """文档列表查询参数"""
 
     # alias_generator: snake_case 字段 ↔ camelCase 别名（categoryId/pageSize）
     # populate_by_name: 允许用字段名（snake_case）构造，Pylance 可识别
@@ -66,7 +66,7 @@ class DocumentQuery(BaseModel):
 
 
 class DocumentUpdate(BaseModel):
-    """更新文档（字段均可选，对应 TypeORM UpdateDocumentDto）))：
+    """更新文档（字段均可选）：
     取 CreateDocumentDto 除 createBy 外的全部字段并改为可选，另加 updateBy。
     注意：新增字段时需与 DocumentCreate 保持同步。
 

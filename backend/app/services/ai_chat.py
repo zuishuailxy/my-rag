@@ -35,7 +35,7 @@ logger = logging.getLogger("AiChatService")
 
 # 溯源摘录长度
 _EXCERPT_LEN = 200
-# 上下文里每条资料正文截断（)）
+# 上下文里每条资料正文截断
 _CONTEXT_SNIPPET_LEN = 800
 # 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")

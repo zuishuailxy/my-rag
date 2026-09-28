@@ -46,7 +46,7 @@ class HybridRetrievalService:
     ) -> list[dict]:
         """对 query 执行混合检索，返回 topK 条按相关性排序的 chunk 详情
 
-        user 用于计算可见性范围（)）：
+        user 用于计算可见性范围：
         不传时退化为「只能看到公开内容」（empty_scope），不会变成不过滤。
         """
         query = query.strip()

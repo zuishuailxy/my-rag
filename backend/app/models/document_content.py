@@ -1,5 +1,5 @@
 """
-文档正文模型（对应 Mongoose DocumentContent / MongoDB document_content）
+文档正文模型（MongoDB document_content）
 
 与 PostgreSQL kh_document 一对一：_id ↔ content_id，documentId ↔ id
 """
@@ -17,7 +17,7 @@ class DocumentContent(BaseModel):
         arbitrary_types_allowed=True,
     )
 
-    # ObjectId，对应 kh_document.content_id（仿 Mongoose 客户端生成 _id）
+    # ObjectId，对应 kh_document.content_id（由应用侧生成）
     id: ObjectId = Field(default_factory=ObjectId, serialization_alias="_id")
 
     # 关联的文档元数据 ID（kh_document.id）
@@ -38,8 +38,8 @@ class DocumentContent(BaseModel):
     # 逻辑删除
     deleted: bool = Field(default=False)
 
-    # 创建时间（对应 Mongoose timestamps: true）
+    # 创建时间（应用侧写入，非数据库默认值）
     created_at: datetime | None = Field(default=None, serialization_alias="createdAt")
 
-    # 更新时间（对应 Mongoose timestamps: true）
+    # 更新时间（应用侧写入，非数据库默认值）
     updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")

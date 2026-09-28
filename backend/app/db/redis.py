@@ -72,7 +72,7 @@ class RedisService:
         return value if value is None else str(value)
 
     async def set(self, key: str, value: str, ttl_seconds: int | None = None) -> None:
-        """写入字符串值；ttl_seconds 非空时以 EX 秒级过期（)`）"""
+        """写入字符串值；ttl_seconds 非空时以 EX 秒级过期"""
         c = self._require_client()
         if ttl_seconds is not None:
             await c.set(key, value, ex=ttl_seconds)
@@ -108,5 +108,5 @@ class RedisService:
         return self._client
 
 
-# 全局单例（) RedisModule 导出的 RedisService）
+# 全局单例（供各服务模块导入使用）
 redis_service = RedisService()

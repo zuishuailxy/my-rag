@@ -24,7 +24,7 @@
     SQLAlchemy in_([]) 同样生成恒假条件，行为一致。
   - listMembers：inner join 未删用户，返回 userId / memberRole / username / realName。
   - listAccessibleTeamIds → list_user_team_ids：成员表 ∪ 负责人，**再按 kh_team.deleted=false
-    过滤**（：先并集，再 `find({id: In(ids), deleted: false})`）；同一结果既喂
+    过滤**（先并集，再 `find({id: In(ids), deleted: false})`）；同一结果既喂
     AuthUser.teamIds（文档可见性）又喂 listMine。
   - listMine：登录即可的「我的团队」列表，按 sort ASC / created_at ASC 排序。
 """

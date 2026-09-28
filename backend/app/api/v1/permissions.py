@@ -1,6 +1,6 @@
 """权限管理路由
 
-双层守卫（) + 方法级 @RequirePermission）：
+双层守卫（+ 方法级 @RequirePermission）：
   - 类级 @Roles(ADMIN) → 每个端点 @roles(RoleCode.ADMIN)
   - 方法级 @RequirePermission(code) → 对应端点加
     dependencies=[Depends(require_permission(code))]

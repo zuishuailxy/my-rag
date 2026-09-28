@@ -54,7 +54,7 @@ async def _vector_recall(
     """PG doc_chunk 余弦召回 → [(chunk_id, cosine_similarity)]（<=> 为余弦距离）
 
     可见性：本项目向量在 PG，故这里 JOIN kh_document 按可见性过滤
-    （)）。
+    。
     用 JOIN 而非在 doc_chunk 冗余 is_public，好处是文档改权限立即生效、无需同步。
     """
     where_sql, vis_params = _visibility_sql(scope)

@@ -25,7 +25,7 @@ _FORBIDDEN = "权限不足"
 
 
 def require_permission(*codes: str) -> Callable[..., Coroutine[Any, Any, None]]:
-    """要求当前用户拥有 codes 中至少一个权限码（对应 @RequirePermission(...)）
+    """要求当前用户拥有 codes 中至少一个权限码（对应 @RequirePermission(）
 
     返回 FastAPI 依赖可包裹的协程；在路由上用
     `dependencies=[Depends(require_permission("..."))]` 挂载。

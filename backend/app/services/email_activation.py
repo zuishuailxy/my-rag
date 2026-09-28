@@ -5,7 +5,7 @@
 - token → userId：用户点激活链接时，用 token 查出要激活的账号
 - userId → token：同一用户只保留一个有效 token，重发时先按 userId 找到并作废旧的
 
-token 用 secrets.token_hex(32)（).toString('hex')，64 个 hex 字符）。
+token 用 secrets.token_hex(32)（toString('hex')，64 个 hex 字符）。
 消费即失效：consumeToken 校验通过后两侧 key 一起删除，一次性使用。
 """
 import logging

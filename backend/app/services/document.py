@@ -1,5 +1,5 @@
 """
-文档服务（对应 TypeORM DocumentService）
+文档服务（元数据 PostgreSQL + 正文 MongoDB）
 
 - 元数据：PostgreSQL（kh_document，SQLAlchemy 异步会话）
 - 正文：MongoDB（document_content，motor）
@@ -238,7 +238,7 @@ class DocumentService:
 
         支持按标题模糊、分类 / 团队 / 作者 / 状态筛选；默认排除已软删记录。
 
-        可见性（)` 分支）：
+        可见性（` 分支）：
         普通用户只能看到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」：
           - 不受限（ADMIN / REVIEWER）：不加任何可见性条件，与原先行为一致
           - 有团队：author_id = 我
@@ -341,7 +341,7 @@ class DocumentService:
         """查询文档详情（默认附带 Mongo 正文）
 
         可见性：scope 非空时按 can_read_document 判权，读不到抛 403「无权查看该文档」
-        （)` 里的 `if (user && !canReadDocument(...))`）。
+        （` 里的 `if (user && !canReadDocument(...))`）。
 
         scope=None 表示不判权 ——，仅供脚本 /
         内部调用；HTTP 端点（GET /documents/{id}）**必须**传 access_from_user(user)，
@@ -380,7 +380,7 @@ class DocumentService:
         两者都为了让客户端无法伪造归属 / 审计人（DTO 字段仍在，服务层忽略）。
 
         写权：ADMIN 或作者本人，否则 403「无权修改该文档」
-        （)`，位置在取到实体之后、状态校验之前）。
+        （`，位置在取到实体之后、状态校验之前）。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -506,7 +506,7 @@ class DocumentService:
         """软删除文档：Postgres、Mongo 两侧都将 deleted 置为 true（不物理删正文），
         并异步清理 ES 搜索索引与向量块（MQ 投递失败只记日志）
 
-        写权：ADMIN 或作者本人，否则 403（)`）。
+        写权：ADMIN 或作者本人，否则 403。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -670,7 +670,7 @@ class DocumentService:
         - 需审核：Draft / Published → PendingReview（不建索引）
         - 免审：Draft / Published / Archived → Published + 建索引
 
-        写权：ADMIN 或作者本人，否则 403（)`）。
+        写权：ADMIN 或作者本人，否则 403。
         """
         logger.info("发布文档：documentId=%s", doc_id)
 
@@ -734,7 +734,7 @@ class DocumentService:
     ) -> dict:
         """归档：Published → Archived，清索引
 
-        写权：ADMIN 或作者本人，否则 403（)`）。
+        写权：ADMIN 或作者本人，否则 403。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -759,7 +759,7 @@ class DocumentService:
     ) -> dict:
         """已发布 → 草稿（保存草稿），清索引
 
-        写权：ADMIN 或作者本人，否则 403（)`）。
+        写权：ADMIN 或作者本人，否则 403。
         """
         entity = await self._get_active(session, doc_id)
         self._assert_writable(entity, actor)
@@ -805,7 +805,7 @@ class DocumentService:
         过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索、
         文档级全文检索（POST /search）或图谱四个端点（/graph/*）命中其内容 /
         标题摘要 / 提及实体。
-        （PG 向量侧按 JOIN kh_document 实时取，不受此影响，但仍一并更新保持两侧一致。）
+        （PG 向量侧按 JOIN kh_document 实时取，不受此影响，但仍一并更新保持两侧一致）
         """
         was_published = old_status == DocumentStatus.PUBLISHED
         is_published = new_status == DocumentStatus.PUBLISHED
@@ -895,7 +895,7 @@ class DocumentService:
     def _assert_writable(doc: DocumentEntity, actor: AuthUser) -> None:
         """写权校验：只有 ADMIN 或作者本人可改
 
-        权限码（require_permission("document:edit")）只回答「能不能用这类接口」，
+        权限码（require_permission("document:edit"）只回答「能不能用这类接口」，
         不回答「能不能动**这一篇**」。缺了本校验，任何持 document:edit / document:delete
         的角色（种子里的 ROLE_USER 就同时持有两者）都能改删他人文档。
 

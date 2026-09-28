@@ -32,7 +32,7 @@ __all__ = [
 # 检索改写上下文的截断长度
 _REWRITE_USER_MAX_CHARS = 200
 _REWRITE_ASSISTANT_MAX_CHARS = 120
-# 改写只回看最近几轮（)`）
+# 改写只回看最近几轮
 _REWRITE_HISTORY_WINDOW = 4
 
 
@@ -73,7 +73,7 @@ def db_rows_to_messages(rows: Sequence[AiMessage]) -> list[BaseMessage]:
     """kh_ai_message 行 → LangChain 消息
 
     只取 role = user / assistant 且正文非空的行；正文先 trim，全空白则跳过
-    （); if (!text) continue;`）。
+    （if (!text) continue;`）。
     其余 role（如将来新增的 system）一律忽略 —— 与 is_working_message 同口径。
     """
     out: list[BaseMessage] = []

@@ -1,5 +1,5 @@
 """
-Elasticsearch 客户端封装（)，amqp 同款生命周期管理）
+Elasticsearch 客户端封装（amqp 同款生命周期管理）
 
 - start：健康检查；ES 不可用时只降级（记日志、置不可用），不阻断应用启动
 - close：应用退出时关闭连接

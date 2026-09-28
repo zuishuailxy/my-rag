@@ -1,5 +1,5 @@
 """
-文档元数据模型（对应 TypeORM DocumentEntity / PostgreSQL kh_document）
+文档元数据模型（PostgreSQL kh_document）
 """
 
 from datetime import datetime

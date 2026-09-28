@@ -7,7 +7,7 @@
   ChangePasswordDto → ChangePasswordRequest
   ResetPasswordDto → ResetPasswordRequest
   AssignRolesDto → AssignRolesRequest
-  vo/user.vo.ts → UserVOResponse（+ 分页 / 角色码 / 统计响应）
+  UserVOResponse（+ 分页 / 角色码 / 统计响应）
 
 （防 PG 22001 → 500，与 role 模块同款）：
 ()，超长会撞 PG 列宽变 500；
@@ -157,7 +157,7 @@ class AssignRolesRequest(BaseModel):
 
 
 class UserPageQuery(BaseModel):
-    """用户分页查询（；由路由层逐参数 Query() 组装）"""
+    """用户分页查询（由路由层逐参数 Query() 组装）"""
 
     keyword: str | None = Field(default=None, description="用户名/姓名/邮箱 模糊匹配")
     role_code: str | None = Field(default=None, description="按角色编码筛选，如 ROLE_REVIEWER")

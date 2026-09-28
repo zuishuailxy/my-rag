@@ -80,7 +80,7 @@ logger = logging.getLogger("AiStreamService")
 
 # 溯源摘录长度
 _EXCERPT_LEN = 200
-# 上下文里每条资料正文截断（)）
+# 上下文里每条资料正文截断
 _CONTEXT_SNIPPET_LEN = 800
 # 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")
@@ -365,7 +365,7 @@ def _pack_retrieve_result(
     stream_writer: Any,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """命中写入 persist_sources 并推 data-sources；context 给模型，excerpt 给前端。），
+    """命中写入 persist_sources 并推 data-sources；context 给模型，excerpt 给前端），
     每次推**全量** data-sources（前端覆盖），逐条发 source-document。
     """
     offset = len(persist_sources)

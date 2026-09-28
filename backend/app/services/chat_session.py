@@ -147,10 +147,9 @@ class ChatSessionService:
           正序——不能反过来用 ASC + limit（那取到的是最旧的 N 条）。这里必须
           走 SQL 侧 LIMIT 而不是取全量再切片：会话可能很长，全量拉进内存只为
           截 20 条是浪费。
-        - limit 做 `max(limit, 1)` 兜底（)`）：
+        - limit 做 `max(limit, 1)` 兜底：
           limit<=0 时退化成 1 条，绝不退化成「不限量」。
-          NaN 从而让 TypeORM 报错，Python 传非 int 在这里是类型错误，
-          不构造等价行为。
+          非 int 在这里直接是类型错误，不构造等价行为。
         """
         entity = await self._get_owned(session, user_id, session_id)
         stmt = (
@@ -211,7 +210,7 @@ class ChatSessionService:
     ) -> AiSession:
         """仍为默认标题时用首问覆盖
 
-        标题未变时不发 UPDATE（TypeORM save 无变更同样不落库），updated_at 不前进；
+        标题未变时不发 UPDATE（无实际变更就不落库），updated_at 不前进；
         流式版不在这里刷 updated_at，落库由 append_turn 统一处理。
         """
         entity = await self._get_owned(session, user_id, session_id)

@@ -40,7 +40,7 @@
   GET /reviews/tasks、GET /reviews/tasks/pending-count、
   POST /reviews/tasks/{taskId}/approve、POST /reviews/tasks/{taskId}/reject
   这 4 个接口同时挂 @roles 与 require_permission(document:review)。
-- 需要用户身份的接口用 Depends(get_current_user)（等价 @CurrentUser()）：
+- 需要用户身份的接口用 Depends(get_current_user)（等价 @CurrentUser(）：
   create / upload-parse 回填 authorId、createBy；update 回填 updateBy；
   approve / reject 取审核人 userId 与 `realName ?? username`。
   审核人**不从请求体取**。
@@ -254,7 +254,7 @@ async def find_all_documents(
     """按标题模糊 / 分类 / 团队 / 作者 / 状态筛选，created_at 倒序分页
 
     普通用户只看得到「自己写的 ∪ 已发布且公开 ∪ 已发布且所在团队」
-    （)` 里的 accessFromUser 分支）；
+    （` 里的 accessFromUser 分支）；
     ADMIN / REVIEWER 不受限。可见性条件与上方筛选条件是 AND 关系。
     """
     query = DocumentQuery(
@@ -482,7 +482,7 @@ async def find_one_document(
     """查询文档详情，附带 Mongo 正文
 
     读不到（他人未发布 / 非公开且非本团队）抛 403「无权查看该文档」
-    （)` 的 canReadDocument 检查）。
+    （` 的 canReadDocument 检查）。
     """
     return DocumentResponse.model_validate(
         await service.find_one(session, doc_id, scope=access_from_user(current_user))

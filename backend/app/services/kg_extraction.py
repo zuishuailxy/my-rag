@@ -30,7 +30,7 @@ from app.services.kg_extraction_schema import (
 
 logger = logging.getLogger("ExtractionService")
 
-# user 消息里正文截断长度，防超上下文（)）
+# user 消息里正文截断长度，防超上下文
 _MAX_CONTENT_CHARS = 4000
 _LLM_TEMPERATURE = 0.1
 

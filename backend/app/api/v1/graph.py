@@ -7,7 +7,7 @@ GET /api/v1/graph/edges：实体间 RELATED_TO 边列表)：全部端点挂
 require_permission("search")。USER 角色种子里已有
 search 权限码（400000000000000003），普通用户不受影响。
 
-可见性（)）：四个端点都注入当前用户并换算成
+可见性：四个端点都注入当前用户并换算成
 DocumentAccessScope，交由 services/graph_build.py 在各条 Cypher 里按
 「公开 ∪ 本人 ∪ 所在团队」过滤文档节点；ADMIN / REVIEWER 不受限。
 

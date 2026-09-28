@@ -8,7 +8,7 @@ createdAt / updatedAt / deleted(default false)。
 ；Python ORM 层用 int，
 转 string 的职责在 DTO / 响应层（与 document 模型同款约定）。
 （见下方 __table_args__），
-TypeORM 同步自数据库，Python 侧在 ORM 层显式声明以保证 create_all 语义完整。
+Python 侧在 ORM 层显式声明，以保证 create_all 语义完整。
 
 REQUIRE_EMAIL_VERIFICATION=false（默认）时注册立即可登录；true 且带邮箱注册时
 email_verified 与 status 一起置 0，邮件激活（activateEmail）后恢复 1（services/user.py）。

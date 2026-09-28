@@ -1,6 +1,6 @@
 """团队管理路由
 
-双层守卫（) + 方法级 @RequirePermission('system:team')）：
+双层守卫（+ 方法级 @RequirePermission('system:team'）：
   - 类级 @Roles(ADMIN) → 每个端点 @roles(RoleCode.ADMIN)
   - 方法级 @RequirePermission(code) → dependencies=[Depends(require_permission(code))]
 
@@ -130,7 +130,7 @@ async def team_tree(
     session: _DB,
     root_only: Annotated[str | None, Query(alias="rootOnly")] = None,
 ) -> list[TeamTreeResponse]:
-    """团队树（ADMIN + system:team) + @RequirePermission('system:team')）
+    """团队树（ADMIN + system:team) + @RequirePermission('system:team'）
 
     rootOnly=true 只返回根节点。
     """

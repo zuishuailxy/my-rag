@@ -5,7 +5,7 @@
 
 为什么不用中间件
 ────────────────
-BaseHTTPMiddleware（含 @app.middleware("http")）是纯 ASGI 中间件，运行在**路由匹配之前**，
+BaseHTTPMiddleware（含 @app.middleware("http"）是纯 ASGI 中间件，运行在**路由匹配之前**，
 那一刻 scope 里只有 path，没有 route / endpoint（已实测：has_route=False），因此读不到
 @Public() 打在 endpoint 函数上的标记，只能退化成硬编码路径白名单。白名单与路由定义分离在
 两处，新增公开路由忘了同步 → 接口被自己的守卫拦成 401，而路由文件里看不出任何异常。
@@ -101,7 +101,7 @@ def auth_router(**kwargs: Any) -> APIRouter:
 
 
 def public() -> Callable[[_F], _F]:
-    """标记接口无需登录（等价 @Public()）"""
+    """标记接口无需登录（等价 @Public(）"""
 
     def decorator(func: _F) -> _F:
         setattr(func, _IS_PUBLIC_KEY, True)

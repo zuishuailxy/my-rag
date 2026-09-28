@@ -76,8 +76,7 @@ async def refresh(dto: RefreshTokenRequest, session: _DB) -> LoginResult:
 @router.get("/verify-email", response_model=MessageResult)
 @public()
 async def verify_email(
-    # 必填 query 参数：缺失时 FastAPI 返回 422（
-    # consumeToken(undefined) → 400，）
+    # 必填 query 参数：缺失时 FastAPI 返回 422（# consumeToken(undefined) → 400）
     token: Annotated[str, Query(description="激活邮件链接中的令牌")],
     session: _DB,
 ) -> MessageResult:

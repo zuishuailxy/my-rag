@@ -8,7 +8,7 @@ id / teamId / userId / memberRole(varchar 20, default 'member') / createdAt。
 schema 真相源：init-scripts/postgresql/init.sql。两个外键无 ON DELETE CASCADE，
 删团队 / 删用户前需先解绑本表关联（与 kh_user_role 一致）。
 
-（TypeORM 同步自数据库）；Python 侧在 ORM 层显式声明
+Python 侧在 ORM 层显式声明
 （ForeignKey + uk_kh_team_member + idx_kh_team_member_user_id），与 user_role.py 同款处理。
 """
 
