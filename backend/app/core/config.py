@@ -266,8 +266,12 @@ class Settings(BaseSettings):
     # 100 并发峰值也只用 **2 条**。这里的 20+10 是给突发留的余量，不是当前必需的。
     DB_POOL_SIZE: int = 20
     DB_MAX_OVERFLOW: int = 10
-    # 拿不到连接时的等待上限（秒）；超时抛 TimeoutError（对外即 500）
+    # 拿不到连接时的等待上限（秒）；超时抛 TimeoutError（现已映射为 503）
     DB_POOL_TIMEOUT: float = 30.0
+    # ⚠️ **建连超时（秒）**：asyncpg 默认是 **60s** —— 不设的话，PG 不可用时
+    #    请求会挂满 60s 不返回也不报错（前端表现为「一直转圈」），最后才变成 500。
+    #    设成 5s 可快速失败，再由全局异常处理器转成 503（带 Retry-After）。
+    DB_CONNECT_TIMEOUT: float = 5.0
 
     # ---- LLM 成本与限流----
     # 估算单价（元 / 百万 token）。⚠️ **这是估算，不是账单**：单价随厂商调整，

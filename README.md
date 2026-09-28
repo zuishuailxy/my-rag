@@ -7,7 +7,8 @@
 - **前端**：React · TypeScript · Vite · AI SDK（自研 SSE UI Message Stream 协议）
 - **基础设施**：Docker Compose 一键编排（PostgreSQL / Elasticsearch / Neo4j / MongoDB / Redis / RabbitMQ / RustFS / Langfuse）
 
-> 设计文档见 [`AgenticRAG流程.md`](AgenticRAG流程.md)（Agentic RAG 全链路）等。
+> 📖 **想快速建立全貌读 [`项目导读.md`](项目导读.md)** —— 两条主链路图 + **功能↔代码对照表** + 逐文件职责 + 踩过的坑。
+> 深入设计见 [`AgenticRAG流程.md`](AgenticRAG流程.md)（Agentic RAG 全链路）等。
 
 ## 📈 效果与工程数据
 
@@ -343,6 +344,39 @@ connection timed out, timeout 30.00
 | `graph_build` 的 `logger.info("...count=%d", len)` | 传了 `len` 函数本身 → 日志行**永远不打印**（TypeError 被 logging 吞掉），纯粹的可观测黑洞 |
 
 > 边界：单进程、mock LLM、本开发机实测；关注的不是绝对延迟，而是**能承受的并发与峰值连接**。
+
+### 7. 依赖抖动时：让应用「活着并报告降级」，而不是「死掉且假装在服务」
+
+一次真实排查（用户报「图谱页一直转圈 + 500」）挖出了三层问题：
+
+| 层 | 现象 | 根因 |
+| --- | --- | --- |
+| 1 | 请求挂满 **60s** 才返回 | 没设连接超时 —— **asyncpg 默认 connect timeout 就是 60s** |
+| 2 | 最后返回不透明的 **500** | 连接类异常没被单独处理 |
+| 3 | 连不碰 DB 的 `/docs` 也挂死 | **启动强依赖 PG**：30 次重试后 `raise` → 进程退出，但 reloader 父进程仍握着监听套接字 → 「端口有人听、永远没人答」 |
+
+**修法（三层各一）**：
+
+1. `DB_CONNECT_TIMEOUT=5`（显式设连接超时）—— 快速失败而不是假死；
+2. 全局异常处理器把**连接性错误**映射为 **503 + Retry-After**；
+3. 启动建表失败**不再退出**，改为**降级启动**：非 DB 接口正常，`/health` 报 `database: unavailable`。
+
+**验证**（真实停掉 PostgreSQL 测的）：
+
+```
+停 PG → /docs              HTTP 200（非 DB 接口不受影响）
+停 PG → /graph/overview    HTTP 503，0.023s 返回，Retry-After: 5
+恢复 PG → 不重启应用       HTTP 200（连接池自愈）
+```
+
+> **一个需要讲清楚的取舍**：降级启动会掩盖「生产环境配错库地址」这类硬错误
+> （进程不退出、不触发重启）。所以 `/health` 是 **liveness**（永远 200 + 详情字段），
+> **readiness 应该看 `database` 字段**，而不是靠进程退出来发现。
+
+> ⚠️ 踩坑记录：异常处理器第一版只注册了 `SQLAlchemyError`，**停了 PG 一测仍是 500** ——
+> 因为异常从鉴权守卫里冒出来时是**原生 `ConnectionRefusedError`**（内置类型），
+> 根本没被 SQLAlchemy 包一层。现在按类型清单注册（见 `common/db_errors.py`），
+> 并有一条单测专门锁住这个事实。
 
 ## 📡 API 概览
 

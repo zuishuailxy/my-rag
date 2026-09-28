@@ -3,21 +3,24 @@ FastAPI 应用入口
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import models # noqa: F401 确保所有 ORM 模型注册到 Base.metadata
 from app.api.auth_route import auth_router, check_route_classes, public
+from app.common.db_errors import HANDLED_ERROR_TYPES, is_db_unavailable
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.db.es import es_service
 from app.db.mongo import close_mongo_client
 from app.db.redis import redis_service
-from app.db.session import close_db_engine, engine
+from app.db.session import close_db_engine, db_state, engine
 from app.models.base import Base
 from app.services.graph_build import graph_build_service
 
@@ -27,14 +30,33 @@ from app.services.graph_build import graph_build_service
 # （FastAPI / uvicorn 都不配置 root）——详见 app/core/logging.py 的模块注释。
 setup_logging()
 
+logger = logging.getLogger("Main")
+
 
 async def _init_database_with_retry() -> None:
-    """等待 PostgreSQL 完成恢复后建表，避免应用与数据库同时启动时产生竞态。"""
+    """等待 PostgreSQL 完成恢复后建表；**失败不阻断启动，转为降级启动**
+
+    为什么不再 `raise`（实测踩过一次，代价很大）：
+        原先 30 次重试后直接抛错 → **整个进程退出**。但 uvicorn 的 reloader 父进程
+        仍持有监听套接字 —— 表现为「端口有人监听、但永远没人处理」，所有请求
+        （**包括不碰 DB 的 /docs**）无限挂起。前端看到的就是「一直转圈」。
+
+    降级启动后：
+        - 非 DB 接口（/docs、/health、鉴权、静态）正常工作 → 可诊断、可探活；
+        - DB 相关接口由全局异常处理器返回 **503 + Retry-After**（可重试）；
+        - `/health` 会报出 `database: unavailable` 与原因；
+        - PG 恢复后**无需重启应用**：连接池会自动重连。
+
+    取舍：这会掩盖「生产环境配错库地址」这类硬错误（进程不退出、不触发重启）。
+    介意的话，用编排层的 readiness 探针看 `/health` 的 `database` 字段，而不是靠进程退出来发现。
+    """
     last_error: Exception | None = None
     for attempt in range(30):
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+            db_state.ready = True
+            db_state.last_error = None
             return
         except Exception as error:
             last_error = error
@@ -42,7 +64,13 @@ async def _init_database_with_retry() -> None:
                 break
             await asyncio.sleep(1)
 
-    raise RuntimeError("PostgreSQL 在 30 秒内未完成启动") from last_error
+    db_state.ready = False
+    db_state.last_error = f"{type(last_error).__name__}: {last_error}"[:200]
+    logger.error(
+        "PostgreSQL 不可用，应用以**降级状态**启动：非 DB 接口正常，"
+        "DB 相关接口将返回 503。原因：%s",
+        db_state.last_error,
+    )
 
 
 async def _start_rabbitmq_with_retry(rabbitmq_service: Any) -> None:
@@ -140,6 +168,40 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 依赖不可用 → 503，而不是不透明的 500。
+    # 背景：PG 在资源紧张时会 crash recovery，此时所有查询报 CannotConnectNow；
+    # 原先直接冒成 500，前端只能一直转圈后弹「Internal Server Error」——
+    # 看不出是「暂时不可用可重试」还是「代码坏了」。
+    # ⚠️ 只对**连接性**错误降级：SQL 写错（ProgrammingError）仍按 500 暴露，
+    #    否则会把真 bug 伪装成依赖抖动。
+    async def _dependency_unavailable_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        path = request.url.path
+        if not is_db_unavailable(exc):
+            logger.error("数据库错误（非连接性，按 500 暴露）：path=%s, %s", path, exc)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "服务器内部错误", "kind": "database-error"},
+            )
+        logger.warning("数据库暂时不可用，返回 503：path=%s, %s", path, str(exc)[:160])
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "数据库暂时不可用，请稍后重试",
+                "kind": "dependency-unavailable",
+                "retryable": True,
+            },
+            # 告诉客户端（与中间层）建议的退避时间
+            headers={"Retry-After": "5"},
+        )
+
+    # ⚠️ 必须为**多个类型**注册：实测停止 PG 后，异常从鉴权守卫里冒出来时是
+    # 原生 `ConnectionRefusedError`（内置），不是 SQLAlchemyError ——
+    # 只注册后者会漏掉它，依旧返回 500。具体类型见 common/db_errors.py。
+    for _exc_type in HANDLED_ERROR_TYPES:
+        app.add_exception_handler(_exc_type, _dependency_unavailable_handler)
 
     # 路由
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)

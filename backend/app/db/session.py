@@ -14,6 +14,11 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
+    # ⚠️ **必须显式设连接超时**：asyncpg 的默认 connect timeout 是 **60 秒**。
+    # 不设的后果实测过（停掉 PG 再调接口）：请求挂满 60s 不返回也不报错 ——
+    # 前端表现就是「一直转圈」，60s 后才变成一个不透明的 500。
+    # 设成 5s 后能快速失败，再由全局异常处理器转成 503（可重试）。
+    connect_args={"timeout": settings.DB_CONNECT_TIMEOUT},
     # 连接池：**必须显式配置**，不能吃默认值。
     # 压测发现：默认（pool_size 5 + max_overflow 10 = 15）在**并发 10~20** 就耗尽 ——
     # `QueuePool limit of size 5 overflow 10 reached, connection timed out`，
@@ -30,6 +35,8 @@ engine = create_async_engine(
     pool_timeout=settings.DB_POOL_TIMEOUT,
     # 回收超过 30 分钟的连接，避免拿到被中间件掐掉的死连接
     pool_recycle=1800,
+    # 连接级保活：TCP 层探测到对端已死时主动报错，而不是等下一次查询才发现
+    pool_use_lifo=True,
     # 由 DB_ECHO 单独控制（默认 false）。**刻意不用 settings.DEBUG**：DEBUG 管的是
     # /docs 开关且默认为 True，用它当开关会让每条 SQL 都进日志；而且 SQLAlchemy 的
     # echo 一旦为真就绕过 logging 级别判定（见 app/core/config.py 的 DB_ECHO 注释），
@@ -38,6 +45,17 @@ engine = create_async_engine(
 )
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+
+class DatabaseState:
+    """数据库初始化状态（供启动流程写入、健康检查读取）"""
+
+    ready: bool = False
+    last_error: str | None = None
+
+
+# 全局状态：启动时建表成功 → ready=True；失败 → 记下原因但**不阻断启动**
+db_state = DatabaseState()
 
 
 async def get_db_session() -> AsyncIterator[AsyncSession]:
