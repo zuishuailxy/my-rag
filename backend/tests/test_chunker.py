@@ -34,3 +34,18 @@ async def test_chunk_id_stable() -> None:
 def test_extract_heading() -> None:
     assert extract_heading("## 子标题\n正文") == "子标题"
     assert extract_heading("无标题正文") is None
+
+
+async def test_configure_changes_chunk_count() -> None:
+    content = "# 标题\n\n" + ("这是一句用于分块的正文内容。" * 200)
+    try:
+        chunking_service.configure(128, 16)
+        small = await chunking_service.chunk(
+            content=content, document_id="d1", document_title="T"
+        )
+    finally:
+        chunking_service.configure()  # 恢复默认（读 settings）
+    default = await chunking_service.chunk(
+        content=content, document_id="d1", document_title="T"
+    )
+    assert len(small) > len(default), "更小的 chunk size 应切出更多块"

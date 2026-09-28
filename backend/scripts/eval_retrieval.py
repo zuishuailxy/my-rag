@@ -18,6 +18,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, ".")
 
@@ -32,8 +33,59 @@ EVAL_FILE = Path(__file__).resolve().parent.parent / "eval" / "rag_eval.jsonl"
 
 
 def load_cases() -> list[dict]:
+    """读评测集 JSONL"""
     lines = [ln for ln in EVAL_FILE.read_text(encoding="utf-8").splitlines() if ln.strip()]
     return [json.loads(ln) for ln in lines]
+
+
+async def evaluate(
+    service: HybridRetrievalService, cases: list[dict], top_k: int
+) -> dict[str, Any]:
+    """跑检索并算指标（供单次评测与 chunk size 扫描复用）"""
+    positives = [c for c in cases if c.get("expect_documents")]
+    negatives = [c for c in cases if not c.get("expect_documents")]
+
+    hit_k = 0
+    hit_1 = 0
+    rr_sum = 0.0
+    misses: list[tuple[str, str, list[str]]] = []
+    for case in positives:
+        got = await service.retrieve(case["question"], top_k, None)
+        titles = [g["documentTitle"] for g in got]
+        expected = set(case["expect_documents"])
+        rank = next((i + 1 for i, t in enumerate(titles) if t in expected), None)
+        if rank:
+            hit_k += 1
+            rr_sum += 1.0 / rank
+            if rank == 1:
+                hit_1 += 1
+        else:
+            misses.append((case["id"], case["question"], titles[:3]))
+
+    empty_ok = 0
+    for case in negatives:
+        got = await service.retrieve(case["question"], top_k, None)
+        if not got:
+            empty_ok += 1
+
+    n = max(len(positives), 1)
+    return {
+        "n_positive": len(positives),
+        "n_negative": len(negatives),
+        "recall": hit_k / n,
+        "hit1": hit_1 / n,
+        "mrr": rr_sum / n,
+        "empty_rate": empty_ok / max(len(negatives), 1),
+        "misses": misses,
+    }
+
+
+def print_metrics(label: str, metrics: dict[str, Any], top_k: int) -> None:
+    print(
+        f"{label}：recall@{top_k}={metrics['recall']:.3f}  "
+        f"hit@1={metrics['hit1']:.3f}  MRR={metrics['mrr']:.3f}  "
+        f"负例空召回率={metrics['empty_rate']:.3f}"
+    )
 
 
 async def main(args: argparse.Namespace) -> int:
@@ -49,33 +101,8 @@ async def main(args: argparse.Namespace) -> int:
     min_score = args.min_score if args.min_score is not None else settings.RAG_MIN_SCORE
 
     cases = load_cases()
-    positives = [c for c in cases if c.get("expect_documents")]
-    negatives = [c for c in cases if not c.get("expect_documents")]
+    metrics = await evaluate(service, cases, args.top_k)
 
-    hit_k = 0
-    hit_1 = 0
-    rr_sum = 0.0
-    misses: list[tuple[str, str, list[str]]] = []
-    for case in positives:
-        got = await service.retrieve(case["question"], args.top_k, None)
-        titles = [g["documentTitle"] for g in got]
-        expected = set(case["expect_documents"])
-        rank = next((i + 1 for i, t in enumerate(titles) if t in expected), None)
-        if rank:
-            hit_k += 1
-            rr_sum += 1.0 / rank
-            if rank == 1:
-                hit_1 += 1
-        else:
-            misses.append((case["id"], case["question"], titles[:3]))
-
-    empty_ok = 0
-    for case in negatives:
-        got = await service.retrieve(case["question"], args.top_k, None)
-        if not got:
-            empty_ok += 1
-
-    n = max(len(positives), 1)
     print(f"\n=== RAG 检索评测（{EVAL_FILE.name}）===")
     print(
         f"参数：top_k={args.top_k} min_score={min_score} "
@@ -83,14 +110,10 @@ async def main(args: argparse.Namespace) -> int:
         f"hybrid_top_k={args.hybrid_top_k or settings.RAG_HYBRID_TOP_K} "
         f"rrf_c={args.rrf_c or settings.RAG_RRF_C}"
     )
-    print(
-        f"正例 {len(positives)}：recall@{args.top_k}={hit_k / n:.3f}  "
-        f"hit@1={hit_1 / n:.3f}  MRR={rr_sum / n:.3f}"
-    )
-    print(f"负例 {len(negatives)}：空召回率={empty_ok / max(len(negatives), 1):.3f}")
-    if misses:
-        print(f"\n未命中 {len(misses)} 题：")
-        for cid, question, top in misses:
+    print_metrics(f"正例 {metrics['n_positive']} / 负例 {metrics['n_negative']}", metrics, args.top_k)
+    if metrics["misses"]:
+        print(f"\n未命中 {len(metrics['misses'])} 题：")
+        for cid, question, top in metrics["misses"]:
             print(f"  ✗ [{cid}] {question}\n      检索到：{top}")
 
     await es_service.close()

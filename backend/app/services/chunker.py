@@ -38,11 +38,22 @@ class ChunkingService:
     """文档分块服务"""
 
     def __init__(self) -> None:
-        chunk_size = int(settings.RAG_CHUNK_SIZE * CHARS_PER_TOKEN)
-        chunk_overlap = int(settings.RAG_CHUNK_OVERLAP * CHARS_PER_TOKEN)
+        self.configure()
+
+    def configure(
+        self, chunk_size: int | None = None, chunk_overlap: int | None = None
+    ) -> None:
+        """（重）配置分块器；缺省读 `settings.RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`。
+
+        调参实验（scripts/sweep_chunk_size.py）重建索引前调用它切换尺寸。
+        """
+        size = chunk_size if chunk_size is not None else settings.RAG_CHUNK_SIZE
+        overlap = (
+            chunk_overlap if chunk_overlap is not None else settings.RAG_CHUNK_OVERLAP
+        )
         self._splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            chunk_size=int(size * CHARS_PER_TOKEN),
+            chunk_overlap=int(overlap * CHARS_PER_TOKEN),
             keep_separator=True,
             separators=SEPARATORS,
         )

@@ -28,7 +28,10 @@
 - [x] **图片 OCR（多模态第一步）** —— jpg/png/webp/bmp/gif → 视觉模型（Qwen-VL via DashScope 兼容口）
       OCR/描述 → Markdown 入索引；未配视觉模型 Key 时明确 400。配置：`VISION_API_KEY` / `VISION_MODEL` / `VISION_BASE_URL`。
 - [ ] **多模态（剩余）** —— PDF/Word 内嵌图片 OCR、音频 ASR、视频理解；补齐后才可写完整「多模态」。
-- [ ] **调参实验** —— `chunk 512/64`、`minScore=0.1` 均为默认值；做 chunk size / topK 扫描，用数据支撑选型。
+- [x] **调参实验（首轮）** —— `scripts/eval_retrieval.py`（免重建：minScore / topK / rerank / hybrid-top-k / rrf-c）
+      + `scripts/sweep_chunk_size.py`（chunk size，重建索引后评测，跑完恢复原尺寸）。
+      实测：minScore 0.4 → recall@5 0.28（过杀）；chunk 256 → 负例误召 0.25，512/1024 一致。结论写进 README。
+- [ ] **调参实验（扩展）** —— 扫 hybrid_top_k / rrf_c / embedding 模型；**扩库后 chunk size 才有区分度**。
 - [ ] **成本与限流** —— LLM 调用无预算控制；加每用户/每会话调用上限 + token/成本日志。
 - [ ] **可观测性** —— LangSmith 已接但无面板；加请求级 latency / 命中率 / 成本统计。
 
