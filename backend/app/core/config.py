@@ -184,6 +184,10 @@ class Settings(BaseSettings):
     RAG_HYBRID_TOP_K: int = 20
     # RRF 常数（与 ES RRF 默认一致）：score = Σ 1/(C + rank)
     RAG_RRF_C: int = 60
+    # pgvector HNSW 的 ef_search（搜索宽度）。它是召回率/延迟旋钮：
+    # 值越小越快但越**近似**，同一条查询两次跑可能返回不同近邻 → 评测不可复现。
+    # 默认 40；本项目块量小（10^2 级），拉到 200 代价可忽略，换来确定性结果。
+    RAG_HNSW_EF_SEARCH: int = 200
     # rerank relevance_score 下限（0–1），低于该值的候选不进入最终结果；<=0 表示不过滤。
     # ⚠️ 这个阈值**跟 reranker 模型绑定**，换模型必须重新校准（否则要么误杀、要么漏过）：
     # · gte-rerank-v2：分档偏低但离散——相关 0.13~0.47、无关 ~0.006，0.1 能分开；

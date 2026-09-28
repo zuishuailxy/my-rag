@@ -59,6 +59,14 @@ async def _vector_recall(
     """
     where_sql, vis_params = _visibility_sql(scope)
     async with async_session_factory() as session:
+        # HNSW 搜索宽度（召回/延迟旋钮）：默认 40，块量小也拉高，贴近精确检索。
+        # 注：评测飘动的**根因是 embedding 服务端非确定性**（见 _embed_query 的缓存），
+        # 不是这里；此项只是把近邻精度再推高一档。
+        # SET LOCAL 只影响本事务，不污染连接池里的连接。
+        # SET LOCAL 不接受绑定参数，只能内联；强制 int() 避免注入
+        await session.execute(
+            text(f"SET LOCAL hnsw.ef_search = {int(settings.RAG_HNSW_EF_SEARCH)}")
+        )
         rows = await session.execute(
             text(
                 "SELECT c.chunk_id, 1 - (c.embedding <=> :qv) AS sim "
@@ -204,8 +212,10 @@ async def hybrid_search(
     fused: dict[str, dict[str, float]] = {}
 
     def _add(results: list[tuple[str, float]], keyword: bool) -> None:
+        # ⚠️ 同分用 chunk_id 做确定性 tie-break：ES 同分文档的返回顺序不稳定，
+        # 若只按分数排，名次会在两次运行间抖动 → RRF 结果不可复现（评测数字会飘）。
         for rank, (cid, score) in enumerate(
-            sorted(results, key=lambda x: x[1], reverse=True), start=1
+            sorted(results, key=lambda x: (-x[1], x[0])), start=1
         ):
             entry = fused.setdefault(cid, {"rrf": 0.0, "bm25": 0.0, "vector": 0.0})
             entry["rrf"] += 1.0 / (rrf_k + rank)
@@ -217,7 +227,8 @@ async def hybrid_search(
     _add(vector_results, keyword=False)
     _add(keyword_results, keyword=True)
 
-    merged = sorted(fused.items(), key=lambda kv: -kv[1]["rrf"])[:hybrid_top_k]
+    # 同上：RRF 同分也用 chunk_id 定序，保证评测可复现
+    merged = sorted(fused.items(), key=lambda kv: (-kv[1]["rrf"], kv[0]))[:hybrid_top_k]
     if not merged:
         return []
 
@@ -241,14 +252,31 @@ async def hybrid_search(
     return results
 
 
+# 查询向量缓存：同一个 query 复用同一向量
+#
+# 为什么需要：embedding 服务端存在**浮点非确定性** —— 同一段文本调用两次，
+# 返回的 1024 维向量里有 1017 维不同（最大绝对差 ~6e-3）。后果是向量通道每次
+# 跑都能拿到略微不同的近邻，评测指标在 1 条题上左右飘（实测 hit@1 0.889 ↔ 0.901）。
+# 缓存让「同一 query → 同一向量」，评测才可复现；顺带省掉重复查询的嵌入调用。
+_QUERY_VECTOR_CACHE: dict[str, list[float]] = {}
+_QUERY_CACHE_MAX = 512
+
+
 async def _embed_query(query: str) -> list[float] | None:
-    """query 向量化；失败仅走关键词"""
+    """query 向量化（带缓存）；失败仅走关键词"""
+    cached = _QUERY_VECTOR_CACHE.get(query)
+    if cached is not None:
+        return cached
     try:
-        return (await embedding_provider.embed_texts([query]))[0]
-    except Exception as err: # noqa: BLE001
-        message = str(err)
-        logger.warning("查询向量化失败，仅走关键词：%s", message)
+        vector = (await embedding_provider.embed_texts([query]))[0]
+    except Exception as err:  # noqa: BLE001
+        logger.warning("查询向量化失败，仅走关键词：%s", err)
         return None
+    # 简单容量控制：满了整体清空（查询分布长尾，无需真 LRU）
+    if len(_QUERY_VECTOR_CACHE) >= _QUERY_CACHE_MAX:
+        _QUERY_VECTOR_CACHE.clear()
+    _QUERY_VECTOR_CACHE[query] = vector
+    return vector
 
 
 def _clamp(top_k: int | None) -> int:

@@ -10,3 +10,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# 评测用冻结的查询向量（本地缓存，约 2MB；删掉即重建）
+eval/query_vectors.json

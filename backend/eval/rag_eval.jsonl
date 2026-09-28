@@ -85,3 +85,9 @@
 {"id": "x-conf-13", "question": "把代码推上生产，常规时间是什么时候？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["周二"], "category": "confusable", "difficulty": "hard"}
 {"id": "x-conf-14", "question": "简历里那位做高并发交易系统的候选人是谁？", "expect_documents": ["王磊_后端开发_13800138000"], "expect_keywords": ["王磊"], "category": "confusable", "difficulty": "hard"}
 {"id": "x-conf-15", "question": "公司里谁负责数据库变更的审批？", "expect_documents": ["数据库变更管理规范（SOP）"], "expect_keywords": ["赵磊"], "category": "confusable", "difficulty": "easy"}
+{"id": "neg-07", "question": "公司今年的营收目标是多少？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-08", "question": "怎么用 Excel 做数据透视表？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-09", "question": "今天北京限行尾号是多少？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-10", "question": "推荐几部好看的科幻电影", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-11", "question": "公司的股票代码是多少？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-12", "question": "个人护照怎么办理？", "expect_documents": [], "expect_keywords": [], "category": "negative"}

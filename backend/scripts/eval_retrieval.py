@@ -30,6 +30,38 @@ from app.services.retrieval import HybridRetrievalService  # noqa: E402
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
 
 EVAL_FILE = Path(__file__).resolve().parent.parent / "eval" / "rag_eval.jsonl"
+# 冻结的查询向量：embedding 服务端存在浮点非确定性（同文本两次调用向量不同），
+# 不冻结的话同一份评测集每次跑都会在 1~2 条题上飘。落盘后跨运行可比。
+VECTOR_CACHE_FILE = Path(__file__).resolve().parent.parent / "eval" / "query_vectors.json"
+
+
+def _load_vector_cache() -> int:
+    """载入冻结的查询向量（不存在则跳过）"""
+    import app.services.search as search_module
+
+    if not VECTOR_CACHE_FILE.exists():
+        return 0
+    try:
+        data = json.loads(VECTOR_CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    search_module._QUERY_VECTOR_CACHE.update(data)  # type: ignore[attr-defined]
+    return len(data)
+
+
+def _save_vector_cache() -> int:
+    """把本次用到的查询向量落盘，供下次跑复用（保证指标可复现）"""
+    import app.services.search as search_module
+
+    data = search_module._QUERY_VECTOR_CACHE  # type: ignore[attr-defined]
+    try:
+        VECTOR_CACHE_FILE.write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as err:
+        print(f"⚠️ 查询向量缓存写入失败（不影响本次指标）：{err}")
+        return 0
+    return len(data)
 
 
 def load_cases() -> list[dict]:
@@ -84,6 +116,7 @@ async def evaluate(
     额外按 `difficulty` 字段分组（缺省 easy），用于把「简单题满分」和
     「难题才能拉开区分度」分开看 —— 否则混合平均会被简单题淹没。
     """
+    _load_vector_cache()
     counter = _DegradationCounter()
     logging.getLogger().addHandler(counter)
     rows: list[tuple[dict, int | None, list[str]]] = []
@@ -96,6 +129,7 @@ async def evaluate(
             rows.append((case, rank, titles))
     finally:
         logging.getLogger().removeHandler(counter)
+    _save_vector_cache()
 
     by_difficulty: dict[str, list[tuple[dict, int | None, list[str]]]] = {}
     for row in rows:
@@ -147,11 +181,23 @@ async def main(args: argparse.Namespace) -> int:
     await es_service.start()
     if args.no_rerank:
         reranker_service.enabled = False
+    if args.no_vector:
+        # 消融用：把查询向量化拧成「恒失败」，走 hybrid_search 自带的单路降级分支。
+        # 这样「纯关键词」的指标是可重现的，不靠「正好欠费」这种意外状态。
+        import app.services.search as search_module  # noqa: PLC0415
+
+        async def _no_query_vector(query: str) -> None:  # noqa: ARG001
+            return None
+
+        search_module._embed_query = _no_query_vector  # type: ignore[assignment]
+
+        print("已禁用向量通道（模拟 embedding 不可用）")
 
     service = HybridRetrievalService(
         hybrid_top_k=args.hybrid_top_k,
         rrf_c=args.rrf_c,
         min_score=args.min_score,
+        min_vector_score=args.min_vector_score,
     )
     min_score = args.min_score if args.min_score is not None else settings.RAG_MIN_SCORE
 
@@ -189,5 +235,16 @@ if __name__ == "__main__":
     parser.add_argument("--hybrid-top-k", type=int, default=None)
     parser.add_argument("--rrf-c", type=int, default=None)
     parser.add_argument("--no-rerank", action="store_true")
+    parser.add_argument(
+        "--no-vector",
+        action="store_true",
+        help="禁用向量通道（模拟 embedding 不可用），用于消融纯关键词检索",
+    )
+    parser.add_argument(
+        "--min-vector-score",
+        type=float,
+        default=None,
+        help="rerank 降级时的向量相似度兜底门槛（配合 --no-rerank 扫权衡曲线）",
+    )
     parsed = parser.parse_args()
     raise SystemExit(asyncio.run(main(parsed)))

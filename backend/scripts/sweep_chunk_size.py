@@ -23,6 +23,7 @@ from app.core.config import settings  # noqa: E402
 from app.db.es import es_service  # noqa: E402
 from app.db.session import async_session_factory  # noqa: E402
 from app.services.chunker import chunking_service  # noqa: E402
+from app.services.embedding import embedding_provider  # noqa: E402
 from app.services.indexing import (  # noqa: E402
     load_all_published_documents,
     reindex_document,
@@ -31,6 +32,19 @@ from app.services.retrieval import HybridRetrievalService  # noqa: E402
 from scripts.eval_retrieval import evaluate, load_cases, print_metrics  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
+
+
+async def _assert_embedding_available() -> None:
+    """开跑前先验证 embedding 可用
+
+    重建索引必需嵌入（欠费 / 网络问题会中途失败）。虽然“先嵌入后删旧”的顺序保证了
+    单篇失败不会造成空窗，但多篇重建到一半失败会留下**混合尺寸**的索引；
+    而此时用于恢复的 finally 同样依赖嵌入，可能一起失败。所以宁可开跑前就崩。
+    """
+    try:
+        await embedding_provider.embed_texts(["preflight"])
+    except Exception as err:  # noqa: BLE001
+        raise SystemExit(f"embedding 不可用，已中止（未改动任何索引）：{err}") from err
 
 
 async def _rebuild(session: object, docs: list, size: int, overlap: int) -> int:
@@ -43,6 +57,7 @@ async def _rebuild(session: object, docs: list, size: int, overlap: int) -> int:
 
 
 async def main(args: argparse.Namespace) -> int:
+    await _assert_embedding_available()
     await es_service.start()
     cases = load_cases()
     sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
