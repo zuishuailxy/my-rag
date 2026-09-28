@@ -13,6 +13,10 @@
 # 单独停（数据卷保留，下次启动更快）。
 #
 set -uo pipefail
+# 开启作业控制：让每个后台任务独占一个**进程组**，退出时才能整组回收。
+# 为什么需要：`uv run uvicorn` / `npm run dev` 都是一层包装进程，
+# `kill $pid` 只杀包装、子进程（真正的 uvicorn / vite）会变成孤儿继续占端口 —— 实测踩过。
+set -m
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND="$ROOT/backend"
@@ -32,7 +36,10 @@ cleanup() {
   echo
   info "关闭后端与前端…"
   for pid in "${PIDS[@]:-}"; do
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    [ -z "$pid" ] && continue
+    # 负数 = 整个进程组（set -m 保证了 pid 即 pgid）；
+    # 失败再回退到单进程 kill，两者都失败就算了（进程可能已自行退出）。
+    kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
   done
   warn "基础设施仍在运行；需要停掉请执行：docker compose down"
 }
