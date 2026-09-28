@@ -73,17 +73,29 @@ def extract_citations(answer: str) -> list[int]:
     return seen
 
 
+# 比对前要剥掉的噪声：空白 + markdown/常见标点。
+#
+# 为什么要剥标点：生成会加 markdown 修饰并改写句式。实测 `` `df` 命令 `` 与期望要点
+# “df命令”因中间的反引号而被判不命中，把「引用了正确命令」误计成漏点。
+_PUNCT_RE = re.compile(
+    r"[\s`'\"“”‘’《》「」『』【】（）()\[\]{}<>*_~,，.。!！?？:：;；/\\|+\-=—]+"
+)
+
+
 def _normalize(text: str) -> str:
-    """去空白 + 转小写，用于要点匹配（避免「600 元」和「600元」判成不同）"""
-    return re.sub(r"\s+", "", text).lower()
+    """去空白 + 去标点 + 转小写，用于要点匹配"""
+    return _PUNCT_RE.sub("", text).lower()
 
 
 def fact_coverage(answer: str, facts: list[str]) -> float:
-    """要点覆盖率：facts 中有多少条出现在回答里（子串匹配）
+    """要点覆盖率：facts 中有多少条出现在回答里（去标点后子串匹配）
 
     facts 为空（如「不可回答」用例）→ 1.0，不参与扣分。
-    ⚠️ 这是便宜的近似：只判「提没提到」，判不了「说得对不对」——
-    后者交给 LLM 判分的 faithfulness。
+
+    ⚠️ 定位是**便宜的近似**：它只能判关键标识（命令名 / 数字 / 专有名词）
+    「提没提到」，**判不了「说得对不对」**——后者交给 LLM 判分的 faithfulness。
+    因此 `expect_facts` 里应写**短标识**而不要写整句话：生成会改写措辞，
+    句子级子串匹配必然误判（实测：`在指定时间执行命令` vs 生成的`在指定时间执行一个任务`）。
     """
     if not facts:
         return 1.0

@@ -39,6 +39,17 @@ def test_fact_coverage_normalizes_whitespace_and_case() -> None:
     assert fact_coverage("只提了北京", ["北京", "上海"]) == 0.5
 
 
+def test_fact_coverage_ignores_markdown_punctuation() -> None:
+    """生成会加 markdown 修饰，比对前必须先剥标点
+
+    实测踩过：`` `df` 命令 `` 与期望要点「df命令」因中间的反引号被判不命中，
+    把「引用了正确命令」误计成漏点（一批 8 条因此显示覆盖率 0）。
+    """
+    assert fact_coverage("可以用 `df` 命令查看磁盘", ["df命令"]) == 1.0
+    assert fact_coverage("**chmod** 用来变更权限", ["chmod"]) == 1.0
+    assert fact_coverage("上班时间：09:04:10", ["09:04:10"]) == 1.0
+
+
 def test_fact_coverage_empty_facts_is_perfect() -> None:
     """「不可回答」用例没有期望要点，不应被扣分"""
     assert fact_coverage("知识库里没有相关内容。", []) == 1.0

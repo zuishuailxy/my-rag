@@ -8,5 +8,51 @@
 {"id": "g-sop-03", "question": "灰度发布的比例和观察时长是多少？", "answerable": true, "expect_facts": ["10%", "15 分钟"], "expect_documents": ["02-production-release-sop"], "category": "release", "difficulty": "easy"}
 {"id": "g-sop-04", "question": "发布前检查最晚什么时候完成？", "answerable": true, "expect_facts": ["18:00"], "expect_documents": ["02-production-release-sop"], "category": "release", "difficulty": "easy"}
 {"id": "g-att-01", "question": "李宁 2019 年 3 月 1 日几点上班？", "answerable": true, "expect_facts": ["09:04:10"], "expect_documents": ["员工考勤表"], "category": "attendance", "difficulty": "easy"}
+{"id": "g-meeting-01", "question": "会议住宿费的上限是多少？", "answerable": true, "expect_facts": ["500"], "expect_documents": ["会议与培训费用管理办法"], "category": "meeting", "difficulty": "easy"}
+{"id": "g-shenlun-01", "question": "读材料的三遍阅读法是什么？", "answerable": true, "expect_facts": ["三遍阅读法"], "expect_documents": ["申论总结课"], "category": "shenlun", "difficulty": "easy"}
+{"id": "g-resume-01", "question": "梁多强通过邻居窗口优化把答案要点覆盖率提升到了多少？", "answerable": true, "expect_facts": ["67.4%"], "expect_documents": ["梁多强_Agent开发_17601230573"], "category": "resume", "difficulty": "easy"}
+{"id": "g-resume-02", "question": "这个人想找什么方向的工作？", "answerable": true, "expect_facts": ["求职意向"], "expect_documents": ["梁多强_Agent开发_17601230573"], "category": "resume", "difficulty": "hard"}
+{"id": "g-apt-01", "question": "Debian 发行版里管理 APT 软件包的命令是什么？", "answerable": true, "expect_facts": ["APT"], "expect_documents": ["apt-get"], "category": "oss", "difficulty": "easy"}
+{"id": "g-apt-02", "question": "Alpine Linux 下用什么管理软件包？", "answerable": true, "expect_facts": ["Alpine"], "expect_documents": ["apk"], "category": "oss", "difficulty": "easy"}
+{"id": "g-apt-03", "question": "哪个命令用来管理 Debian 的软件包密钥？", "answerable": true, "expect_facts": ["密钥"], "expect_documents": ["apt-key"], "category": "oss", "difficulty": "hard"}
+{"id": "g-apt-04", "question": "在 Debian 上安装、创建和管理软件包的工具是哪个？", "answerable": true, "expect_facts": ["dpkg"], "expect_documents": ["dpkg"], "category": "oss", "difficulty": "hard"}
+{"id": "g-arp-01", "question": "哪个命令可以显示和修改 IP 到 MAC 的转换表？", "answerable": true, "expect_facts": ["MAC"], "expect_documents": ["arp"], "category": "oss", "difficulty": "hard"}
+{"id": "g-arp-02", "question": "怎么确认一个 IP 是否已经被网络上的其他设备占用？", "answerable": true, "expect_facts": ["arping"], "expect_documents": ["arping"], "category": "oss", "difficulty": "hard"}
+{"id": "g-arp-03", "question": "哪个工具用来监听网络上的 ARP 记录？", "answerable": true, "expect_facts": ["arpwatch"], "expect_documents": ["arpwatch"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cron-01", "question": "只想在某个时间点执行一次命令，用什么？", "answerable": true, "expect_facts": ["at命令"], "expect_documents": ["at"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cron-02", "question": "怎么查看当前用户还有哪些待执行的任务？", "answerable": true, "expect_facts": ["atq"], "expect_documents": ["atq"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cron-03", "question": "怎么把待执行任务队列里的指定任务删掉？", "answerable": true, "expect_facts": ["atrm"], "expect_documents": ["atrm"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cron-04", "question": "想让任务等到系统不繁忙的时候再执行，用哪个命令？", "answerable": true, "expect_facts": ["系统不繁忙"], "expect_documents": ["batch"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cron-05", "question": "周期性重复执行的任务用什么管理？", "answerable": true, "expect_facts": ["crontab"], "expect_documents": ["crontab"], "category": "oss", "difficulty": "easy"}
+{"id": "g-zip-01", "question": "把文件压缩成 bz2 格式用什么命令？", "answerable": true, "expect_facts": ["bz2"], "expect_documents": ["bzip2"], "category": "oss", "difficulty": "easy"}
+{"id": "g-zip-02", "question": "解压 .bz2 压缩包用哪个命令？", "answerable": true, "expect_facts": ["bunzip2"], "expect_documents": ["bunzip2"], "category": "oss", "difficulty": "hard"}
+{"id": "g-zip-03", "question": "哪个压缩软件以压缩比极高著称？", "answerable": true, "expect_facts": ["极高压缩比"], "expect_documents": ["7z"], "category": "oss", "difficulty": "hard"}
+{"id": "g-perm-01", "question": "怎么修改文件或目录的权限？", "answerable": true, "expect_facts": ["权限"], "expect_documents": ["chmod"], "category": "oss", "difficulty": "easy"}
+{"id": "g-perm-02", "question": "怎么改变文件的所有者？", "answerable": true, "expect_facts": ["拥有者"], "expect_documents": ["chown"], "category": "oss", "difficulty": "hard", "note": "已知指标盲区：期望要点写文档用词「拥有者」，模型答「所有者」——同义词，fact_coverage 判不中，但回答正确"}
+{"id": "g-perm-03", "question": "怎么改变文件所属的用户组？", "answerable": true, "expect_facts": ["用户组"], "expect_documents": ["chgrp"], "category": "oss", "difficulty": "hard"}
+{"id": "g-perm-04", "question": "怎么改变文件本身的属性（不是权限、也不是属主）？", "answerable": true, "expect_facts": ["chattr"], "expect_documents": ["chattr"], "category": "oss", "difficulty": "hard"}
+{"id": "g-perm-05", "question": "怎么修改文件的安全上下文？", "answerable": true, "expect_facts": ["安全上下文"], "expect_documents": ["chcon"], "category": "oss", "difficulty": "hard"}
+{"id": "g-perm-06", "question": "怎么切换根目录来运行程序？", "answerable": true, "expect_facts": ["chroot"], "expect_documents": ["chroot"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cmp-01", "question": "只想判断两个文件是否完全一样，用哪个命令？", "answerable": true, "expect_facts": ["cmp"], "expect_documents": ["cmp"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cmp-02", "question": "怎么逐行比较两个文本文件的不同？", "answerable": true, "expect_facts": ["逐行"], "expect_documents": ["diff"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cmp-03", "question": "同时比较三个文件差异的命令？", "answerable": true, "expect_facts": ["diff3"], "expect_documents": ["diff3"], "category": "oss", "difficulty": "hard"}
+{"id": "g-cmp-04", "question": "按行比较两个已排序文件用什么命令？", "answerable": true, "expect_facts": ["已排序"], "expect_documents": ["comm"], "category": "oss", "difficulty": "hard"}
+{"id": "g-disk-01", "question": "想看磁盘分区还剩多少可用空间，用什么命令？", "answerable": true, "expect_facts": ["df"], "expect_documents": ["df"], "category": "oss", "difficulty": "hard"}
+{"id": "g-disk-02", "question": "想知道某个目录占了多少磁盘空间？", "answerable": true, "expect_facts": ["du命令"], "expect_documents": ["du"], "category": "oss", "difficulty": "hard"}
+{"id": "g-disk-03", "question": "怎么查看内存的使用和剩余情况？", "answerable": true, "expect_facts": ["内存"], "expect_documents": ["free"], "category": "oss", "difficulty": "easy"}
+{"id": "g-disk-04", "question": "哪个命令能替代 vmstat、iostat 做综合系统统计？", "answerable": true, "expect_facts": ["vmstat"], "expect_documents": ["dstat"], "category": "oss", "difficulty": "hard"}
+{"id": "g-disk-05", "question": "开机信息存在内核的什么地方、怎么看？", "answerable": true, "expect_facts": ["ring buffer"], "expect_documents": ["dmesg"], "category": "oss", "difficulty": "hard"}
+{"id": "g-disk-06", "question": "查看硬盘实体使用情况并给硬盘分区的命令？", "answerable": true, "expect_facts": ["fdisk"], "expect_documents": ["fdisk"], "category": "oss", "difficulty": "hard"}
+{"id": "g-misc-01", "question": "怎么探测一个文件是什么类型？", "answerable": true, "expect_facts": ["file命令"], "expect_documents": ["file"], "category": "oss", "difficulty": "easy"}
+{"id": "g-misc-02", "question": "做域名查询用哪个命令？", "answerable": true, "expect_facts": ["dig命令"], "expect_documents": ["dig"], "category": "oss", "difficulty": "easy"}
+{"id": "g-misc-03", "question": "怎么查看某个文件的 ACL？", "answerable": true, "expect_facts": ["getfacl"], "expect_documents": ["getfacl"], "category": "oss", "difficulty": "hard"}
+{"id": "g-misc-04", "question": "终端里怎么看日历？", "answerable": true, "expect_facts": ["cal命令"], "expect_documents": ["cal"], "category": "oss", "difficulty": "easy"}
+{"id": "g-misc-05", "question": "怎么把单列数据整理成多列对齐显示？", "answerable": true, "expect_facts": ["column"], "expect_documents": ["column"], "category": "oss", "difficulty": "hard"}
+{"id": "g-misc-06", "question": "备份裸设备常用哪个命令？", "answerable": true, "expect_facts": ["备份裸设备"], "expect_documents": ["dd"], "category": "oss", "difficulty": "hard"}
 {"id": "g-neg-01", "question": "明天股市会涨吗？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
 {"id": "g-neg-02", "question": "红烧肉怎么做才好吃？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
+{"id": "g-neg-03", "question": "公司今年的营收目标是多少？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
+{"id": "g-neg-04", "question": "推荐几本适合入门的理财书", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
+{"id": "g-neg-05", "question": "怎么写一份商业计划书？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
+{"id": "g-neg-06", "question": "今天北京的空气质量指数是多少？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
+{"id": "g-neg-07", "question": "怎么给盆栽浇水才不会烂根？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}

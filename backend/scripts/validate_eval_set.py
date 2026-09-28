@@ -19,7 +19,6 @@
 import asyncio
 import json
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, ".")
@@ -28,13 +27,20 @@ from sqlalchemy import text  # noqa: E402
 
 from app.db.session import async_session_factory  # noqa: E402
 
-EVAL_FILE = Path(__file__).resolve().parent.parent / "eval" / "rag_eval.jsonl"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval"
+
+# (文件名, 要点字段, 说明)：两份评测集共用同一套校验逻辑
+#   两份都要校验「期望文档标题存在 + 期望要点能在该文档里找到」
+TARGETS = [
+    ("rag_eval.jsonl", "expect_keywords", "检索侧"),
+    ("gen_eval.jsonl", "expect_facts", "生成侧"),
+]
 
 
-def load_cases() -> list[dict]:
+def load_cases(path: Path) -> list[dict]:
     return [
         json.loads(line)
-        for line in EVAL_FILE.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
 
@@ -54,37 +60,37 @@ async def load_docs() -> dict[str, str]:
 
 
 async def main() -> int:
-    cases = load_cases()
     docs = await load_docs()
-    print(f"评测集 {len(cases)} 条；知识库 {len(docs)} 篇文档\n")
+    print(f"知识库 {len(docs)} 篇文档\n")
 
     problems: list[str] = []
-    counters: dict[str, int] = defaultdict(int)
+    total = 0
 
-    for case in cases:
-        expected = case.get("expect_documents") or []
-        if not expected:
-            continue
-        for title in expected:
-            if title not in docs:
-                problems.append(f"[{case['id']}] 文档不存在：{title!r}")
-                counters["缺失文档"] += 1
-                continue
-            keywords = case.get("expect_keywords") or []
-            if keywords and not any(k in docs[title] for k in keywords):
-                problems.append(
-                    f"[{case['id']}] 期望要点都不在 {title!r} 里：{keywords}"
-                )
-                counters["要点不符"] += 1
+    for filename, fact_field, label in TARGETS:
+        cases = load_cases(EVAL_DIR / filename)
+        total += len(cases)
+        answerable = [c for c in cases if c.get("expect_documents")]
+        print(f"{label}（{filename}）：{len(cases)} 条，其中需校验 {len(answerable)} 条")
+        bad_before = len(problems)
+        for case in answerable:
+            for title in case["expect_documents"]:
+                if title not in docs:
+                    problems.append(f"[{case['id']}] 文档不存在：{title!r}")
+                    continue
+                facts = case.get(fact_field) or []
+                if facts and not any(f in docs[title] for f in facts):
+                    problems.append(
+                        f"[{case['id']}] {fact_field} 均不在 {title!r} 里：{facts}"
+                    )
+        print(f"  → {'✅ 通过' if len(problems) == bad_before else '❌ 有问题'}")
 
     if problems:
-        print("❌ 发现问题：")
+        print("\n❌ 发现问题：")
         for item in problems:
             print(f"  {item}")
-        print(f"\n汇总：{dict(counters)}")
         return 1
 
-    print("✅ 全部通过：文档标题可对上，期望要点均能在对应文档中找到")
+    print(f"\n✅ 全部通过（共 {total} 条）：文档标题可对上，期望要点均能在对应文档中找到")
     return 0
 
 
