@@ -23,6 +23,7 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.llm_budget import track_llm_turn, usage_callbacks
 from app.pipeline.types import ChunkHit
 from app.schemas.auth import AuthUser
 from app.services.agentic_retrieve import retrieve_until_relevant
@@ -56,6 +57,7 @@ class AiChatService:
         # 未配置 API Key 时保持 None，chat() 里抛 503
         self._llm: ChatOpenAI | None = _build_llm()
 
+    @track_llm_turn("非流式对话")
     async def chat(
         self,
         db: AsyncSession,
@@ -221,6 +223,8 @@ def _build_llm() -> ChatOpenAI | None:
         temperature=_TEMPERATURE,
         timeout=timeout_s,
         max_retries=0,
+        # 用量/成本统计：挂一次即覆盖该 LLM 的所有调用点
+        callbacks=usage_callbacks(),
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=base_url,

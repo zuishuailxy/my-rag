@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from app.core.config import settings
+from app.services.llm_budget import usage_callbacks
 from app.pipeline.types import ExtractedEntity, ExtractedRelation, ExtractionResult
 from app.services.kg_extraction_schema import (
     KgExtractionLlmOutput,
@@ -153,6 +154,8 @@ def _build_structured_llm():
         temperature=_LLM_TEMPERATURE,
         timeout=timeout_s,
         max_retries=0,
+        # 用量/成本统计：挂一次即覆盖该 LLM 的所有调用点
+        callbacks=usage_callbacks(),
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=settings.LLM_BASE_URL,

@@ -56,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.document_access import access_from_user, empty_scope
 from app.core.config import settings
+from app.services.llm_budget import usage_callbacks
 from app.pipeline.types import ChunkHit
 from app.schemas.ai import ChatStreamRequest, CreateSessionRequest
 from app.schemas.auth import AuthUser
@@ -71,6 +72,7 @@ from app.services.chat_session import chat_session_service, title_from_question
 from app.services.chat_short_memory import chat_short_memory_service
 from app.services.chat_summary import chat_session_summary_service
 from app.services.graph_build import format_graph_context, graph_build_service
+from app.services.llm_budget import end_turn, start_turn
 from app.services.retrieval import hybrid_retrieval_service
 from app.services.web_search import web_search_service
 
@@ -291,6 +293,8 @@ def _build_agent_llm() -> ChatDeepSeek | None:
         temperature=0.2,
         timeout=timeout_s,
         max_retries=0,
+        # 用量/成本统计：挂一次即覆盖该 LLM 的所有调用点
+        callbacks=usage_callbacks(),
         stream_usage=False,
         extra_body={
             "thinking": {"type": "enabled" if thinking_enabled else "disabled"},
@@ -746,6 +750,10 @@ class AiStreamService:
             HumanMessage("\n\n".join(human_parts)),
         ]
 
+        # 用量统计：handler 已挂在各 LLM 的构造器上（见 llm_budget.usage_callbacks），
+        # LangChain 会把 callbacks 透传给工具内部的子调用（改写 / 切题判定），
+        # 所以这里只需把「本轮」的 ContextVar 划出来。
+        usage, usage_token = start_turn()
         try:
             # custom 流 = 工具内 get_stream_writer 推来的 data-*；messages = 模型 token/思考；
             # updates = 工具结果。
@@ -796,6 +804,15 @@ class AiStreamService:
             yield writer.text_end()
         except Exception as exc: # noqa: BLE001
             logger.warning("LangChain 流失败：%s", exc)
+        finally:
+            end_turn(usage_token)
+
+        # 成本可见性：只有真实 token 数（取不到就不猜），金额标注为估算
+        logger.info(
+            "本轮 LLM 用量：sessionId=%s, %s",
+            persist_session_id,
+            usage.as_log_fields(),
+        )
 
         yield writer.finish()
         yield _SSE_DONE

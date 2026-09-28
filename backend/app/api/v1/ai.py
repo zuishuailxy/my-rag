@@ -12,7 +12,7 @@
 """
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ from app.schemas.search import HybridChunkItem
 from app.services.ai_chat import ai_chat_service
 from app.services.ai_stream import ai_stream_service
 from app.services.chat_session import chat_session_service
+from app.services.llm_budget import quota_service
 from app.services.retrieval import hybrid_retrieval_service
 
 # 两个独立前缀
@@ -47,6 +48,27 @@ rag_router: APIRouter = auth_router()
 
 _DB = Annotated[AsyncSession, Depends(get_db_session)]
 _USER = Annotated[AuthUser, Depends(get_current_user)]
+
+
+async def _enforce_quota(user: AuthUser, session_id: str | None) -> None:
+    """限流：超限直接 429（含余量信息，方便前端提示）
+
+    刻意放路由层而不是服务层：
+    - /rag/search 不调 LLM，不应被问答配额限制；
+    - 流式接口必须在**开始推流前**拒绝，否则只能往 SSE 里塞错误事件，
+      前端拿到的是 200 + 错误文本，语义上很别挠。
+    """
+    decision = await quota_service.consume(user.user_id, session_id)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": decision.reason,
+                "scope": decision.scope,
+                "used": decision.used,
+                "limit": decision.limit,
+            },
+        )
 
 
 def _session_vo(s: AiSession) -> SessionResponse:
@@ -98,6 +120,7 @@ async def rag_search(dto: RagSearchRequest, user: _USER) -> list[HybridChunkItem
 )
 async def ai_chat(dto: ChatRequest, user: _USER, db: _DB) -> ChatResponse:
     """RAG 对话：混合检索 + DeepSeek 作答，写入本人会话（无 sessionId 则新建）"""
+    await _enforce_quota(user, dto.sessionId)
     result = await ai_chat_service.chat(db, dto.content, top_k=dto.topK, user=user, session_id=dto.sessionId)
     return ChatResponse(**result)
 
@@ -112,6 +135,8 @@ async def ai_chat_stream(dto: ChatStreamRequest, user: _USER, db: _DB) -> Stream
     响应头
     media_type 提供，协议版本头前端 DefaultChatTransport 校验用）。
     """
+    # 在开始推流前校验配额：超限直接 429（而不是 200 + SSE 错误事件）
+    await _enforce_quota(user, dto.sessionId)
     return StreamingResponse(
         ai_stream_service.stream_chat(db, dto, user),
         media_type="text/event-stream",

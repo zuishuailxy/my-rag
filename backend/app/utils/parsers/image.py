@@ -20,6 +20,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from app.core.config import settings
+from app.services.llm_budget import usage_callbacks
 
 logger = logging.getLogger("ImageParser")
 
@@ -70,6 +71,8 @@ def _build_vision_llm() -> ChatOpenAI | None:
         temperature=0,
         timeout=timeout_ms / 1000 if timeout_ms > 0 else 60.0,
         max_retries=0,
+        # 用量/成本统计：挂一次即覆盖该 LLM 的所有调用点
+        callbacks=usage_callbacks(),
         # 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
     )

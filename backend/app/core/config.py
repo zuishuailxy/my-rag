@@ -254,6 +254,16 @@ class Settings(BaseSettings):
     MODEL_NAME: str | None = None
     # LLM 单次作答超时
     AI_CHAT_TIMEOUT_MS: int = 60000
+
+    # ---- LLM 成本与限流----
+    # 估算单价（元 / 百万 token）。⚠️ **这是估算，不是账单**：单价随厂商调整，
+    # 只用来发现「用量异常」；需要精确计费请以厂商账单为准。
+    AI_PRICE_INPUT_PER_MTOK: float = 2.0
+    AI_PRICE_OUTPUT_PER_MTOK: float = 8.0
+    # 每日问答轮次上限（0 = 不限制）。Redis 计数，滚动 24h 窗口。
+    # 按「轮」而不是「token」限：用户能理解、实现简单、不会因为一次长上下文就误杀。
+    AI_DAILY_TURN_LIMIT_PER_USER: int = 200
+    AI_DAILY_TURN_LIMIT_PER_SESSION: int = 100
     # 生成侧评测（LLM-as-judge）单次判分超时：要读完整上下文 + 回答，比作答慢
     AI_EVAL_TIMEOUT_MS: int = 90000
     # 流式对话思考开关：严格 == "false" 才关，

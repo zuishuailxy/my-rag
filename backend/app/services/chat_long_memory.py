@@ -68,6 +68,7 @@ from mem0 import AsyncMemoryClient
 from pydantic import BaseModel, Field, SecretStr
 
 from app.core.config import settings
+from app.services.llm_budget import usage_callbacks
 
 logger = logging.getLogger("ChatLongMemoryService")
 
@@ -187,6 +188,8 @@ def _build_classifier():
         temperature=_CLASSIFIER_TEMPERATURE,
         timeout=timeout_s,
         max_retries=0,
+        # 用量/成本统计：挂一次即覆盖该 LLM 的所有调用点
+        callbacks=usage_callbacks(),
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=base_url,

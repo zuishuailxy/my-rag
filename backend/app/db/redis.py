@@ -79,6 +79,18 @@ class RedisService:
             return
         await c.set(key, value)
 
+    async def incr(self, key: str, ttl_seconds: int | None = None) -> int:
+        """自增计数并返回新值；首次创建时设过期（滚动窗口计数用）
+
+        过期只在 value==1（本次创建）时设置，避免每次自增都刷新 TTL ——
+        否则持续访问的 key 永不过期，日限量就变成了总量限制。
+        """
+        c = self._require_client()
+        value = int(await c.incr(key))
+        if ttl_seconds is not None and value == 1:
+            await c.expire(key, ttl_seconds)
+        return value
+
     async def delete(self, *keys: str) -> int:
         """删除 key"""
         c = self._require_client()
