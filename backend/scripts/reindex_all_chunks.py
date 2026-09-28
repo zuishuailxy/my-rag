@@ -30,7 +30,7 @@ sys.path.insert(0, ".")
 
 from app.db.es import es_service # noqa: E402
 from app.db.session import async_session_factory # noqa: E402
-from app.pipeline.types import to_search_index_doc # noqa: E402
+from app.pipeline.types import PipelineDocument, to_search_index_doc # noqa: E402
 from app.services.es_index import es_chunk_index_service # noqa: E402
 from app.services.indexing import ( # noqa: E402
     load_all_published_documents,
@@ -40,6 +40,38 @@ from app.services.search_index import search_index_service # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("ReindexAllChunks")
+
+
+async def _reindex_one(
+    doc: PipelineDocument, skip_chunks: bool, skip_documents: bool, attempts: int = 3
+) -> int:
+    """单篇重建（**独立会话**，带重试）；返回该篇 chunk 数
+
+    PG 因资源压力崩溃时连接会失效；独立会话 + 重试可把影响局限在单篇，
+    而不是让整批一起失败。
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with async_session_factory() as session:
+                count = 0
+                if not skip_chunks:
+                    count = await reindex_document(session, doc)
+                if not skip_documents:
+                    await search_index_service.index_document(to_search_index_doc(doc))
+                return count
+        except Exception as err:  # noqa: BLE001
+            last_error = err
+            if attempt < attempts:
+                logger.warning(
+                    "第 %d/%d 次失败，重试：documentId=%s, %s",
+                    attempt,
+                    attempts,
+                    doc.id,
+                    str(err)[:120],
+                )
+                await asyncio.sleep(5)
+    raise last_error  # type: ignore[misc]
 
 
 async def main(
@@ -78,28 +110,19 @@ async def main(
         indexed_docs = 0
         failed: set[str] = set()
         for doc in docs:
-            # ---- RAG：重新分块 → 重新嵌入 → 覆盖 PG doc_chunk + ES kh_chunk
-            if not skip_chunks:
-                try:
-                    count = await reindex_document(session, doc)
+            # ⚠️ **每篇用独立会话 + 重试**。
+            # 教训：原先 174 篇共用一个会话，PG 一旦崩（本机资源紧张时半小时内可崩 6 次），
+            # 这个会话就永久失效 —— 实测一次崩把后面 74 篇全部拖死，索引被留在混合尺寸。
+            # 改成每篇独立会话后，一次崩最多损失一篇（且会自动重试），其余继续推进。
+            try:
+                count = await _reindex_one(doc, skip_chunks, skip_documents)
+                if not skip_chunks:
                     total_chunks += count
-                    logger.info(
-                        "chunk 重建完成：documentId=%s, chunks=%d", doc.id, count
-                    )
-                except Exception as err: # noqa: BLE001 —— 单篇失败不阻断其余文档
-                    failed.add(str(doc.id))
-                    logger.error("chunk 重建失败：documentId=%s, %s", doc.id, err)
-            # ---- Search：按编排器同一份字段映射重灌 kh_document（补 teamId）
-            if not skip_documents:
-                try:
-                    await search_index_service.index_document(
-                        to_search_index_doc(doc)
-                    )
+                if not skip_documents:
                     indexed_docs += 1
-                    logger.info("文档索引重建完成：documentId=%s", doc.id)
-                except Exception as err: # noqa: BLE001
-                    failed.add(str(doc.id))
-                    logger.error("文档索引重建失败：documentId=%s, %s", doc.id, err)
+            except Exception as err:  # noqa: BLE001 —— 单篇失败不阻断其余文档
+                failed.add(str(doc.id))
+                logger.error("重建失败（已重试）：documentId=%s, %s", doc.id, str(err)[:160])
 
         logger.info(
             "全量重建结束：文档=%d, chunk 总数=%d, 文档索引=%d, 失败=%d",
