@@ -38,6 +38,17 @@
       + `scripts/sweep_chunk_size.py`（chunk size，重建索引后评测，跑完恢复原尺寸）。
       实测：minScore 0.4 → recall@5 0.28（过杀）；chunk 256 → 负例误召 0.25，512/1024 一致。结论写进 README。
 - [x] **扩评测集** —— 55 条（49 正 + 6 负），覆盖 5 篇文档（差旅 / 发布 / 考勤 / 申论 / 简历）；新增 26 题。
+- [x] **扩库到真实规模（公开语料）** —— `scripts/fetch_oss_corpus.py` 抓 `jaywcjlove/linux-command`
+      （MIT、37k stars、160 篇中文命令手册）→ 知识库 14 → **174 篇 / 467 块**（12 倍）。
+      为什么用公开语料：合成语料经不起「这 14 篇是不是你自己写的」；而命令手册天然成簇、互为强干扰。
+      · `scripts/validate_eval_set.py`：**机械校验地面真值**（标题存在 + 要点能在文档中找到），防「标题打错→指标骗人」
+      · 评测集 87 → **132 条**（+39 条 OSS 题，总难例 51 条）
+      · 实测：`hard hit@1` 终于分开（纯混合 0.824 vs rerank 0.941）；失败可解释（`at` 抢 `batch`）
+- [x] **chunk size 重测（174 篇）** —— **首次出现差异**：256（883 块）recall 1.000/hit@1 0.992/MRR 0.996
+      vs 512（467 块）0.992/0.975/0.983。差异仅 1~2 条题，**不足以改默认值**，需重复实验。1024 因额度中断未测。
+- [ ] **chunk size 重测（补齐 1024 + 重复实验）** —— 当前结论是单次实验。
+- [ ] **重建知识库回统一尺寸** —— 1024 那轮重建到一半遇额度耗尽，库现为混合尺寸（321 块）。
+      额度恢复后跑 `PYTHONPATH=. python scripts/reindex_all_chunks.py`。
 - [x] **扩库（合成干扰语料）** —— 无真实文档，造 8 篇与现有文档组成**强干扰对**（会议费用 vs 差旅、
       数据库变更 SOP vs 发布 SOP、干扰简历 vs 梁多强、行测 vs 申论、考勤制度 vs 考勤表）：
       `eval/corpus/*.md` + `scripts/seed_demo_corpus.py`（幂等导入 / `--wipe` 回滚）。
@@ -73,6 +84,12 @@
       教训：先查「连接持有时间」，再谈「池容量」。
 - [x] **压测拈出的 3 个真 bug** —— 结构化输出未判 `None` ×2（改写 / 切题 / KG，会 500）、
       `graph_build` 的 `logger.info("...%d", len)`（日志永远不打印）。
+- [ ] **⚠️ 本机 PG 反复崩溃（阻塞类问题）** —— 日志显示 `server process exited with exit code 2`
+      → 自动 recovery，一小时内可发生多次；`checkpoint` 的 write 耗时高达 29~54s（I/O 极慢）。
+      **不是本项目代码引起**（09-16/17/18 已先于本项目改动发生过），但随语料/流量增长而变频繁。
+      已核实：PG 自身配置很保守（`shared_buffers=128MB`），且 compose **未给任何容器设内存上限**。
+      建议：① 调大 Docker Desktop 内存（当前 VM 仅 7.7GB / 16 容器）；② 给 ES/Kibana/Neo4j 设 `mem_limit`；
+      ③ 数据库卷改挂到 Docker volume（而非 macOS 目录），避开慢 I/O。
 - [ ] **本机资源预算（实测教训）** —— Docker VM 仅 7.7GB / 16 容器；Langfuse 栈又占 ~2.6GB，
       导致 **PostgreSQL 被 OOM 杀掉并 crash recovery**（日志里 09-16/09-17/09-18 已先于压测发生过，
       说明本来就临界，Langfuse 只是推高了）。已把 Langfuse 改为按需启停。

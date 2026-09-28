@@ -66,20 +66,26 @@ def _actor() -> AuthUser:
     )
 
 
-def load_corpus() -> list[tuple[str, str]]:
-    """读 `eval/corpus/*.md` → [(标题, 正文)]；标题取首个一级标题"""
-    if not CORPUS_DIR.is_dir():
-        raise SystemExit(f"语料目录不存在：{CORPUS_DIR}")
+def load_corpus(corpus_dir: Path | None = None) -> list[tuple[str, str]]:
+    """读 `<corpus_dir>/*.md` → [(标题, 正文)]；标题取首个一级标题
+
+    默认为 `eval/corpus`（自写演示语料）；公开语料用 `--dir eval/corpus_oss`。
+    """
+    target = corpus_dir or CORPUS_DIR
+    if not target.is_dir():
+        raise SystemExit(f"语料目录不存在：{target}")
 
     items: list[tuple[str, str]] = []
-    for path in sorted(CORPUS_DIR.glob("*.md")):
+    for path in sorted(target.glob("*.md")):
+        if path.name == "SOURCE.md":  # 来源说明，不是文档
+            continue
         text = path.read_text(encoding="utf-8")
         match = _TITLE_RE.search(text)
         if match is None:
             raise SystemExit(f"{path.name} 缺少 `# 标题` 一级标题")
         items.append((match.group(1).strip(), text))
     if not items:
-        raise SystemExit(f"语料目录为空：{CORPUS_DIR}")
+        raise SystemExit(f"语料目录为空：{target}")
     return items
 
 
@@ -94,8 +100,8 @@ async def _index(session, doc_id: int) -> None:
     print(f"        索引完成：{chunks} 块 chunk + 1 条文档级检索")
 
 
-async def _seed(reindex: bool) -> int:
-    corpus = load_corpus()
+async def _seed(reindex: bool, corpus_dir: Path | None) -> int:
+    corpus = load_corpus(corpus_dir)
     service = DocumentService()
     actor = _actor()
     created = 0
@@ -136,9 +142,9 @@ async def _seed(reindex: bool) -> int:
     return 0
 
 
-async def _wipe() -> int:
+async def _wipe(corpus_dir: Path | None) -> int:
     """回滚：删除本批语料（PG 元数据 + Mongo 正文 + PG/ES 块 + ES 文档级索引）"""
-    titles = [title for title, _ in load_corpus()]
+    titles = [title for title, _ in load_corpus(corpus_dir)]
 
     async with async_session_factory() as session:
         entities = (
@@ -163,10 +169,10 @@ async def _wipe() -> int:
     return 0
 
 
-async def main(wipe: bool, reindex: bool) -> int:
+async def main(wipe: bool, reindex: bool, corpus_dir: Path | None) -> int:
     await es_service.start()
     try:
-        return await _wipe() if wipe else await _seed(reindex)
+        return await _wipe(corpus_dir) if wipe else await _seed(reindex, corpus_dir)
     finally:
         await es_service.close()
 
@@ -177,5 +183,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--reindex", action="store_true", help="对已存在的文档也强制重建索引"
     )
+    parser.add_argument(
+        "--dir", default=None, help="语料目录（默认 eval/corpus；公开语料用 eval/corpus_oss）"
+    )
     parsed = parser.parse_args()
-    raise SystemExit(asyncio.run(main(parsed.wipe, parsed.reindex)))
+    corpus_path = Path(parsed.dir) if parsed.dir else None
+    if corpus_path is not None and not corpus_path.is_absolute():
+        corpus_path = Path(__file__).resolve().parent.parent / corpus_path
+    raise SystemExit(asyncio.run(main(parsed.wipe, parsed.reindex, corpus_path)))

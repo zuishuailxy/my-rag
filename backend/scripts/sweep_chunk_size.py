@@ -28,10 +28,41 @@ from app.services.indexing import (  # noqa: E402
     load_all_published_documents,
     reindex_document,
 )
+from sqlalchemy import text  # noqa: E402
 from app.services.retrieval import HybridRetrievalService  # noqa: E402
 from scripts.eval_retrieval import evaluate, load_cases, print_metrics  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
+
+
+async def _chunk_count() -> int:
+    """当前库里的块总数（用于基线比对）"""
+    async with async_session_factory() as session:
+        rows = await session.execute(text("SELECT count(*) FROM doc_chunk"))
+    return int(rows.scalar() or 0)
+
+
+async def _restore_with_retry(size: int, overlap: int, attempts: int = 3) -> int:
+    """恢复原尺寸；**每次尝试用全新会话**
+
+    教训：PG 在资源紧张时会崩（进入 crash recovery），而挂在 `finally` 里的恢复
+    如果复用同一个已失效的会话，会跟着一起失败 —— 结果索引被留在扫描到一半的尺寸。
+    所以：开新会话 + 重试 + 事后比对基线。
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            async with async_session_factory() as session:
+                docs = await load_all_published_documents(session)
+                return await _rebuild(session, docs, size, overlap)
+        except Exception as err:  # noqa: BLE001
+            last_error = err
+            print(f"  ⚠️ 恢复第 {attempt}/{attempts} 次失败：{str(err)[:120]}")
+            await asyncio.sleep(10)
+    raise SystemExit(
+        f"❌ 恢复失败（{last_error}）—— 请手动跑："
+        "PYTHONPATH=. python scripts/reindex_all_chunks.py"
+    )
 
 
 async def _assert_embedding_available() -> None:
@@ -70,22 +101,42 @@ async def main(args: argparse.Namespace) -> int:
             f"待扫描 chunk size：{sizes}（overlap = size × {args.overlap_ratio}）；"
             f"文档 {len(docs)} 篇；原尺寸 {original_size}/{original_overlap}"
         )
+        baseline = int(
+            (
+                await session.execute(text("SELECT count(*) FROM doc_chunk"))
+            ).scalar()
+            or 0
+        )
+        print(f"基线块数 = {baseline}（恢复后校对这个数）")
         results: list[tuple[int, int, int, dict]] = []
         try:
             for size in sizes:
                 overlap = max(1, round(size * args.overlap_ratio))
-                total = await _rebuild(session, docs, size, overlap)
+                try:
+                    total = await _rebuild(session, docs, size, overlap)
+                except Exception as err:  # noqa: BLE001
+                    print(f"  ⚠️ chunk={size} 重建失败，跳过：{str(err)[:120]}")
+                    continue
                 metrics = await evaluate(HybridRetrievalService(), cases, args.top_k)
                 results.append((size, overlap, total, metrics))
                 print_metrics(
                     f"[chunk={size}/overlap={overlap}, 块数={total}]", metrics, args.top_k
                 )
         finally:
-            total = await _rebuild(session, docs, original_size, original_overlap)
+            total = await _restore_with_retry(original_size, original_overlap)
             print(
                 f"已恢复原尺寸 chunk={original_size}/overlap={original_overlap}"
                 f"（块数={total}）"
             )
+
+    restored = await _chunk_count()
+    if restored == baseline:
+        print(f"✅ 恢复校验通过：块数回到基线 {baseline}")
+    else:
+        print(
+            f"⚠️ 恢复校验不一致：当前 {restored} ≠ 基线 {baseline}；"
+            "请跑 PYTHONPATH=. python scripts/reindex_all_chunks.py 重建"
+        )
 
     print(f"\n=== chunk size 扫描汇总（top_k={args.top_k}）===")
     header = f"{'chunk':>6} {'overlap':>8} {'块数':>6} {'recall':>8} {'hit@1':>7} {'MRR':>7} {'空召回率':>9}"

@@ -91,3 +91,42 @@
 {"id": "neg-10", "question": "推荐几部好看的科幻电影", "expect_documents": [], "expect_keywords": [], "category": "negative"}
 {"id": "neg-11", "question": "公司的股票代码是多少？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
 {"id": "neg-12", "question": "个人护照怎么办理？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "oss-apt-01", "question": "在 Debian 系统上处理依赖关系更好的包管理工具是哪个？", "expect_documents": ["aptitude"], "expect_keywords": ["处理依赖问题上更佳"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-apt-02", "question": "Alpine Linux 下用什么管理软件包？", "expect_documents": ["apk"], "expect_keywords": ["Alpine"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-apt-03", "question": "Debian 上管理软件包签名密钥的命令是什么？", "expect_documents": ["apt-key"], "expect_keywords": ["密钥"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-apt-04", "question": "在 Debian 上直接安装、创建和管理 deb 软件包的工具？", "expect_documents": ["dpkg"], "expect_keywords": ["安装、创建和管理软件包"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-arp-01", "question": "哪个命令可以查看和修改 IP 到 MAC 的转换表？", "expect_documents": ["arp"], "expect_keywords": ["MAC"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-arp-02", "question": "想确认某个 IP 是不是已经被网络上其他设备占用，用什么命令？", "expect_documents": ["arping"], "expect_keywords": ["已经被使用"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-arp-03", "question": "怎么设置内核里的 ARP 包过滤规则表？", "expect_documents": ["arptables"], "expect_keywords": ["arp包过滤规则表"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-arp-04", "question": "哪个工具用来监听网络上的 ARP 记录？", "expect_documents": ["arpwatch"], "expect_keywords": ["监听网络上arp的记录"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cron-01", "question": "只想在某个时间点执行一次任务，该用什么命令？", "expect_documents": ["at"], "expect_keywords": ["在指定时间执行命令"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cron-02", "question": "如何列出当前用户待执行的任务队列？", "expect_documents": ["atq"], "expect_keywords": ["待执行的任务列表"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cron-03", "question": "怎么把任务队列里某个待执行任务删掉？", "expect_documents": ["atrm"], "expect_keywords": ["删除待执行任务队列中的指定任务"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cron-04", "question": "想让任务等到系统空闲时再跑，用哪个命令？", "expect_documents": ["batch"], "expect_keywords": ["系统不繁忙"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cron-05", "question": "需要周期性重复执行的任务怎么提交？", "expect_documents": ["crontab"], "expect_keywords": ["周期性执行的任务"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-zip-01", "question": "把文件压缩成 bz2 格式用什么命令？", "expect_documents": ["bzip2"], "expect_keywords": ["Burrows-Wheeler"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-zip-02", "question": "解压 .bz2 压缩包用哪个命令？", "expect_documents": ["bunzip2"], "expect_keywords": ["解压缩"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-zip-03", "question": "哪个压缩软件以极高的压缩比著称？", "expect_documents": ["7z"], "expect_keywords": ["极高压缩比"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-perm-01", "question": "怎么修改一个文件或目录的读写执行权限？", "expect_documents": ["chmod"], "expect_keywords": ["权限"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-perm-02", "question": "怎么把文件的所有者改成另一个用户？", "expect_documents": ["chown"], "expect_keywords": ["所有者"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-perm-03", "question": "怎么只改文件所属的用户组？", "expect_documents": ["chgrp"], "expect_keywords": ["所属的用户组"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-perm-04", "question": "想改文件在 ext2 上的特殊属性（不是权限也不是属主），用什么命令？", "expect_documents": ["chattr"], "expect_keywords": ["改变文件属性"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-perm-05", "question": "怎么修改文件的安全上下文？", "expect_documents": ["chcon"], "expect_keywords": ["安全上下文"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-perm-06", "question": "怎样切换根目录来运行程序？", "expect_documents": ["chroot"], "expect_keywords": ["change root"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cmp-01", "question": "只想快速判断两个文件是否完全一样，用哪个命令？", "expect_documents": ["cmp"], "expect_keywords": ["比较两个文件是否有差异"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cmp-02", "question": "怎样逐行看出两个文本文件到底哪里不一样？", "expect_documents": ["diff"], "expect_keywords": ["逐行"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cmp-03", "question": "同时比较三个文件差异的命令是什么？", "expect_documents": ["diff3"], "expect_keywords": ["比较3个文件"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-cmp-04", "question": "针对两个已排序文件按行对比，用什么命令？", "expect_documents": ["comm"], "expect_keywords": ["已排序的文件"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-disk-01", "question": "想看磁盘分区还剩多少可用空间，用什么命令？", "expect_documents": ["df"], "expect_keywords": ["可使用的磁盘空间"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-disk-02", "question": "想知道某个目录到底占了多少磁盘空间？", "expect_documents": ["du"], "expect_keywords": ["磁盘使用空间"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-disk-03", "question": "怎么查看系统内存的使用和剩余情况？", "expect_documents": ["free"], "expect_keywords": ["内存"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-disk-04", "question": "哪个命令能替代 vmstat、iostat、netstat 做综合系统统计？", "expect_documents": ["dstat"], "expect_keywords": ["vmstat"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-disk-05", "question": "怎么查看内核环形缓冲区里的开机信息？", "expect_documents": ["dmesg"], "expect_keywords": ["ring buffer"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-disk-06", "question": "查看硬盘实体使用情况并给硬盘分区的命令？", "expect_documents": ["fdisk"], "expect_keywords": ["观察硬盘实体使用情况"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-misc-01", "question": "怎么探测一个文件到底是什么类型？", "expect_documents": ["file"], "expect_keywords": ["探测给定文件的类型"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-misc-02", "question": "做域名解析查询用哪个命令？", "expect_documents": ["dig"], "expect_keywords": ["域名查询工具"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-misc-03", "question": "怎样查看某个文件的 ACL 访问控制列表？", "expect_documents": ["getfacl"], "expect_keywords": ["访问控制列表"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-misc-04", "question": "怎么在终端里看日历？", "expect_documents": ["cal"], "expect_keywords": ["显示当前日历"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-misc-05", "question": "对文件或标准输入做 base64 编解码的命令？", "expect_documents": ["base64"], "expect_keywords": ["编码或解码"], "category": "oss", "difficulty": "easy"}
+{"id": "oss-misc-06", "question": "怎么把单列数据整理成多列对齐显示？", "expect_documents": ["column"], "expect_keywords": ["按列格式化输出文件"], "category": "oss", "difficulty": "hard"}
+{"id": "oss-misc-07", "question": "哪个命令常用来备份裸设备、还能边复制边转换格式？", "expect_documents": ["dd"], "expect_keywords": ["备份裸设备"], "category": "oss", "difficulty": "hard"}

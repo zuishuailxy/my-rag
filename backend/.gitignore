@@ -16,3 +16,6 @@ eval/query_vectors.json
 
 # 压测脚本产生的服务端日志
 scripts/.load_test_server.log
+
+# 抓取的公开评测语料（脚本按需拉取，不入库）
+eval/corpus_oss/
