@@ -103,30 +103,8 @@ class AiChatService:
                 "sources": [],
             }
 
-        if self._llm is None:
-            logger.error(
-                "未配置 LLM API Key，无法生成回答：keys(OPENAI/LLM/DASHSCOPE) 均缺失"
-            )
-            raise HTTPException(
-                status_code=503,
-                detail="未配置 OPENAI_API_KEY / LLM_API_KEY / DASHSCOPE_API_KEY，无法生成回答",
-            )
-
         hit_objects = outcome.hits
-        context = self.build_context(hit_objects)
-        response = await self._llm.ainvoke(
-            [
-                SystemMessage(content=_SYSTEM_PROMPT),
-                HumanMessage(content=f"检索到的资料：\n{context}\n\n用户问题：{trimmed}"),
-            ]
-        )
-
-        answer = (
-            response.content
-            if isinstance(response.content, str)
-            else json.dumps(response.content, ensure_ascii=False)
-        )
-        sources = self.to_cited_sources(answer, hit_objects)
+        answer, sources = await self.answer_with_hits(trimmed, hit_objects)
         logger.info(
             "RAG 对话完成：hits=%d, cited=%d, answerLength=%d",
             len(hit_objects),
@@ -146,6 +124,37 @@ class AiChatService:
             "answer": answer,
             "sources": sources,
         }
+
+    async def answer_with_hits(
+        self, question: str, hits: list[ChunkHit]
+    ) -> tuple[str, list[dict]]:
+        """给定召回块生成回答 + 溯源，返回 (answer, sources)
+
+        抽出来是为了让生成侧评测（scripts/eval_generation.py）能复用**同一条**
+        生成链路，同时拿到完整上下文 —— 否则只能从 200 字摘录里判忠实度。
+        """
+        if self._llm is None:
+            logger.error(
+                "未配置 LLM API Key，无法生成回答：keys(OPENAI/LLM/DASHSCOPE) 均缺失"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="未配置 OPENAI_API_KEY / LLM_API_KEY / DASHSCOPE_API_KEY，无法生成回答",
+            )
+
+        context = self.build_context(hits)
+        response = await self._llm.ainvoke(
+            [
+                SystemMessage(content=_SYSTEM_PROMPT),
+                HumanMessage(content=f"检索到的资料：\n{context}\n\n用户问题：{question}"),
+            ]
+        )
+        answer = (
+            response.content
+            if isinstance(response.content, str)
+            else json.dumps(response.content, ensure_ascii=False)
+        )
+        return answer, self.to_cited_sources(answer, hits)
 
     # ---- 溯源 ----
 

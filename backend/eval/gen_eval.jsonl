@@ -1,0 +1,12 @@
+{"id": "g-travel-01", "question": "出差住宿费的上限是多少？", "answerable": true, "expect_facts": ["600", "550", "450"], "expect_documents": ["01-travel-expense-policy"], "category": "travel", "difficulty": "easy"}
+{"id": "g-travel-02", "question": "出差期间的餐饮补贴怎么算？", "answerable": true, "expect_facts": ["100"], "expect_documents": ["01-travel-expense-policy"], "category": "travel", "difficulty": "easy"}
+{"id": "g-travel-03", "question": "报销发票的抬头必须写什么？", "answerable": true, "expect_facts": ["某某科技有限公司"], "expect_documents": ["01-travel-expense-policy"], "category": "travel", "difficulty": "easy"}
+{"id": "g-travel-04", "question": "开自己车跑业务要补什么手续？", "answerable": true, "expect_facts": ["私车公用申请表"], "expect_documents": ["01-travel-expense-policy"], "category": "travel", "difficulty": "hard"}
+{"id": "g-travel-05", "question": "出差回来以后多久要提交报销？", "answerable": true, "expect_facts": ["10 个工作日"], "expect_documents": ["01-travel-expense-policy"], "category": "travel", "difficulty": "easy"}
+{"id": "g-sop-01", "question": "常规发布窗口是什么时间？", "answerable": true, "expect_facts": ["周二", "22:00"], "expect_documents": ["02-production-release-sop"], "category": "release", "difficulty": "easy"}
+{"id": "g-sop-02", "question": "什么情况下必须回滚？", "answerable": true, "expect_facts": ["2%"], "expect_documents": ["02-production-release-sop"], "category": "release", "difficulty": "easy"}
+{"id": "g-sop-03", "question": "灰度发布的比例和观察时长是多少？", "answerable": true, "expect_facts": ["10%", "15 分钟"], "expect_documents": ["02-production-release-sop"], "category": "release", "difficulty": "easy"}
+{"id": "g-sop-04", "question": "发布前检查最晚什么时候完成？", "answerable": true, "expect_facts": ["18:00"], "expect_documents": ["02-production-release-sop"], "category": "release", "difficulty": "easy"}
+{"id": "g-att-01", "question": "李宁 2019 年 3 月 1 日几点上班？", "answerable": true, "expect_facts": ["09:04:10"], "expect_documents": ["员工考勤表"], "category": "attendance", "difficulty": "easy"}
+{"id": "g-neg-01", "question": "明天股市会涨吗？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}
+{"id": "g-neg-02", "question": "红烧肉怎么做才好吃？", "answerable": false, "expect_facts": [], "expect_documents": [], "category": "negative", "difficulty": "easy"}

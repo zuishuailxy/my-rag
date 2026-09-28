@@ -250,6 +250,8 @@ class Settings(BaseSettings):
     MODEL_NAME: str | None = None
     # LLM 单次作答超时
     AI_CHAT_TIMEOUT_MS: int = 60000
+    # 生成侧评测（LLM-as-judge）单次判分超时：要读完整上下文 + 回答，比作答慢
+    AI_EVAL_TIMEOUT_MS: int = 90000
     # 流式对话思考开关：严格 == "false" 才关，
     # 默认开——deepseek-v4-flash 开思考后 reasoning_content 随流式 delta 返回
     LLM_ENABLE_THINKING: str = "true"

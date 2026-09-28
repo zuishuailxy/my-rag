@@ -20,8 +20,15 @@
 - [x] **RAG 评测集（检索侧）** —— `eval/rag_eval.jsonl`（29 条：25 正 + 4 负）+ `scripts/eval_retrieval.py`；
       指标 `recall@k` / `hit@1` / `MRR` / 负例空召回率；支持扫参数（top-k / min-score / rerank / hybrid-top-k / rrf-c）。
       实测：`minScore=0.4` → recall@5 0.28（过杀）、`0.1` → 1.00 且负例全空；关 rerank → 负例空召回率 0.0（噪声进上下文）。
-  - [ ] 生成指标 `faithfulness` / 引用准确率（需 LLM 判定）
-  - [ ] 评测集扩到 30~50 条 + 更多文档（当前 KB 仅 2 篇公开文档，区分度有限）
+  - [x] 评测集扩到 72 条（66 正 + 6 负，5 篇文档），含 17 条难题。
+  - [x] **生成指标 `faithfulness` / 引用准确率** —— `app/services/answer_grader.py`（LLM 判分）
+        + `eval/gen_eval.jsonl`（12 条）+ `scripts/eval_generation.py`（含确定性的要点覆盖率/引用越界/拒答率）。
+        实测：要点覆盖率 / 引用率 / 拒答率 / 忠贞度 / 引用准确率均 1.00。
+        ⚠️ 首轮引用准确率 0.80 是**判分器口径错**（把 `[1]` 当成小节而非整块 chunk），人工核对后修正 prompt → 1.00。
+  - [ ] **生成侧评测集扩大 + 加难** —— 当前 12 条全满分，区分度有限；补「资料部分相关 / 多跳」用例。
+- [x] **LangSmith 评测台** —— `scripts/eval_generation.py --push-dataset`（检索集 72 + 生成集 12）+ `--langsmith`
+      （跑 experiment 拿对比视图）；评测器与离线脚本**共用同一份**代码与评测集。
+      约定：离线脚本（零依赖、可进 CI）是主入口，LangSmith 只负责演示与对比。
 
 ## P1 · 加分项
 
@@ -47,7 +54,7 @@
       `minScore` 由 gte 时代的 `0.1` 重校为 **`0.7`**（55 条实测安全区间 0.55~0.84，取中点）
       → recall@5 1.00 且负例空召回率 1.00。教训：阈值与 reranker 模型强耦合，不重校就漏噪声。
 - [ ] **成本与限流** —— LLM 调用无预算控制；加每用户/每会话调用上限 + token/成本日志。
-- [ ] **可观测性** —— LangSmith 已接但无面板；加请求级 latency / 命中率 / 成本统计。
+- [ ] **可观测性** —— LangSmith 已接（tracing + eval experiment）；仍缺请求级 latency / 命中率 / 成本统计面板。
 
 ## P2 · 工程完善
 
