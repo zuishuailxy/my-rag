@@ -408,23 +408,39 @@ cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_
 
 > ⚠️ 12 条全满分说明**区分度仍有限**（与检索侧同一个教训：小集子会饱和）。这一步的真正价值是**建立了指标与判分链路**，而不是「证明系统完美」。
 
-## 🔗 评测集与 LangSmith
+## 🔭 可观测（Langfuse 自托管）
 
-评测集是**单一事实来源**（`eval/*.jsonl`），两个运行台：
-
-| 运行台 | 特点 | 用途 |
-| --- | --- | --- |
-| 离线脚本（`scripts/eval_*.py`） | 零外部依赖、可进 CI | 回归、调参、可复现 |
-| LangSmith | 实验对比视图、与 trace 同源 | 演示、横向对比多组配置 |
-
-```bash
-# 推送评测集（检索集 72 条 + 生成集 12 条；同名数据集复用、只增量补新用例）
-.venv/bin/python scripts/eval_generation.py --push-dataset
-# 在 LangSmith 上跑一次 experiment（目标与本地跑的是同一个函数）
-.venv/bin/python scripts/eval_generation.py --langsmith
+```
+控制面（authoritative）  进程内 + Redis      ← 限流：同步、强一致、CI 可测
+观测面（analytical）     Langfuse（自托管）   ← trace 下钻 + 成本看板：异步旁路，挂了不影响对话
 ```
 
-> 刻意**不用 LangSmith 替掉离线脚本**：离线脚本零依赖、能在 CI 里跑、逻辑可被面试官直接读；LangSmith 负责「好看 + 可对比」。两者共用同一份评测集与同一套评测器。
+**为什么自托管**：数据不出本机、不依赖 SaaS 配额（本项目已因外部额度耗尽被中断两次）。
+代价是自托管 = 跑 Langfuse 自己的生产架构：**ClickHouse**（Trace / Observation / Score 的 OLAP 主存储）
++ Postgres + Redis + S3（复用已有的 RustFS 生态思路，但独立栈更省心）。
+
+```bash
+# 启动（独立 project，只对外暴露 3000；存储组件走内部网络，避开主栈 5432/6379/9000）
+docker compose --env-file .env.langfuse -f docker-compose.langfuse.yml up -d
+# ⚠️ 必做：注册本项目模型单价，否则 Langfuse 不认 deepseek-v4-flash 这类别名 → 成本恒为 0
+cd backend && PYTHONPATH=. .venv/bin/python scripts/setup_langfuse_models.py
+```
+
+**接入方式**：Langfuse handler 与本地用量统计挂在**同一处**（`llm_budget.usage_callbacks()`），
+即 8 个 LLM 构造点自动全覆盖；未配 `LANGFUSE_*` 时完全不加载（零开销，CI 不受影响）。
+两者是**互补而非替代**：Langfuse 挂了本地照常统计，也只有本地那套能在不连外部服务时断言成本。
+
+**验证过的两件事**：
+
+| 事项 | 结果 |
+| --- | --- |
+| trace 是否真的入库 | ClickHouse `events_full` 出现 `GENERATION / ChatOpenAI`，`usage_details={'input':111,'output':22,'total':133}` |
+| 成本口径是否一致 | 本地估算 `0.000398 元` ≡ Langfuse `cost_details.total=0.000398`（两条独立计算路径吻合） |
+
+> **踩坑记录（已写进脚本注释）**：Langfuse 只认内置价格表里的模型。不注册别名时，
+> 它照常记录 token 用量，但 `cost_details` 是**空的**、成本看板恒为 0 —— 实测确认过：
+> `usage_details={'input':1234,...}` 而 `cost_details={}`。
+> 另外 Langfuse 的 `inputPrice` 是**单 token 价**（内置 babbage-002 为 `4e-07`，即 $0.4/1M），不是「每百万」。
 
 ## ⚠️ 已知边界
 

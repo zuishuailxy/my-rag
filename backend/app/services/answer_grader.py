@@ -11,7 +11,7 @@
 另有两个**确定性**指标（不花 LLM 调用，见 `fact_coverage` / `extract_citations`）：
 要点覆盖率、引用行为（是否给出了引用）。
 
-分工：本模块只判分；跑批、汇总、LangSmith 上报在 `scripts/eval_generation.py`。
+分工：本模块只判分；跑批与汇总在 `scripts/eval_generation.py`（离线可跑、可进 CI）。
 判分失败（未配 Key / 网络 / 结构化解析失败）返回 None —— fail-open，
 不把「判分失败」算成「回答错误」（与 chat_query_rewrite 的切题判定同款约定）。
 """

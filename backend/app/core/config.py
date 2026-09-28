@@ -294,18 +294,19 @@ class Settings(BaseSettings):
     # 未配置则意图识别回退 LLM 的 need_retrieve 推导（见 chat_query_rewrite.py）。
     TYPESAFE_API_KEY: str | None = None
 
-    # ---- LangSmith（LangChain / LangGraph 链路追踪）----
-    # ⚠️ 这里声明只是为了让 pydantic 认识这四个 key（extra="ignore" 下未声明的会被静默丢弃）。
-    # **真正让追踪生效的是文件末尾的 _export_langsmith_env()**：LangSmith SDK 只读
+    # ---- Langfuse（自托管：运行时 trace + 成本看板）----
+    # 自托管而非 SaaS：数据不出本机，且费用可控（见 docker-compose.langfuse.yml）。
+    # ⚠️ 这里声明只是为了让 pydantic 认识这些 key（extra="ignore" 下未声明的会被静默丢弃）。
+    # **真正让追踪生效的是文件末尾的 _export_observability_env()**：Langfuse SDK 只读
     # `os.environ`，不读 pydantic Settings。pydantic-settings 只把 .env 读进 Settings
-    # 对象，**不会写回 os.environ** —— 所以只填 .env 而不导出时，
-    # `tracing_is_enabled()` 恒为 False，Web 上一条记录都没有。
-    # 开关用字符串，与项目其他开关一致：仅严格 == "true" 才开启（SDK 同款判定）。
-    LANGSMITH_TRACING: str = "false"
-    LANGSMITH_API_KEY: str | None = None
-    LANGSMITH_PROJECT: str = "default"
-    # 留空用官方 SaaS（https://api.smith.langchain.com）；自建网关才需覆盖
-    LANGSMITH_ENDPOINT: str | None = None
+    # 对象，**不会写回 os.environ** —— 只填 .env 而不导出的话，handler 拿不到 key，
+    # 只会打一句 “Client will be disabled” 然后静默地什么都不上报。
+    LANGFUSE_PUBLIC_KEY: str | None = None
+    LANGFUSE_SECRET_KEY: str | None = None
+    # 自托管地址；留空则 SDK 默认连官方云（https://cloud.langfuse.com）
+    LANGFUSE_HOST: str = "http://localhost:3000"
+    # 开关用字符串，与项目其他开关一致：仅严格 == "false" 才关闭
+    LANGFUSE_TRACING: str = "true"
     # 联网搜索
     TAVILY_API_KEY: str | None = None
 
@@ -356,23 +357,25 @@ def get_settings() -> Settings:
 settings = get_settings()
 
 
-def _export_langsmith_env() -> None:
-    """把 LangSmith 配置导出到 os.environ（SDK 只读环境变量）
+def _export_observability_env() -> None:
+    """把可观测配置导出到 os.environ（SDK 只读环境变量）
 
-    ⚠️ 这是「在 .env 填了 key 但 Web 看不到记录」的根因修复。
-    LangSmith SDK 的 `tracing_is_enabled()` / Client 都走 `os.environ`；
-    pydantic-settings 不会把 .env 写回进程环境，必须显式导出。
+    ⚠️ 这是「在 .env 填了 key 但 Web 看不到记录」的根因修复（接追踪 SDK 时踩过一次）：
+    这类 SDK 都走 `os.environ`，而 pydantic-settings 不会把 .env 写回进程环境，
+    必须显式导出。否则 handler 拿不到 key，只会静默地不上报（最难查的一类问题）。
 
     用 `setdefault`：外部真实环境变量（docker/CI/命令行 export）优先于 .env，
     与 pydantic-settings 的优先级一致。空值不导出，避免 SDK 拿到空串 key。
     """
-    for key in ("LANGSMITH_TRACING", "LANGSMITH_PROJECT", "LANGSMITH_ENDPOINT"):
+    for key in ("LANGFUSE_HOST", "LANGFUSE_TRACING"):
         value = getattr(settings, key)
         if value:
             os.environ.setdefault(key, str(value))
-    if settings.LANGSMITH_API_KEY:
-        os.environ.setdefault("LANGSMITH_API_KEY", settings.LANGSMITH_API_KEY)
+    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        value = getattr(settings, key)
+        if value:
+            os.environ.setdefault(key, value)
 
 
-# 在 import 期即导出（config 被所有服务模块引用，早于任何 langsmith 运行时取值）
-_export_langsmith_env()
+# 在 import 期即导出（config 被所有服务模块引用，早于任何运行时取值）
+_export_observability_env()

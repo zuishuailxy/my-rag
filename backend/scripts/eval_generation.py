@@ -19,9 +19,6 @@
     cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false \\
         .venv/bin/python scripts/eval_generation.py [--limit 5] [--no-judge]
 
-    # 把评测集推到 LangSmith（供在线实验/对比；不跑 LLM）
-    .venv/bin/python scripts/eval_generation.py --push-dataset
-
 前置：docker 栈在跑、LLM / Embedding / Rerank Key 已配（读 backend/.env）。
 """
 import argparse
@@ -176,128 +173,11 @@ def print_summary(metrics: dict[str, Any], judged: bool) -> None:
         print("  忠实度/引用准确率：未判分（--no-judge 或未配 LLM Key）")
 
 
-# ---- LangSmith 上报 ----
-
-
-def _push_dataset(client: Any, name: str, path: Path) -> int:
-    """把一个 jsonl 评测集推到 LangSmith（同名数据集已存在则复用）
-
-    评测集是**单一事实来源**：LangSmith 只是它的一个运行台，
-    离线脚本（可进 CI、零外部依赖）仍是主入口。
-    """
-    cases = [
-        json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()
-    ]
-    if client.has_dataset(dataset_name=name):
-        dataset = client.read_dataset(dataset_name=name)
-    else:
-        dataset = client.create_dataset(
-            dataset_name=name, description=f"my-rag 评测集（源文件 {path.name}）"
-        )
-
-    existing = {
-        ex.metadata.get("case_id")
-        for ex in client.list_examples(dataset_id=dataset.id)
-        if ex.metadata
-    }
-    fresh = [c for c in cases if c["id"] not in existing]
-    if fresh:
-        client.create_examples(
-            dataset_id=dataset.id,
-            examples=[
-                {
-                    "inputs": {"question": c["question"]},
-                    "outputs": c,
-                    "metadata": {"case_id": c["id"], "category": c.get("category")},
-                }
-                for c in fresh
-            ],
-        )
-    print(f"  {name}: 共 {len(cases)} 条，新增 {len(fresh)} 条")
-    return len(cases)
-
-
-def push_datasets() -> int:
-    """把检索集 + 生成集推到 LangSmith"""
-    from langsmith import Client  # noqa: PLC0415 — 仅该模式下需要
-
-    client = Client()
-    print("推送到 LangSmith：")
-    _push_dataset(client, "my-rag-retrieval-eval", RETRIEVAL_FILE)
-    _push_dataset(client, "my-rag-generation-eval", GEN_FILE)
-    return 0
-
-
-async def run_langsmith(args: argparse.Namespace) -> int:
-    """在 LangSmith 上跑一次 experiment（数据集需先 `--push-dataset`）
-
-    目标与本地跑的是**同一个** `answer_question`，评测器复用**同一个** `answer_grader` ——
-    差别只是结果落到 LangSmith，换来实验对比视图与 trace 同源。
-    """
-    from langsmith import Client  # noqa: PLC0415 — 仅该模式下需要
-    from langsmith.evaluation import aevaluate  # noqa: PLC0415
-
-    client = Client()
-
-    async def target(inputs: dict) -> dict[str, Any]:
-        result = await answer_question(inputs["question"], args.top_k)
-        return {"answer": result["answer"], "contexts": result["contexts"]}
-
-    async def ev_fact_coverage(run: Any, example: Any) -> dict:
-        facts = (example.outputs or {}).get("expect_facts") or []
-        return {
-            "key": "fact_coverage",
-            "score": fact_coverage(run.outputs["answer"], facts),
-        }
-
-    async def ev_refusal(run: Any, example: Any) -> dict | None:
-        if (example.outputs or {}).get("answerable"):
-            return None
-        return {
-            "key": "refuse_ok",
-            "score": 1.0 if REFUSAL in run.outputs["answer"] else 0.0,
-        }
-
-    async def ev_answer_grade(run: Any, example: Any) -> list[dict] | None:
-        grade = await answer_grader.grade(
-            example.inputs["question"], run.outputs["answer"], run.outputs["contexts"]
-        )
-        if grade is None:
-            return None
-        return [
-            {"key": "faithfulness", "score": faithfulness_score(grade)},
-            {"key": "citation_ok", "score": 0.0 if grade.citation_issues else 1.0},
-        ]
-
-    results = await aevaluate(
-        target,
-        data="my-rag-generation-eval",
-        evaluators=[ev_fact_coverage, ev_refusal, ev_answer_grade],
-        experiment_prefix=args.experiment_prefix,
-        max_concurrency=args.concurrency,
-        client=client,
-    )
-    # aevaluate 返回的是 AsyncExperimentResults，wait() 是协程（不 await 会告警）
-    await results.wait()
-    print(f"\nLangSmith 实验：{results.experiment_name}")
-    print(f"  对比视图：{results.url}")
-    return 0
-
-
 # ---- 主流程 ----
 
 
 async def main(args: argparse.Namespace) -> int:
-    if args.push_dataset:
-        return push_datasets()
-
     await es_service.start()
-    if args.langsmith:
-        try:
-            return await run_langsmith(args)
-        finally:
-            await es_service.close()
-
     cases = load_cases(args.limit)
     judge_on = args.judge and answer_grader.is_enabled()
     if args.judge and not judge_on:
@@ -332,10 +212,6 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None, help="只跑前 N 条（省 LLM 调用）")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--no-judge", dest="judge", action="store_false", help="跳过 LLM 判分")
-    parser.add_argument("--push-dataset", action="store_true", help="把评测集推到 LangSmith")
-    parser.add_argument("--langsmith", action="store_true", help="跑一次 LangSmith experiment")
-    parser.add_argument("--experiment-prefix", default="my-rag-gen", help="实验名前缀")
-    parser.add_argument("--concurrency", type=int, default=4, help="LangSmith 并发度")
     parser.add_argument("--dump", default=None, help="把逐条明细写到该 JSON 文件")
     parsed = parser.parse_args()
     raise SystemExit(asyncio.run(main(parsed)))

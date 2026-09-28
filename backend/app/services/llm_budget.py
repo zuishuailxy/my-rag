@@ -201,17 +201,63 @@ def track_llm_turn(label: str) -> Callable[[Callable[..., Awaitable[Any]]], Call
     return decorator
 
 
+# Langfuse trace handler：懒加载 + 全局复用
+# - 懒加载：SDK 未装 / 未配 key 时零开销，CI 不受影响
+# - 复用同一实例：handler 设计上可跨 run 复用（LangChain 按 run_id 区分），
+#   而 `_build_llm` 是**每个请求**都调一次，不复用会每轮新建 10+ 个客户端
+_LANGFUSE_HANDLER: BaseCallbackHandler | None = None
+_LANGFUSE_RESOLVED = False
+
+
+def _langfuse_handler() -> BaseCallbackHandler | None:
+    """自托管 Langfuse 的 LangChain 回调（未配置 / 未安装 → None）
+
+    刻意**不放在关键路径**：只旁路上报 trace，Langfuse 挂了不影响任何一次对话
+    （只丢观测数据）。这与限流的分工是本质区别 —— 限流必须同步、必须在关键路径。
+    """
+    global _LANGFUSE_HANDLER, _LANGFUSE_RESOLVED  # noqa: PLW0603
+    if _LANGFUSE_RESOLVED:
+        return _LANGFUSE_HANDLER
+    _LANGFUSE_RESOLVED = True
+
+    if settings.LANGFUSE_TRACING == "false":
+        return None
+    if not (settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY):
+        return None
+
+    try:
+        from langfuse.langchain import CallbackHandler  # noqa: PLC0415
+    except ImportError:
+        logger.warning("未安装 langfuse SDK，跳过 trace 上报")
+        return None
+
+    try:
+        _LANGFUSE_HANDLER = CallbackHandler()
+        logger.info("Langfuse trace 已启用：host=%s", settings.LANGFUSE_HOST)
+    except Exception as err:  # noqa: BLE001 — 观测层失败不能影响对话
+        logger.warning("Langfuse handler 初始化失败（不影响对话）：%s", err)
+    return _LANGFUSE_HANDLER
+
+
 def usage_callbacks() -> list[BaseCallbackHandler]:
-    """给 LLM **构造器**用：挂上即自动统计，无需逐个改 invoke 调用点
+    """给 LLM **构造器**用：挂上即自动统计与上报，无需逐个改 invoke 调用点
 
     为什么挂构造器而不是 invoke：LLM 构造点只有 8 个（agent 主循环 / 改写 / 切题 /
     长期记忆 / 摘要 / KG 抽取 / 图像 OCR / 评测判分），而 invoke 调用点更多且会持续
     新增 —— 挂构造器是「加一次、全覆盖」，不会随新代码漏统。
 
-    每次调用返回新实例：handler 本身无状态（真正的累加器在 ContextVar 里），
-    各 LLM 实例各持一个，互不影响。
+    这里同时是**可观测回调的单一注册点**：
+      - `LlmUsageHandler`：本地 token / 成本累加（同步、无外部依赖、CI 可测）
+      - Langfuse handler：trace 上报（异步旁路，未配置则不加载）
+
+    本地那套与 Langfuse 是互补而非替代：Langfuse 挂了前者照常工作，
+    前者也只有它能在不连外部服务的情况下断言成本。
     """
-    return [LlmUsageHandler()]
+    callbacks: list[BaseCallbackHandler] = [LlmUsageHandler()]
+    trace_handler = _langfuse_handler()
+    if trace_handler is not None:
+        callbacks.append(trace_handler)
+    return callbacks
 
 
 @dataclass

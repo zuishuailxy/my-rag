@@ -26,9 +26,8 @@
         实测：要点覆盖率 / 引用率 / 拒答率 / 忠贞度 / 引用准确率均 1.00。
         ⚠️ 首轮引用准确率 0.80 是**判分器口径错**（把 `[1]` 当成小节而非整块 chunk），人工核对后修正 prompt → 1.00。
   - [ ] **生成侧评测集扩大 + 加难** —— 当前 12 条全满分，区分度有限；补「资料部分相关 / 多跳」用例。
-- [x] **LangSmith 评测台** —— `scripts/eval_generation.py --push-dataset`（检索集 72 + 生成集 12）+ `--langsmith`
-      （跑 experiment 拿对比视图）；评测器与离线脚本**共用同一份**代码与评测集。
-      约定：离线脚本（零依赖、可进 CI）是主入口，LangSmith 只负责演示与对比。
+- [x] **评测集与运行台分离** —— 评测集是**单一事实来源**（`eval/*.jsonl`），离线脚本（零依赖、可进 CI）是主入口。
+      曾接过 LangSmith 做实验对比，**因其收费已移除**（代码/配置/文档全清）。
 
 ## P1 · 加分项
 
@@ -76,7 +75,11 @@
 - [x] **确定性 tie-break** —— `search.py` 里 ES 同分与 RRF 同分均按 `chunk_id` 定序（非根因，但本就该做）。
 - [x] **sweep 开跑前 embedding 预检** —— 重建中途失败会留下混合尺寸索引，而恢复也依赖嵌入 → 宁可提前中止。
 - [x] **README「设计取舍」章节** —— 把三级消融 / 扩库动机 / 组合故障 bug / 可复现性四个故事写进去。
-- [ ] **可观测性** —— LangSmith 已接（tracing + eval experiment）；仍缺请求级 latency / 命中率 / 成本统计面板。
+- [x] **可观测性（Langfuse 自托管）** —— trace 下钻 + 成本看板；`docker-compose.langfuse.yml` 独立栈
+      （含 ClickHouse，v4 的 OLAP 主存储）。接入点在 `llm_budget.usage_callbacks()`，未配 Key 则不加载。
+      已实证：trace 入库 + 本地成本估算与 Langfuse `cost_details` 完全一致（0.000398 元）。
+- [ ] **评测集集成到 Langfuse** —— 检索侧**不值得**（不产生 trace，无可关联）；生成侧有边际收益，
+      但要守住「jsonl 是唯一事实来源」。等 trace 用熟后再评估。
 - [ ] **成本监控** —— 已因欠费两次中断（`Arrearage`），需加余额/用量告警与实践中的降级演练。
 
 ## P2 · 工程完善
