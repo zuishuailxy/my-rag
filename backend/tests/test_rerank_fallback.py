@@ -65,6 +65,17 @@ async def test_min_score_zero_disables_fallback(monkeypatch) -> None:
     assert [g["chunkId"] for g in got] == ["relevant", "noise"]
 
 
+async def test_rerank_and_vector_both_down_keeps_rrf(monkeypatch) -> None:
+    """rerank 与向量通道**同时**挂掉时，不能把候选滤空
+
+    兜底门控依赖向量分；向量通道挂了（欠费 / 网络）时 vectorScore 全为 0，
+    若照旧门控会把候选全部滤掉 → 整体召回变成 0，比不兜底还差。
+    """
+    rows = [_row("a", 0.0), _row("b", 0.0)]
+    got = await _retrieve(monkeypatch, rows)
+    assert [g["chunkId"] for g in got] == ["a", "b"], "向量无数据时应退回 RRF 原序"
+
+
 async def test_rerank_ok_uses_rerank_path(monkeypatch) -> None:
     """rerank 正常时走 rerank 分数过滤，兜底门槛不参与
 

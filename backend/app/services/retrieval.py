@@ -104,6 +104,18 @@ class HybridRetrievalService:
         # （实测负例空召回率 1.00 → 0.00）。显式关过滤（minScore <= 0）时不介入。
         if self._min_score <= 0:
             return fused[:top_k]
+
+        # ⚠️ 兜底門控本身依赖向量分：若**向量通道也挂了**（欠费 / 网络），
+        # 所有 vectorScore 都是 0，门控会把候选**全部滤空** → 整体召回变成 0，
+        # 比不兜底还差。此时只能退回 RRF 原序（没有数据就别做数据驱动的判断）。
+        has_vector_data = any((r.get("vectorScore") or 0.0) > 0 for r in fused)
+        if not has_vector_data:
+            logger.warning(
+                "向量通道无数据，跳过向量相似度兜底（否则会滤空全部候选）：fused=%d",
+                len(fused),
+            )
+            return fused[:top_k]
+
         fallback = [
             r
             for r in fused

@@ -38,20 +38,24 @@ def load_cases() -> list[dict]:
     return [json.loads(ln) for ln in lines]
 
 
-class _RerankFailureCounter(logging.Handler):
-    """统计 RerankerService 的 WARNING 条数，用来判断 rerank 是否真的生效
+class _DegradationCounter(logging.Handler):
+    """统计检索链路的降级告警，用于判断本次指标是否可信
 
-    rerank 失败（配额 / 网络）会静默降级为 RRF —— 此时 minScore 过滤不生效、
-    负例全进，但指标看起来只是「变差」。不显式提示就会被误读为参数调坏了。
+    两类降级都会**静默改变指标**，不显式提示就会被当成「参数调坏了」：
+      - rerank 不可用（配额 / 网络）→ 降级 RRF，minScore 过滤失效、负例全进；
+      - 查询向量化失败（欠费 / 网络）→ 只剩关键词通道，退化为纯 BM25；
+        此时向量相似度兜底门控也一并失效。
     """
 
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
-        self.count = 0
+        self.counts = {"rerank": 0, "embedding": 0}
 
     def emit(self, record: logging.LogRecord) -> None:
         if record.name == "RerankerService":
-            self.count += 1
+            self.counts["rerank"] += 1
+        elif record.name == "HybridSearchService" and "向量化失败" in record.getMessage():
+            self.counts["embedding"] += 1
 
 
 def _summarize(rows: list[tuple[dict, int | None, list[str]]]) -> dict[str, Any]:
@@ -80,7 +84,7 @@ async def evaluate(
     额外按 `difficulty` 字段分组（缺省 easy），用于把「简单题满分」和
     「难题才能拉开区分度」分开看 —— 否则混合平均会被简单题淹没。
     """
-    counter = _RerankFailureCounter()
+    counter = _DegradationCounter()
     logging.getLogger().addHandler(counter)
     rows: list[tuple[dict, int | None, list[str]]] = []
     try:
@@ -105,8 +109,14 @@ async def evaluate(
                 for c, rank, titles in rows
                 if c.get("expect_documents") and not rank
             ],
+            # 命中但没排第 1：recall 满分时唯一能暴露问题的信号
+            "not_top1": [
+                (c["id"], c["question"], titles[:3], rank)
+                for c, rank, titles in rows
+                if c.get("expect_documents") and rank and rank > 1
+            ],
             "groups": {name: _summarize(group) for name, group in by_difficulty.items()},
-            "rerank_failures": counter.count,
+            "degradations": counter.counts,
         }
     )
     return metrics
@@ -120,10 +130,16 @@ def print_metrics(label: str, metrics: dict[str, Any], top_k: int) -> None:
         f"hit@1={metrics['hit1']:.3f}  MRR={metrics['mrr']:.3f}  "
         f"负例空召回率={empty_text}"
     )
-    if metrics.get("rerank_failures"):
+    degradations = metrics.get("degradations") or {}
+    if degradations.get("rerank"):
         print(
-            f"   ⚠️ rerank 调用失败 {metrics['rerank_failures']} 次：已降级为 RRF，"
+            f"   ⚠️ rerank 调用失败 {degradations['rerank']} 次：已降级为 RRF，"
             "minScore 不生效、负例会漏过（本次指标不可信）"
+        )
+    if degradations.get("embedding"):
+        print(
+            f"   ⚠️ 查询向量化失败 {degradations['embedding']} 次：只剩关键词通道，"
+            "向量相似度兜底也失效（本次指标不可信）"
         )
 
 
@@ -154,9 +170,13 @@ async def main(args: argparse.Namespace) -> int:
         if len(metrics["groups"]) > 1:
             print_metrics(f"  └ {name}", group, args.top_k)
     if metrics["misses"]:
-        print(f"\n未命中 {len(metrics['misses'])} 题：")
+        print(f"\n未命中（top-k 里没有正确文档）{len(metrics['misses'])} 题：")
         for cid, question, top in metrics["misses"]:
             print(f"  ✗ [{cid}] {question}\n      检索到：{top}")
+    if metrics["not_top1"]:
+        print(f"\n命中但未排第 1 {len(metrics['not_top1'])} 题：")
+        for cid, question, top, rank in metrics["not_top1"]:
+            print(f"  · [{cid}] 正确文档在第 {rank} 位 —— {question}\n      前 3：{top}")
 
     await es_service.close()
     return 0

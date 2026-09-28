@@ -70,3 +70,18 @@
 {"id": "h-lmq-02", "question": "他独立交付了几个能跑起来的智能体系统？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["3 个"], "category": "resume", "difficulty": "hard"}
 {"id": "h-att-01", "question": "3 月 1 日谁到得最早？", "expect_documents": ["员工考勤表"], "expect_keywords": ["08:54"], "category": "attendance", "difficulty": "hard"}
 {"id": "h-att-02", "question": "这份记录里一共出现了多少人？", "expect_documents": ["员工考勤表"], "expect_keywords": ["卢永明"], "category": "attendance", "difficulty": "hard"}
+{"id": "x-conf-01", "question": "会议住宿费的上限是多少？", "expect_documents": ["会议与培训费用管理办法"], "expect_keywords": ["500"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-02", "question": "数据库变更的常规窗口是什么时候？", "expect_documents": ["数据库变更管理规范（SOP）"], "expect_keywords": ["周三"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-03", "question": "数据库变更在什么情况下必须回滚？", "expect_documents": ["数据库变更管理规范（SOP）"], "expect_keywords": ["3 秒"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-04", "question": "员工年假有多少天？", "expect_documents": ["考勤与请休假管理办法"], "expect_keywords": ["5 天"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-05", "question": "迟到超过多久按事假处理？", "expect_documents": ["考勤与请休假管理办法"], "expect_keywords": ["30 分钟"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-06", "question": "王磊做过什么项目？", "expect_documents": ["王磊_后端开发_13800138000"], "expect_keywords": ["订单中心"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-07", "question": "行测数量关系有什么蒙题技巧？", "expect_documents": ["行测数量关系总结课"], "expect_keywords": ["选项分布"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-08", "question": "员工离职要提前多久提出申请？", "expect_documents": ["员工离职交接管理办法"], "expect_keywords": ["30 天"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-09", "question": "办公电脑多久可以更换？", "expect_documents": ["IT 资产领用与归还管理办法"], "expect_keywords": ["36 个月"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-10", "question": "重大投诉的首次响应时限是多少？", "expect_documents": ["客户投诉处理规范"], "expect_keywords": ["30 分钟"], "category": "confusable", "difficulty": "easy"}
+{"id": "x-conf-11", "question": "开会订酒店的房间预算上限是多少？", "expect_documents": ["会议与培训费用管理办法"], "expect_keywords": ["500"], "category": "confusable", "difficulty": "hard"}
+{"id": "x-conf-12", "question": "改数据库之前先在哪个库上试跑？", "expect_documents": ["数据库变更管理规范（SOP）"], "expect_keywords": ["从库"], "category": "confusable", "difficulty": "hard"}
+{"id": "x-conf-13", "question": "把代码推上生产，常规时间是什么时候？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["周二"], "category": "confusable", "difficulty": "hard"}
+{"id": "x-conf-14", "question": "简历里那位做高并发交易系统的候选人是谁？", "expect_documents": ["王磊_后端开发_13800138000"], "expect_keywords": ["王磊"], "category": "confusable", "difficulty": "hard"}
+{"id": "x-conf-15", "question": "公司里谁负责数据库变更的审批？", "expect_documents": ["数据库变更管理规范（SOP）"], "expect_keywords": ["赵磊"], "category": "confusable", "difficulty": "easy"}
