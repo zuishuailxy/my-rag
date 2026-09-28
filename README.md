@@ -240,6 +240,69 @@ rerank 挂 → 用向量分兜底
 > 验证方式：单元测试 14 例（成本换算 / 双形态 token 提取 / handler 上下文隔离 / 配额各分支），
 > 外加一个**本地 mock 的 OpenAI 兼容服务**做端到端验证 —— 确认「构造器挂 callbacks → handler 被触发 → token 正确累加」。**不花钱也能验**。
 
+### 6. 并发压测：真问题不是连接池太小，是连接被占着等 LLM
+
+项目原本**一个生产数字都没有**：「并发多少会挂」是面试必问却答不上来的题。
+
+**方法**：mock 掉 LLM / Embedding，起一个独立实例，N 路并发打 `/ai/chat`，后台采样 `pg_stat_activity`。
+先把第三方 API 的抖动移除——压测要测的是**我的系统**，而且这样不花钱、可复现、能进 CI。
+
+```bash
+cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false \
+    .venv/bin/python scripts/load_test.py --levels 10,20,40,60
+```
+
+**第一轮（池 = 5 + 10 = 15）**：并发 10 正常，**并发 20 时 5/20 失败**，p50 从 0.5s 直接跳到 **31s**（正好是 `pool_timeout`）。
+
+抓异常（而不是猜）——服务端日志里拿到确凿的一行：
+
+```
+sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached,
+connection timed out, timeout 30.00
+```
+
+**但我没有直接去调大连接池**，而是先问：连接被**谁**占着、占了**多久**？给采样器加上状态分布：
+
+```
+峰值时刻连接状态：idle in transaction=20, idle=11, active=1
+空占连接的最后一条 SQL（= 谁开的会话）：
+  ×7  SELECT kh_role.role_code FROM kh_role JOIN kh_user_role ...
+```
+
+**31 条连接里 20 条在「开着事务空等」，真正跑查询的只有 1 条。**
+
+**根因**：FastAPI 的生成器依赖 `Depends(get_db_session)` 会活到**响应结束**（流式就是整个流）。
+权限守卫用了它，于是一次权限查询开的**会话 / 事务 / 连接被占住整条链路** —— 包括后面几秒的检索与 LLM 生成。
+
+**修法**（两处，都不涉及调池）：
+
+1. `permission_guard` 改用**短生命周期会话**（查完就还连接）；
+2. 后台摘要 `fold` 把 LLM 调用**移出 `async with` 会话块**（原来等模型时一直占着连接）。
+
+**结果**：
+
+| 并发 | 修复前（池 15） | 仅调大池（30） | **修掉跨调用持有** |
+| --- | --- | --- | --- |
+| 10 | 10/0 | 10/0 | **10/0** |
+| 20 | **15/5 失败** | 20/0 | **20/0** |
+| 40 | 15/25 | 32/8 | **40/0** |
+| 60 | 15/45 | 37/23 | **60/0** |
+| 100 | — | — | **100/0** |
+| **峰值连接** | 16 | 31 | **2** |
+
+> **教训：先查「连接持有时间」，再谈「池容量」。** 加池只是把「占着等」的容量买大一点，
+> 峰值从 2 变成 31 却仍在 40 并发崩；修掉持有问题后，100 并发峰值也只要 **2 条**。
+
+**顺手拈出 3 个真 bug**（都是压测/日志才暴露的）：
+
+| Bug | 后果 |
+| --- | --- |
+| `chat_query_rewrite` 两处结构化输出未判 `None` | `with_structured_output` 在模型未吐出合法 tool call 时返回 None（**不抛异常**）→ `result.query` 抛 AttributeError → 整轮 500 |
+| `kg_extraction` 同样未判 `None` | 抽取失败会让建图整批断掉 |
+| `graph_build` 的 `logger.info("...count=%d", len)` | 传了 `len` 函数本身 → 日志行**永远不打印**（TypeError 被 logging 吞掉），纯粹的可观测黑洞 |
+
+> 边界：单进程、mock LLM、本开发机实测；关注的不是绝对延迟，而是**能承受的并发与峰值连接**。
+
 ## 📡 API 概览
 
 共 **81 个 REST 端点**，按模块：
@@ -419,6 +482,11 @@ cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_
 代价是自托管 = 跑 Langfuse 自己的生产架构：**ClickHouse**（Trace / Observation / Score 的 OLAP 主存储）
 + Postgres + Redis + S3（复用已有的 RustFS 生态思路，但独立栈更省心）。
 
+> ⚠️ **内存代价是实测的，不是估算**：整个栈约 **2.6 GB**（ClickHouse 1.2 GB +
+> web/worker 1.2 GB + MinIO 0.1 GB + PG/Redis 0.06 GB）。本机 Docker VM 只有 7.7 GB
+> 却跑了 16 个容器，加上它后 **PostgreSQL 后端进程被 OOM 杀掉**、进入 crash recovery。
+> 所以推荐**按需启停**（`docker compose ... stop` / `up -d`），或调大 Docker 内存限额。
+
 ```bash
 # 启动（独立 project，只对外暴露 3000；存储组件走内部网络，避开主栈 5432/6379/9000）
 docker compose --env-file .env.langfuse -f docker-compose.langfuse.yml up -d
@@ -449,3 +517,4 @@ cd backend && PYTHONPATH=. .venv/bin/python scripts/setup_langfuse_models.py
 - 单元测试与 CI 持续完善中（62 个纯逻辑用例 + 真实依赖 E2E 冒烟脚本）。
 - 生成侧评测集仅 12 条且全满分，**区分度有限**；待补「资料部分相关 / 多跳」类用例。
 - 限流按「轮次」而非 token/金额：一次超长上下文（如长文档问答）仍会消耗较多额度，目前靠成本日志发现、人工干预。
+- 压测结论基于**单进程 + mock LLM + 本开发机**；多 worker 部署需重测（部署前记得按 `DB_POOL_SIZE + DB_MAX_OVERFLOW` 与 PG `max_connections` 算账）。

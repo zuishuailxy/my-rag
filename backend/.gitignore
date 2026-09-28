@@ -13,3 +13,6 @@ venv/
 
 # 评测用冻结的查询向量（本地缓存，约 2MB；删掉即重建）
 eval/query_vectors.json
+
+# 压测脚本产生的服务端日志
+scripts/.load_test_server.log

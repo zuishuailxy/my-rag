@@ -65,6 +65,19 @@
         轮次内 agent 主循环 + 工具子调用累加到同一 `ContextVar`，结束打结构化日志（token 真实 / 金额估算）。
       · 限流：Redis 计数每用户 / 每会话每日轮次，超限在**推流前** 429；Redis 挂则 fail-open。
       · 验证：14 例单测 + 本地 mock OpenAI 兼容服务端到端（不花钱）。日志前缀「本轮 LLM 用量」。
+- [x] **并发压测（补生产数字）** —— `scripts/load_test.py`（mock 掉 LLM/Embedding，独立实例，采样 `pg_stat_activity`）。
+      实测：池 5+10 时**并发 20 即 5/20 失败**（p50 0.5s→31s，= pool_timeout）。
+      但**根因不是池小**：峰值 31 条连接中 **20 条 `idle in transaction`**，最后一条 SQL 是权限查询。
+      根因 = FastAPI 生成器依赖 `Depends(get_db_session)` 活到响应结束 → 权限事务占住整条链路（含 LLM）。
+      修法：权限守卫改短会话 + 后台摘要把 LLM 移出会话块 → **60/100 并发零失败，峰值连接 31→2**。
+      教训：先查「连接持有时间」，再谈「池容量」。
+- [x] **压测拈出的 3 个真 bug** —— 结构化输出未判 `None` ×2（改写 / 切题 / KG，会 500）、
+      `graph_build` 的 `logger.info("...%d", len)`（日志永远不打印）。
+- [ ] **本机资源预算（实测教训）** —— Docker VM 仅 7.7GB / 16 容器；Langfuse 栈又占 ~2.6GB，
+      导致 **PostgreSQL 被 OOM 杀掉并 crash recovery**（日志里 09-16/09-17/09-18 已先于压测发生过，
+      说明本来就临界，Langfuse 只是推高了）。已把 Langfuse 改为按需启停。
+      可选：调大 Docker 内存，或给 PG/ES 设 `mem_limit`/`shared_buffers`。
+- [ ] **多 worker 压测** —— 当前结论是单进程；多 worker 需按 `(pool_size+max_overflow) × workers < max_connections` 重算并重测。
 - [ ] **成本告警 / 降级演练** —— 目前只有事后日志：加「单日成本超阈值告警」；
       已因欠费中断两次（`Arrearage`），值得把「外部额度耗尽」纳入演练。
 - [x] **评测可复现性**（实测发现）—— 同一评测集连跑 `hit@1` 在 0.889/0.901 之间跳。

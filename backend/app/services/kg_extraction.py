@@ -86,6 +86,15 @@ class ExtractionService:
             [SystemMessage(content=system), HumanMessage(content=user)]
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        # ⚠️ 结构化输出在模型没吐出合法 tool call 时会返回 None（不抛异常）。
+        # KG 是增强链路：抽不出东西就当作空结果，不要让建图整批断掉。
+        if parsed is None:
+            logger.warning(
+                "KG 抽取返回空结果：title=%s, elapsed=%dms", document_title, elapsed_ms
+            )
+            return self._to_extraction_result(
+                KgExtractionLlmOutput(entities=[], relations=[])
+            )
         logger.info(
             "KG 抽取完成：title=%s, elapsed=%dms, chars=%d, entities=%d",
             document_title,

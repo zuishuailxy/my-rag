@@ -32,6 +32,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -279,9 +280,17 @@ class ChatSessionSummaryService:
             if not older:
                 return
 
-            new_summary = await self._summarize(state.summary, older)
+            # ⚠️ 只在这里做**纯数据读取**，不要把 LLM 调用留在会话内。
+            # 压测发现的真问题：`fold` 是每轮对话都 spawn 的后台任务，原先
+            # `await self._summarize(...)` 写在 `async with` 块里 → 摘要模型一跑就是几秒，
+            # 这几秒里**连接一直被占着**。并发 20 时 = 20 前台 + 20 后台，
+            # 把连接池（5+10）瞬间打满 → `QueuePool limit ... timed out`。
+            # 修法：会话内只取需要的数据，退出会话后再调 LLM。
+            older_turns = [(m.role, m.content or "") for m in older]
             new_covered = older[-1].id
+            old_summary = state.summary
 
+        new_summary = await self._summarize(old_summary, older_turns)
         await self.save(user_id, session_id, SessionSummary(new_summary, new_covered))
         logger.info(
             "会话摘要已折叠：sessionId=%s, n=%d, coveredUntil=%s, chars=%d",
@@ -292,12 +301,17 @@ class ChatSessionSummaryService:
         )
 
     async def _summarize(
-        self, old_summary: str, messages: list[AiMessage]
+        self, old_summary: str, turns: Sequence[tuple[str, str]]
     ) -> str:
+        """把滑出窗口的旧对话增量折叠进摘要
+
+        `turns` 是已取出会话的 `(role, content)` 纯数据（不是 ORM 对象）：
+        调用方必须在**退出 DB 会话之后**才调本方法（见 `_fold_locked` 的注释）。
+        """
         assert self._llm is not None # 调用方 fold 已判空
         transcript = "\n".join(
-            f"{'用户' if m.role == MESSAGE_ROLE_USER else '助手'}：{(m.content or '').strip()}"
-            for m in messages
+            f"{'用户' if role == MESSAGE_ROLE_USER else '助手'}：{content.strip()}"
+            for role, content in turns
         )
         prompt = (
             f"已有摘要：\n{old_summary.strip() or '（无）'}\n\n"

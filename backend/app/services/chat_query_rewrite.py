@@ -581,6 +581,10 @@ class ChatQueryRewriteService:
         except Exception as err: # noqa: BLE001
             logger.warning("切题判定(LLM)失败，按切题处理：%s", err)
             return None
+        # 同改写：结构化输出可能返回 None（不抛异常，except 拦不住）
+        if result is None:
+            logger.warning("切题判定(LLM)返回空结果，按切题处理")
+            return None
         logger.info(
             "切题判定(LLM)：question=%r → relevant=%s reason=%s",
             question[:80],
@@ -643,6 +647,12 @@ class ChatQueryRewriteService:
         except Exception as err: # noqa: BLE001
             logger.warning("检索改写失败，回退原问题：%s", err)
             return fallback
+        # ⚠️ `with_structured_output` 在模型没吐出合法 tool call 时会返回 **None**
+        #（不抛异常，所以上面的 except 拦不住）—— 必须显式判空，否则整轮对话 500。
+        # 压测时被 mock LLM 暴露出来（并发 10 即触发）。
+        if result is None:
+            logger.warning("检索改写返回空结果，回退原问题")
+            return fallback
         query = distinct_query(result.query, previous_query)
         if not query:
             return fallback
@@ -664,6 +674,10 @@ class ChatQueryRewriteService:
             )
         except Exception as err: # noqa: BLE001
             logger.warning(f"检索改写失败，使用原问题：{err}")
+            return None
+        # 同上：结构化输出可能返回 None，判空后再取值
+        if result is None:
+            logger.warning("改写返回空结果，使用原问题")
             return None
         logger.info(
             "改写(LLM)：question=%r → standalone_query=%r need_retrieve=%s",

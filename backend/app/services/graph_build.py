@@ -306,7 +306,7 @@ class GraphBuildService:
                     # consume() 不可省：不消费则服务端报错不会被观察到
                     await (await session.run(statement)).consume()
             logger.info(
-                "Neo4j 唯一性约束已就绪：count=%d", len
+                "Neo4j 唯一性约束已就绪：count=%d", len(CONSTRAINT_STATEMENTS)
             )
         except Exception as err:
             logger.warning(

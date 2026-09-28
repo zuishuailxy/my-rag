@@ -255,6 +255,20 @@ class Settings(BaseSettings):
     # LLM 单次作答超时
     AI_CHAT_TIMEOUT_MS: int = 60000
 
+    # ---- 数据库连接池----
+    # ⚠️ **上限公式**：每进程 = DB_POOL_SIZE + DB_MAX_OVERFLOW；
+    #    全集群 = 每进程 × worker 数，必须小于 PG 的 max_connections（本项目 100）。
+    #    默认 20 + 10 = 30 → PG 100 最多撑 3 个 worker。加 worker 前先算这笔账。
+    # 为什么默认从 5+10 提到 20+10：压测实测并发 10~20 就把旧值打满，
+    # p50 从 0.5s 跳到 30s（pool_timeout），大批请求 500。
+    # ⚠️ 但**真正的根因不是池小**：采样 `pg_stat_activity` 发现峰值时 31 条连接中
+    # 20 条是 `idle in transaction`（开着事务等 LLM）。修掉「连接跨外部调用持有」后，
+    # 100 并发峰值也只用 **2 条**。这里的 20+10 是给突发留的余量，不是当前必需的。
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 10
+    # 拿不到连接时的等待上限（秒）；超时抛 TimeoutError（对外即 500）
+    DB_POOL_TIMEOUT: float = 30.0
+
     # ---- LLM 成本与限流----
     # 估算单价（元 / 百万 token）。⚠️ **这是估算，不是账单**：单价随厂商调整，
     # 只用来发现「用量异常」；需要精确计费请以厂商账单为准。
