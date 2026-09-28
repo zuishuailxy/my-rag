@@ -1,0 +1,29 @@
+{"id": "travel-01", "question": "私车公用怎么报销？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["私车公用申请表"], "category": "travel"}
+{"id": "travel-02", "question": "出差住宿费标准是多少？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["住宿费"], "category": "travel"}
+{"id": "travel-03", "question": "出差餐饮补贴一天多少钱？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["100 元/天"], "category": "travel"}
+{"id": "travel-04", "question": "出差申请单模板在哪里？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["出差申请单"], "category": "travel"}
+{"id": "travel-05", "question": "差旅预估费用超过多少要总监加签？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["5000"], "category": "travel"}
+{"id": "travel-06", "question": "公司报销发票抬头写什么？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["某某科技有限公司"], "category": "travel"}
+{"id": "travel-07", "question": "报销审核通过后多久打款？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["5 个工作日"], "category": "travel"}
+{"id": "travel-08", "question": "发票丢了还能补报吗？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["替代凭证"], "category": "travel"}
+{"id": "travel-09", "question": "出差申请由谁审批？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["直属 Leader"], "category": "travel"}
+{"id": "travel-10", "question": "报销进度有疑问找谁？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["张敏"], "category": "travel"}
+{"id": "travel-11", "question": "市内交通费每天上限是多少？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["市内交通"], "category": "travel"}
+{"id": "travel-12", "question": "上海成都的同事去北京出差要提前几天申请？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["3 个工作日"], "category": "travel"}
+{"id": "travel-13", "question": "客户招待餐和差旅补贴可以同时领吗？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["重复领取"], "category": "travel"}
+{"id": "travel-14", "question": "出差回来多久内要提交报销单？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["10 个工作日"], "category": "travel"}
+{"id": "travel-15", "question": "用自己渠道订机票没备案会怎样？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["费用自理"], "category": "travel"}
+{"id": "sop-01", "question": "生产环境发布的负责人是谁？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["SRE 值班工程师"], "category": "release"}
+{"id": "sop-02", "question": "紧急发布窗口是怎么规定的？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["紧急窗口"], "category": "release"}
+{"id": "sop-03", "question": "常规发布窗口是什么时间？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["每周二、周四"], "category": "release"}
+{"id": "sop-04", "question": "封网期是什么时候？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["封网期"], "category": "release"}
+{"id": "sop-05", "question": "发布前检查最晚什么时候完成？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["18:00"], "category": "release"}
+{"id": "sop-06", "question": "错误率超过多少要触发回滚？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["回滚"], "category": "release"}
+{"id": "sop-07", "question": "灰度发布默认放多少流量？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["10% Pod"], "category": "release"}
+{"id": "sop-08", "question": "重大变更由谁二次评审？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["架构委员会"], "category": "release"}
+{"id": "sop-09", "question": "线上故障复盘文档要求多久提交？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["72 小时"], "category": "release"}
+{"id": "sop-10", "question": "2026-Q1 知识库发布的默认审批人是谁？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["李明"], "category": "release"}
+{"id": "neg-01", "question": "今天天气怎么样？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-02", "question": "公司食堂这周的菜单是什么？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-03", "question": "怎么用 Python 做数据可视化？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-04", "question": "最近股票行情怎么样？", "expect_documents": [], "expect_keywords": [], "category": "negative"}

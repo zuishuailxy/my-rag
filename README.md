@@ -193,6 +193,23 @@ retrieve_graph（知识图谱实体关系，带关系出处）
 
 ---
 
+## 📊 检索评测
+
+`backend/eval/rag_eval.jsonl`（25 正例 + 4 负例）+ `backend/scripts/eval_retrieval.py`，指标 `recall@k` / `hit@1` / `MRR` / 负例空召回率，支持扫参数做调参实验：
+
+```bash
+cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_retrieval.py [--min-score 0.1] [--no-rerank]
+```
+
+| 配置 | recall@5 | hit@1 | MRR | 负例空召回率 |
+| --- | --- | --- | --- | --- |
+| 混合 + rerank + minScore=0.1（默认） | 1.00 | 1.00 | 1.00 | 1.00 |
+| 关闭 rerank | 1.00 | 0.96 | 0.98 | 0.00 |
+| minScore=0.4 | 0.28 | 0.28 | 0.28 | 1.00 |
+| minScore=0.0 | 1.00 | 1.00 | 1.00 | 0.00 |
+
+> 结论：`minScore=0.4` 会过杀合法命中（recall 掉到 0.28），`0.1` 兼顾召回与过滤；关闭 rerank 后无关问题不再被过滤（负例空召回率 0.0）—— 印证「rerank + 阈值」是精度关键。当前知识库仅 2 篇公开文档，区分度有限，扩库后重测。
+
 ## ⚠️ 已知边界
 
 - 解析器覆盖文本类格式（PDF / Word / PPT / Excel / 文本）+ **图片 OCR**（Qwen-VL，jpg/png/webp/bmp/gif）；**音频 ASR / 视频理解、以及文档内嵌图片的 OCR 尚未接入**；

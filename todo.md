@@ -17,12 +17,11 @@
   - [x] RBAC 权限矩阵（mock PG 会话：ADMIN 追加操作权限 / 直接+角色合并去重 / 非法 uid）
   - [x] 入参校验（超长字段被拦 → HTTP 422，不落库变 500）
 - [x] **CI（GitHub Actions）** —— `.github/workflows/ci.yml`：后端 `ruff + mypy(0 issue) + pytest`，前端 `tsc -b + build`；PR / push 自动跑。
-- [ ] **RAG 评测集** —— 量化检索/问答质量（AI 岗最能体现深度）：
-  - [ ] 构造 30~50 条 `(问题, 期望文档/答案)`
-  - [ ] 检索指标 `recall@k` / `MRR`
-  - [ ] 生成指标 `faithfulness` / 引用准确率
-  - [ ] ablation：关键词 only vs 向量 only vs 混合；有/无 rerank；不同 `minScore` / chunk size
-  - [ ] 把结论写进 README（如「混合+rerank 使 recall@5 从 X → Y」）
+- [x] **RAG 评测集（检索侧）** —— `eval/rag_eval.jsonl`（29 条：25 正 + 4 负）+ `scripts/eval_retrieval.py`；
+      指标 `recall@k` / `hit@1` / `MRR` / 负例空召回率；支持扫参数（top-k / min-score / rerank / hybrid-top-k / rrf-c）。
+      实测：`minScore=0.4` → recall@5 0.28（过杀）、`0.1` → 1.00 且负例全空；关 rerank → 负例空召回率 0.0（噪声进上下文）。
+  - [ ] 生成指标 `faithfulness` / 引用准确率（需 LLM 判定）
+  - [ ] 评测集扩到 30~50 条 + 更多文档（当前 KB 仅 2 篇公开文档，区分度有限）
 
 ## P1 · 加分项
 
