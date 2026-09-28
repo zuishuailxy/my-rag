@@ -188,10 +188,12 @@ class Settings(BaseSettings):
     # ⚠️ 这个阈值**跟 reranker 模型绑定**，换模型必须重新校准（否则要么误杀、要么漏过）：
     # · gte-rerank-v2：分档偏低但离散——相关 0.13~0.47、无关 ~0.006，0.1 能分开；
     #   该模型仅免费额度可用，额度耗尽即降级 RRF。
-    # · qwen3.7-text-rerank：分档高且分离度好——相关 ~0.9、无关 ~0.001。
-    # 0.4 会把 gte 的**全部**合法命中过滤掉 → AI 回答「召回不到相关资料」，而文档搜索
-    # （ES kh_document，不走 rerank）却能找到。0.1 实测能分开上述两组。
-    RAG_MIN_SCORE: float = 0.1
+    # · qwen3.7-text-rerank（当前）：分档高且分离度好——相关 ~0.9、无关 ~0.001。
+    #   55 条评测集实测：<0.55 有负例漏过；0.55~0.84 recall@5=1.0 且负例全部过滤；
+    #   ≥0.85 开始误杀合法命中（recall 0.98）。取区间中点 0.7（两侧各留 ~0.15 余量）。
+    # 历史教训：0.4 会把 gte 的**全部**合法命中过滤掉 → AI 回答「召回不到相关资料」，
+    # 而文档搜索（ES kh_document，不走 rerank）却能找到。
+    RAG_MIN_SCORE: float = 0.7
 
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
     RABBITMQ_ENABLED: bool = True
