@@ -83,8 +83,17 @@ else
   PIDS+=($!)
 
   for i in $(seq 1 60); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8000/docs 2>/dev/null || echo 000)
-    [ "$code" != "000" ] && { ok "后端已就绪（HTTP $code）"; break; }
+    # ⚠️ 两个坑都踩过，写在这两行旁边：
+    # 1) 变量名必须用 ${code} 括起来：后面紧跟全角括号（多字节 UTF-8）时，
+    #    bash 会把该字符的字节当成变量名的一部分 → `codeｘ: unbound variable`
+    #    （配合 set -u 直接挂）。凡 `$var` 后接中文/全角字符，一律写 ${var}。
+    # 2) **不能**用 `|| echo 000` 兜底：curl 的 -w 在连接失败时本就会输出 `000`，
+    #    再拼一个就成 `000000`，拿 `!= "000"` 判断会**假报就绪**。
+    #    所以直接用 case 匹配 2xx/3xx。
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8000/docs 2>/dev/null)
+    case "$code" in
+      2*|3*) ok "后端已就绪（HTTP ${code}）"; break ;;
+    esac
     [ "$i" = "60" ] && warn "后端未就绪，请看 $LOG_DIR/backend.log"
     sleep 2
   done
