@@ -54,59 +54,71 @@ class _RerankFailureCounter(logging.Handler):
             self.count += 1
 
 
-async def evaluate(
-    service: HybridRetrievalService, cases: list[dict], top_k: int
-) -> dict[str, Any]:
-    """跑检索并算指标（供单次评测与 chunk size 扫描复用）"""
-    positives = [c for c in cases if c.get("expect_documents")]
-    negatives = [c for c in cases if not c.get("expect_documents")]
-
-    counter = _RerankFailureCounter()
-    logging.getLogger().addHandler(counter)
-    try:
-        hit_k = 0
-        hit_1 = 0
-        rr_sum = 0.0
-        misses: list[tuple[str, str, list[str]]] = []
-        for case in positives:
-            got = await service.retrieve(case["question"], top_k, None)
-            titles = [g["documentTitle"] for g in got]
-            expected = set(case["expect_documents"])
-            rank = next((i + 1 for i, t in enumerate(titles) if t in expected), None)
-            if rank:
-                hit_k += 1
-                rr_sum += 1.0 / rank
-                if rank == 1:
-                    hit_1 += 1
-            else:
-                misses.append((case["id"], case["question"], titles[:3]))
-
-        empty_ok = 0
-        for case in negatives:
-            got = await service.retrieve(case["question"], top_k, None)
-            if not got:
-                empty_ok += 1
-    finally:
-        logging.getLogger().removeHandler(counter)
-
+def _summarize(rows: list[tuple[dict, int | None, list[str]]]) -> dict[str, Any]:
+    """(case, rank, titles) 列表 → 指标；rank=None 表示未命中，titles 为空表示空召回"""
+    positives = [r for r in rows if r[0].get("expect_documents")]
+    negatives = [r for r in rows if not r[0].get("expect_documents")]
     n = max(len(positives), 1)
     return {
         "n_positive": len(positives),
         "n_negative": len(negatives),
-        "recall": hit_k / n,
-        "hit1": hit_1 / n,
-        "mrr": rr_sum / n,
-        "empty_rate": empty_ok / max(len(negatives), 1),
-        "misses": misses,
-        "rerank_failures": counter.count,
+        "recall": sum(1 for r in positives if r[1]) / n,
+        "hit1": sum(1 for r in positives if r[1] == 1) / n,
+        "mrr": sum(1.0 / r[1] for r in positives if r[1]) / n,
+        # 该分组没有负例时为空召回率无意义，置 None（打印成 "-"）
+        "empty_rate": (
+            sum(1 for r in negatives if not r[2]) / len(negatives) if negatives else None
+        ),
     }
 
 
+async def evaluate(
+    service: HybridRetrievalService, cases: list[dict], top_k: int
+) -> dict[str, Any]:
+    """跑检索并算指标（供单次评测与 chunk size 扫描复用）
+
+    额外按 `difficulty` 字段分组（缺省 easy），用于把「简单题满分」和
+    「难题才能拉开区分度」分开看 —— 否则混合平均会被简单题淹没。
+    """
+    counter = _RerankFailureCounter()
+    logging.getLogger().addHandler(counter)
+    rows: list[tuple[dict, int | None, list[str]]] = []
+    try:
+        for case in cases:
+            got = await service.retrieve(case["question"], top_k, None)
+            titles = [g["documentTitle"] for g in got]
+            expected = set(case.get("expect_documents") or [])
+            rank = next((i + 1 for i, t in enumerate(titles) if t in expected), None)
+            rows.append((case, rank, titles))
+    finally:
+        logging.getLogger().removeHandler(counter)
+
+    by_difficulty: dict[str, list[tuple[dict, int | None, list[str]]]] = {}
+    for row in rows:
+        by_difficulty.setdefault(row[0].get("difficulty", "easy"), []).append(row)
+
+    metrics = _summarize(rows)
+    metrics.update(
+        {
+            "misses": [
+                (c["id"], c["question"], titles[:3])
+                for c, rank, titles in rows
+                if c.get("expect_documents") and not rank
+            ],
+            "groups": {name: _summarize(group) for name, group in by_difficulty.items()},
+            "rerank_failures": counter.count,
+        }
+    )
+    return metrics
+
+
 def print_metrics(label: str, metrics: dict[str, Any], top_k: int) -> None:
+    empty = metrics["empty_rate"]
+    empty_text = "-" if empty is None else f"{empty:.3f}"
     print(
         f"{label}：recall@{top_k}={metrics['recall']:.3f}  "
         f"hit@1={metrics['hit1']:.3f}  MRR={metrics['mrr']:.3f}  "
-        f"负例空召回率={metrics['empty_rate']:.3f}"
+        f"负例空召回率={empty_text}"
     )
     if metrics.get("rerank_failures"):
         print(
@@ -138,6 +150,9 @@ async def main(args: argparse.Namespace) -> int:
         f"rrf_c={args.rrf_c or settings.RAG_RRF_C}"
     )
     print_metrics(f"正例 {metrics['n_positive']} / 负例 {metrics['n_negative']}", metrics, args.top_k)
+    for name, group in (metrics.get("groups") or {}).items():
+        if len(metrics["groups"]) > 1:
+            print_metrics(f"  └ {name}", group, args.top_k)
     if metrics["misses"]:
         print(f"\n未命中 {len(metrics['misses'])} 题：")
         for cid, question, top in metrics["misses"]:

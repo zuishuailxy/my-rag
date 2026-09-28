@@ -53,3 +53,20 @@
 {"id": "lmq-08", "question": "梁多强掌握哪些检索与数据库？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["Milvus"], "category": "resume"}
 {"id": "neg-05", "question": "明天股市会涨吗？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
 {"id": "neg-06", "question": "红烧肉怎么做才好吃？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "h-travel-01", "question": "员工去外地办事，房费每晚最多能报多少？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["600"], "category": "travel", "difficulty": "hard"}
+{"id": "h-travel-02", "question": "开自己车跑业务的同事需要补什么手续？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["私车公用申请表"], "category": "travel", "difficulty": "hard"}
+{"id": "h-travel-03", "question": "从外面回来以后，单据要在几天内交上去？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["10 个工作日"], "category": "travel", "difficulty": "hard"}
+{"id": "h-travel-04", "question": "公司指定员工用哪两个叫车软件？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["滴滴"], "category": "travel", "difficulty": "hard"}
+{"id": "h-travel-05", "question": "在外地吃饭的钱是实报实销还是按天发？", "expect_documents": ["01-travel-expense-policy"], "expect_keywords": ["100 元/天"], "category": "travel", "difficulty": "hard"}
+{"id": "h-sop-01", "question": "线上出故障要紧急动手，得谁点头才行？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["总监"], "category": "release", "difficulty": "hard"}
+{"id": "h-sop-02", "question": "新版本上线后先放多少流量、观察多久才全量？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["10%"], "category": "release", "difficulty": "hard"}
+{"id": "h-sop-03", "question": "系统指标恶化到什么程度就必须退版本？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["2%"], "category": "release", "difficulty": "hard"}
+{"id": "h-sop-04", "question": "一年里哪些时间段不许随便动生产环境？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["封网"], "category": "release", "difficulty": "hard"}
+{"id": "h-sop-05", "question": "事故之后的复盘材料最晚什么时候交？", "expect_documents": ["02-production-release-sop"], "expect_keywords": ["72 小时"], "category": "release", "difficulty": "hard"}
+{"id": "h-sl-01", "question": "公考写作那门课，老师教的读材料步骤是什么？", "expect_documents": ["申论总结课"], "expect_keywords": ["三遍阅读法"], "category": "shenlun", "difficulty": "hard"}
+{"id": "h-sl-02", "question": "材料内容不够写的时候该怎么补？", "expect_documents": ["申论总结课"], "expect_keywords": ["多删少补"], "category": "shenlun", "difficulty": "hard"}
+{"id": "h-sl-03", "question": "怎么分辨一句是在讲做了什么还是在讲结果？", "expect_documents": ["申论总结课"], "expect_keywords": ["做法"], "category": "shenlun", "difficulty": "hard"}
+{"id": "h-lmq-01", "question": "这个人想找什么方向的工作？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["求职意向"], "category": "resume", "difficulty": "hard"}
+{"id": "h-lmq-02", "question": "他独立交付了几个能跑起来的智能体系统？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["3 个"], "category": "resume", "difficulty": "hard"}
+{"id": "h-att-01", "question": "3 月 1 日谁到得最早？", "expect_documents": ["员工考勤表"], "expect_keywords": ["08:54"], "category": "attendance", "difficulty": "hard"}
+{"id": "h-att-02", "question": "这份记录里一共出现了多少人？", "expect_documents": ["员工考勤表"], "expect_keywords": ["卢永明"], "category": "attendance", "difficulty": "hard"}
