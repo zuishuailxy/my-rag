@@ -38,6 +38,22 @@ def load_cases() -> list[dict]:
     return [json.loads(ln) for ln in lines]
 
 
+class _RerankFailureCounter(logging.Handler):
+    """统计 RerankerService 的 WARNING 条数，用来判断 rerank 是否真的生效
+
+    rerank 失败（配额 / 网络）会静默降级为 RRF —— 此时 minScore 过滤不生效、
+    负例全进，但指标看起来只是「变差」。不显式提示就会被误读为参数调坏了。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name == "RerankerService":
+            self.count += 1
+
+
 async def evaluate(
     service: HybridRetrievalService, cases: list[dict], top_k: int
 ) -> dict[str, Any]:
@@ -45,28 +61,33 @@ async def evaluate(
     positives = [c for c in cases if c.get("expect_documents")]
     negatives = [c for c in cases if not c.get("expect_documents")]
 
-    hit_k = 0
-    hit_1 = 0
-    rr_sum = 0.0
-    misses: list[tuple[str, str, list[str]]] = []
-    for case in positives:
-        got = await service.retrieve(case["question"], top_k, None)
-        titles = [g["documentTitle"] for g in got]
-        expected = set(case["expect_documents"])
-        rank = next((i + 1 for i, t in enumerate(titles) if t in expected), None)
-        if rank:
-            hit_k += 1
-            rr_sum += 1.0 / rank
-            if rank == 1:
-                hit_1 += 1
-        else:
-            misses.append((case["id"], case["question"], titles[:3]))
+    counter = _RerankFailureCounter()
+    logging.getLogger().addHandler(counter)
+    try:
+        hit_k = 0
+        hit_1 = 0
+        rr_sum = 0.0
+        misses: list[tuple[str, str, list[str]]] = []
+        for case in positives:
+            got = await service.retrieve(case["question"], top_k, None)
+            titles = [g["documentTitle"] for g in got]
+            expected = set(case["expect_documents"])
+            rank = next((i + 1 for i, t in enumerate(titles) if t in expected), None)
+            if rank:
+                hit_k += 1
+                rr_sum += 1.0 / rank
+                if rank == 1:
+                    hit_1 += 1
+            else:
+                misses.append((case["id"], case["question"], titles[:3]))
 
-    empty_ok = 0
-    for case in negatives:
-        got = await service.retrieve(case["question"], top_k, None)
-        if not got:
-            empty_ok += 1
+        empty_ok = 0
+        for case in negatives:
+            got = await service.retrieve(case["question"], top_k, None)
+            if not got:
+                empty_ok += 1
+    finally:
+        logging.getLogger().removeHandler(counter)
 
     n = max(len(positives), 1)
     return {
@@ -77,6 +98,7 @@ async def evaluate(
         "mrr": rr_sum / n,
         "empty_rate": empty_ok / max(len(negatives), 1),
         "misses": misses,
+        "rerank_failures": counter.count,
     }
 
 
@@ -86,6 +108,11 @@ def print_metrics(label: str, metrics: dict[str, Any], top_k: int) -> None:
         f"hit@1={metrics['hit1']:.3f}  MRR={metrics['mrr']:.3f}  "
         f"负例空召回率={metrics['empty_rate']:.3f}"
     )
+    if metrics.get("rerank_failures"):
+        print(
+            f"   ⚠️ rerank 调用失败 {metrics['rerank_failures']} 次：已降级为 RRF，"
+            "minScore 不生效、负例会漏过（本次指标不可信）"
+        )
 
 
 async def main(args: argparse.Namespace) -> int:

@@ -12,7 +12,7 @@ def _load() -> list[dict]:
 
 def test_eval_set_integrity() -> None:
     cases = _load()
-    assert len(cases) >= 20, "评测集至少 20 条"
+    assert len(cases) >= 40, "评测集至少 40 条"
     ids = [c["id"] for c in cases]
     assert len(ids) == len(set(ids)), "id 必须唯一"
     for case in cases:
@@ -25,7 +25,7 @@ def test_eval_set_has_positive_and_negative() -> None:
     cases = _load()
     positive = [c for c in cases if c["expect_documents"]]
     negative = [c for c in cases if not c["expect_documents"]]
-    assert len(positive) >= 15, "正例不足"
-    assert len(negative) >= 3, "负例不足（用于验证空召回率）"
+    assert len(positive) >= 30, "正例不足"
+    assert len(negative) >= 5, "负例不足（用于验证空召回率）"
     for case in positive:
         assert case["expect_keywords"], "正例应给 keyword（供后续来源/忠实度校验）"

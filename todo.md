@@ -31,7 +31,10 @@
 - [x] **调参实验（首轮）** —— `scripts/eval_retrieval.py`（免重建：minScore / topK / rerank / hybrid-top-k / rrf-c）
       + `scripts/sweep_chunk_size.py`（chunk size，重建索引后评测，跑完恢复原尺寸）。
       实测：minScore 0.4 → recall@5 0.28（过杀）；chunk 256 → 负例误召 0.25，512/1024 一致。结论写进 README。
-- [ ] **调参实验（扩展）** —— 扫 hybrid_top_k / rrf_c / embedding 模型；**扩库后 chunk size 才有区分度**。
+- [x] **扩评测集** —— 55 条（49 正 + 6 负），覆盖 5 篇文档（差旅 / 发布 / 考勤 / 申论 / 简历）；新增 26 题。
+- [ ] **调参实验（扩展）** —— 扫 hybrid_top_k / rrf_c / embedding 模型；**加更难/多跳的题**（当前 recall 仍满分，问题太直接）。
+- [ ] **rerank 降级门控** —— rerank 配额耗尽（403）时检索降级为 RRF、`minScore` 不生效、负例全进；可加「无 rerank 时按 RRF 分 / 关键词命中数兜底过滤」。
+- [ ] **评测脚本提示 rerank 不可用** —— 跑评测时显式报告 rerank 是否真的生效（避免把「降级」误读成「参数变差」）。
 - [ ] **成本与限流** —— LLM 调用无预算控制；加每用户/每会话调用上限 + token/成本日志。
 - [ ] **可观测性** —— LangSmith 已接但无面板；加请求级 latency / 命中率 / 成本统计。
 

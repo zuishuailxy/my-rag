@@ -195,7 +195,7 @@ retrieve_graph（知识图谱实体关系，带关系出处）
 
 ## 📊 检索评测
 
-`backend/eval/rag_eval.jsonl`（25 正例 + 4 负例）+ `backend/scripts/eval_retrieval.py`，指标 `recall@k` / `hit@1` / `MRR` / 负例空召回率，支持扫参数做调参实验：
+`backend/eval/rag_eval.jsonl`（**49 正例 + 6 负例**，覆盖 5 篇文档：差旅 / 发布 / 考勤 / 申论 / 简历）+ `backend/scripts/eval_retrieval.py`，指标 `recall@k` / `hit@1` / `MRR` / 负例空召回率，支持扫参数做调参实验：
 
 ```bash
 cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_retrieval.py [--min-score 0.1] [--no-rerank]
@@ -219,6 +219,8 @@ cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_
 | 1024 / 128 | 6 | 1.00 | 1.00 | 1.00 | 1.00 |
 
 > 当前知识库仅 3 篇文档，recall 无法区分尺寸；256 因块更碎、对负例的误召略高（0.75），512/1024 一致。暂保持 512，扩库后重测。
+
+> ⚠️ 上表的 rerank 与 `minScore` 过滤依赖 **DashScope rerank（付费 / 配额资源）**；配额耗尽时检索降级为 RRF（无阈值门控），负例会全部漏过——这一「外部依赖降级」现象也被评测集直接捕捉到。
 
 ## ⚠️ 已知边界
 

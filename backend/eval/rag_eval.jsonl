@@ -27,3 +27,29 @@
 {"id": "neg-02", "question": "公司食堂这周的菜单是什么？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
 {"id": "neg-03", "question": "怎么用 Python 做数据可视化？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
 {"id": "neg-04", "question": "最近股票行情怎么样？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "att-01", "question": "考勤表里都有哪些员工？", "expect_documents": ["员工考勤表"], "expect_keywords": ["李宁"], "category": "attendance"}
+{"id": "att-02", "question": "李宁在 2019 年 3 月 1 日几点上班？", "expect_documents": ["员工考勤表"], "expect_keywords": ["09:04:10"], "category": "attendance"}
+{"id": "att-03", "question": "刘杰 2019-03-01 的下班时间是多少？", "expect_documents": ["员工考勤表"], "expect_keywords": ["17:47:50"], "category": "attendance"}
+{"id": "att-04", "question": "卢永明 3 月 1 日几点到岗？", "expect_documents": ["员工考勤表"], "expect_keywords": ["08:56:55"], "category": "attendance"}
+{"id": "att-05", "question": "考勤表统计的是哪年哪个月的数据？", "expect_documents": ["员工考勤表"], "expect_keywords": ["2019-03"], "category": "attendance"}
+{"id": "att-06", "question": "李宁 2019 年 3 月 28 日几点下班？", "expect_documents": ["员工考勤表"], "expect_keywords": ["17:46:08"], "category": "attendance"}
+{"id": "sl-01", "question": "申论的三遍阅读法是什么？", "expect_documents": ["申论总结课"], "expect_keywords": ["三遍阅读法"], "category": "shenlun"}
+{"id": "sl-02", "question": "申论查找要点有哪些原则？", "expect_documents": ["申论总结课"], "expect_keywords": ["优先用总结句原则"], "category": "shenlun"}
+{"id": "sl-03", "question": "申论概括题什么时候需要归纳？", "expect_documents": ["申论总结课"], "expect_keywords": ["归纳"], "category": "shenlun"}
+{"id": "sl-04", "question": "申论里怎么区分做法和效果？", "expect_documents": ["申论总结课"], "expect_keywords": ["看动词"], "category": "shenlun"}
+{"id": "sl-05", "question": "申论分析原因题，好事和坏事分别怎么答？", "expect_documents": ["申论总结课"], "expect_keywords": ["好事的原因是做法"], "category": "shenlun"}
+{"id": "sl-06", "question": "申论分析影响包括哪些内容？", "expect_documents": ["申论总结课"], "expect_keywords": ["好处和危害"], "category": "shenlun"}
+{"id": "sl-07", "question": "申论词语理解题怎么作答？", "expect_documents": ["申论总结课"], "expect_keywords": ["词语理解"], "category": "shenlun"}
+{"id": "sl-08", "question": "申论观点类现象题怎么做表态？", "expect_documents": ["申论总结课"], "expect_keywords": ["表态"], "category": "shenlun"}
+{"id": "sl-09", "question": "申论政策类现象题分成哪几类？", "expect_documents": ["申论总结课"], "expect_keywords": ["利大于弊"], "category": "shenlun"}
+{"id": "sl-10", "question": "申论里概括特点是指概括什么？", "expect_documents": ["申论总结课"], "expect_keywords": ["概括特点"], "category": "shenlun"}
+{"id": "lmq-01", "question": "梁多强的求职意向是什么？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["AI Agent"], "category": "resume"}
+{"id": "lmq-02", "question": "梁多强独立交付了几个 Agent 项目？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["3 个"], "category": "resume"}
+{"id": "lmq-03", "question": "邻居窗口优化把答案要点覆盖率提升到了多少？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["67.4%"], "category": "resume"}
+{"id": "lmq-04", "question": "梁多强有多少年开发经验？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["8 年"], "category": "resume"}
+{"id": "lmq-05", "question": "梁多强熟悉哪些大模型应用框架？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["LangGraph"], "category": "resume"}
+{"id": "lmq-06", "question": "梁多强用过哪些可观测性工具？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["Langfuse"], "category": "resume"}
+{"id": "lmq-07", "question": "Deep Research 项目用什么做联网搜索？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["Bocha"], "category": "resume"}
+{"id": "lmq-08", "question": "梁多强掌握哪些检索与数据库？", "expect_documents": ["梁多强_Agent开发_17601230573"], "expect_keywords": ["Milvus"], "category": "resume"}
+{"id": "neg-05", "question": "明天股市会涨吗？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
+{"id": "neg-06", "question": "红烧肉怎么做才好吃？", "expect_documents": [], "expect_keywords": [], "category": "negative"}
