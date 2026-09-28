@@ -166,8 +166,8 @@ class Settings(BaseSettings):
     RAG_RERANK_ENABLED: str = "true"
     # API Key fallback 链：RERANK_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
     RERANK_API_KEY: str | None = None
-    # 模型 ID 以百炼控制台为准（qwen3-rerank 等；写错会 400）
-    RAG_RERANK_MODEL: str = "gte-rerank-v2"
+    # 模型 ID 以百炼控制台为准（qwen3.7-text-rerank 等；写错会 400）
+    RAG_RERANK_MODEL: str = "qwen3.7-text-rerank"
     # DashScope 原生（非 OpenAI 兼容）端点前缀，重排走专用 /api/v1/services/rerank/...
     RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com"
 
@@ -185,13 +185,12 @@ class Settings(BaseSettings):
     # RRF 常数（与 ES RRF 默认一致）：score = Σ 1/(C + rank)
     RAG_RRF_C: int = 60
     # rerank relevance_score 下限（0–1），低于该值的候选不进入最终结果；<=0 表示不过滤。
-    # ⚠️ 这个阈值**跟 reranker 模型绑定**，：
-    # 分档偏高；本项目 .env 用 gte-rerank-v2，实测
-    # · 真正相关（「私车公用申请表」命中差旅制度）top 分只有 0.13~0.47
-    # · 不相关 query（「今天天气」）约 0.006，偶发假阳 0.064
-    # 用 0.4 会把**全部**合法命中过滤掉 → AI 回答「召回不到相关资料」，而文档搜索
+    # ⚠️ 这个阈值**跟 reranker 模型绑定**，换模型必须重新校准（否则要么误杀、要么漏过）：
+    # · gte-rerank-v2：分档偏低但离散——相关 0.13~0.47、无关 ~0.006，0.1 能分开；
+    #   该模型仅免费额度可用，额度耗尽即降级 RRF。
+    # · qwen3.7-text-rerank：分档高且分离度好——相关 ~0.9、无关 ~0.001。
+    # 0.4 会把 gte 的**全部**合法命中过滤掉 → AI 回答「召回不到相关资料」，而文档搜索
     # （ES kh_document，不走 rerank）却能找到。0.1 实测能分开上述两组。
-    # 换回 qwen3-rerank 时请一并把该值调回适配值。
     RAG_MIN_SCORE: float = 0.1
 
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----

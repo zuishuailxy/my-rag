@@ -131,7 +131,7 @@ my-rag/
 - **Elasticsearch** 全文（精确匹配：编号、专有名词）
 - **Neo4j** 图谱（实体与关系）
 
-检索时双路召回 → **RRF 融合**（只用排名、不依赖两路分数可比）→ 全候选交给 **Reranker 精排**（先截断会丢低排名相关块）→ `minScore` 过滤 → 截 topK。
+检索时双路召回 → **RRF 融合**（只用排名、不依赖两路分数可比）→ 全候选交给 **Reranker 精排**（`qwen3.7-text-rerank`；先截断会丢低排名相关块）→ `minScore` 过滤 → 截 topK。
 
 ### 2. Agentic RAG
 
@@ -201,6 +201,8 @@ retrieve_graph（知识图谱实体关系，带关系出处）
 cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_retrieval.py [--min-score 0.1] [--no-rerank]
 ```
 
+下表为**早期基线**（29 条评测集 + `gte-rerank-v2`），用于说明「rerank + 阈值」各自的作用：
+
 | 配置 | recall@5 | hit@1 | MRR | 负例空召回率 |
 | --- | --- | --- | --- | --- |
 | 混合 + rerank + minScore=0.1（默认） | 1.00 | 1.00 | 1.00 | 1.00 |
@@ -209,6 +211,11 @@ cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/eval_
 | minScore=0.0 | 1.00 | 1.00 | 1.00 | 0.00 |
 
 > 结论：`minScore=0.4` 会过杀合法命中（recall 掉到 0.28），`0.1` 兼顾召回与过滤；关闭 rerank 后无关问题不再被过滤（负例空召回率 0.0）—— 印证「rerank + 阈值」是精度关键。
+
+> ⚠️ **`minScore` 与 reranker 模型强耦合，换模型必须重新校准**：
+> · `qwen3.7-text-rerank`（当前）：分离度好，相关 ~0.9 / 无关 ~0.001；
+> · `gte-rerank-v2`：分档偏低，相关 0.13~0.47 / 无关 ~0.006，且**仅免费额度可用**，额度耗尽即降级 RRF。
+> 阈值不重校会二选一地坏掉：调低→噪声漏过（负例空召回率 0），调高→合法命中被误杀（recall 崩）。
 
 **chunk size 扫描**（`scripts/sweep_chunk_size.py`，需重建索引，跑完自动恢复原尺寸）：
 
