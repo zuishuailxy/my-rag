@@ -6,7 +6,7 @@
 > - 意图 / 评估 / 改写：`backend/app/services/chat_query_rewrite.py`
 > - 检索 + 评估原子：`backend/app/services/agentic_retrieve.py`
 > - 混合检索：`backend/app/services/retrieval.py`
-> - 示意图：`docs/agenticRag.png`
+> - 架构图：见 README 的「🏗 架构」（mermaid 随代码维护，已删除早期 PNG 示意图）
 >
 > 状态：已实现并冒烟通过（后端 agentic 检索循环 + 前端过程条）；事件契约以本文为准。
 

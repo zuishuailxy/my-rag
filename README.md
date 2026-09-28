@@ -4,10 +4,25 @@
 
 - **后端**：Python · FastAPI · SQLAlchemy(async) · LangChain / LangGraph
 - **检索**：PostgreSQL + pgvector（向量）· Elasticsearch（BM25）· Neo4j（知识图谱）· RRF 融合 + Reranker 精排
-- **前端**：
-- **基础设施**：Docker Compose 一键编排 10 个服务
+- **前端**：React · TypeScript · Vite · AI SDK（自研 SSE UI Message Stream 协议）
+- **基础设施**：Docker Compose 一键编排（PostgreSQL / Elasticsearch / Neo4j / MongoDB / Redis / RabbitMQ / RustFS / Langfuse）
 
 > 设计文档见 [`AgenticRAG流程.md`](AgenticRAG流程.md)（Agentic RAG 全链路）等。
+
+## 📈 效果与工程数据
+
+> 结论摘要。每一条都能在下方找到完整的**测量过程、埋点与失败案例**。
+
+| 维度 | 实测结果 |
+| --- | --- |
+| **检索质量** | 132 条评测集 / **174 篇真实语料**。三级消融：难题 `hit@1` **0.524 →（加向量）0.714 →（加兜底门控）0.762 →（加 rerank）0.905** |
+| **调参结论** | chunk size 三点**单调且可复现**（256 > 512 > 1024）；`hybrid_top_k` / `rrf_c` 在扩库 12 倍后**仍无差异** → 明确记为「不调」，而不是编一个收益出来 |
+| **并发能力** | **100 并发零失败**；峰值 DB 连接 **31 → 2**（根因是 FastAPI 生成器依赖把连接占着等 LLM，不是池太小） |
+| **成本可控** | 每轮 token/成本结构化日志；**本地估算与 Langfuse `cost_details` 逐位一致**；Redis 按用户/会话限流（Redis 挂了 fail-open） |
+| **可复现性** | 冻结查询向量 → 同一评测集连跑**逐位一致**（根因：embedding 服务端浮点非确定性） |
+| **自测出的真问题** | 兜底门控在组合故障下把召回**归零**；`reindex` 共享会话一次崩溃拖死 **74 篇**；3 处结构化输出未判 `None` → 500；`logger.info("...%d", len)` 传函数导致日志永不打印 |
+
+所有数字均由 `backend/scripts/` 下的脚本可复现产出（评测 / 压测 / 参数扫描），不是手写结论。
 
 ---
 
@@ -30,27 +45,33 @@
 
 ## 🏗 架构
 
-![整体流程](docs/整体流程.png)
+> 用 mermaid 而不是 PNG：能进 diff、不会像图片那样默默过期。
 
-```
- ┌──────────────┐
- 上传文档 ──────► │ RabbitMQ │ 异步解析流水线
- └──────┬───────┘
- ▼
- 解析 → Markdown → 分块(chunk)
- │ 一写三索引
- ┌─────────────┼─────────────┐
- ▼ ▼ ▼
- PGVector Elasticsearch Neo4j
- (向量) (全文/BM25) (知识图谱)
- └─────────────┼─────────────┘
- ▼
- 混合检索 (RRF + Rerank)
- ▼
- Agent 循环: retrieve_knowledge / rewrite_query
- / retrieve_graph / web_search
- ▼
- 流式作答 + [n] 引用
+```mermaid
+flowchart TD
+    subgraph write["① 写入：异步流水线"]
+        direction LR
+        A["上传文档<br/>PDF / Word / PPT / Excel / 文本 / 图片"] --> B["RabbitMQ"] --> C["解析为 Markdown"] --> D["分块"] --> E["一写三索引"]
+        E --> E1["PGVector<br/>向量"]
+        E --> E2["Elasticsearch<br/>BM25"]
+        E --> E3["Neo4j<br/>知识图谱"]
+    end
+
+    subgraph read["② 问答：Agentic RAG"]
+        Q["用户提问"] --> R["意图路由<br/>TypeSafe"] --> S["LangGraph Agent 循环"]
+        S -.->|工具| T1["retrieve_knowledge"]
+        S -.->|工具| T2["rewrite_query"]
+        S -.->|工具| T3["retrieve_graph"]
+        S -.->|工具| T4["web_search"]
+        T1 --> U["ES + PGVector 双路召回<br/>→ RRF 融合 → Reranker 精排 → 阈值过滤"]
+        T1 --> V["切题判定：不切题则改写重试"]
+        U --> W["SSE 流式作答<br/>+ [n] 引用溯源"]
+        V --> W
+    end
+
+    E1 -.-> U
+    E2 -.-> U
+    E3 -.-> T3
 ```
 
 ---
@@ -116,7 +137,7 @@ my-rag/
 │ ├── components/ # 流式渲染 / 图谱 / 引用组件
 │ └── api/ # 接口封装
 ├── db/ init-scripts/ # 建表与初始化
-└── docs/ # 架构图与流程图
+└── docker-compose.langfuse.yml # 自托管 Langfuse（trace + 成本看板，独立栈）
 ```
 
 ---
