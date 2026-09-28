@@ -326,7 +326,7 @@ connection timed out, timeout 30.00
 
 ## 📡 API 概览
 
-共 **81 个 REST 端点**，按模块：
+共 **79 个 REST 端点**，按模块：
 
 ```
 /api/v1/auth 认证 / 激活 / 密码重置
@@ -399,7 +399,9 @@ PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/seed_demo_corpus.py
 cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false .venv/bin/python scripts/seed_demo_corpus.py [--wipe]
 ```
 
-> **实测效果**：扩库前（5 篇）所有参数指标都是 1.00；扩库后（14 篇）终于出现真实梯度 —— 简历题会被「干扰简历」抢走、发布 SOP 题会被「数据库变更 SOP」抢走。
+> **实测效果**：语料 5 篇时所有参数指标都是 1.00；加到 14 篇（自写干扰语料）时首次出现梯度 ——
+> 简历题被「干扰简历」抢走、发布 SOP 题被「数据库变更 SOP」抢走。
+> 再扩到 174 篇（引入公开语料，见下）梯度才真正拉开。
 
 ## 📊 检索评测
 
