@@ -41,3 +41,6 @@ logs/
 
 # Langfuse 自托管本地密钥
 .env.langfuse
+
+# dev_up.sh 产生的日志
+.dev_logs/

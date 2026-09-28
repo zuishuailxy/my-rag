@@ -91,21 +91,49 @@ class _DegradationCounter(logging.Handler):
 
 
 def _summarize(rows: list[tuple[dict, int | None, list[str]]]) -> dict[str, Any]:
-    """(case, rank, titles) 列表 → 指标；rank=None 表示未命中，titles 为空表示空召回"""
-    positives = [r for r in rows if r[0].get("expect_documents")]
+    """(case, rank, titles) 列表 → 指标；rank=None 表示未命中，titles 为空表示空召回
+
+    ⚠️ **单跳与多跳分开统计**：单跳是「任一期望文档命中即算命中」（any-of），
+    多跳要求「**全部**期望文档都进入 top-k、且缺一不可」（all-of）——
+    两套语义混在一起算，单跳的 recall 会把多跳的部分命中状态掩盖掉。
+    多跳单独给三个指标：全命中率 / 部分命中率 / 文档召回率。
+    """
+    single = [
+        r for r in rows if r[0].get("expect_documents") and not r[0].get("multi_hop")
+    ]
+    multi = [r for r in rows if r[0].get("multi_hop")]
     negatives = [r for r in rows if not r[0].get("expect_documents")]
-    n = max(len(positives), 1)
-    return {
-        "n_positive": len(positives),
+    n = max(len(single), 1)
+    metrics: dict[str, Any] = {
+        "n_positive": len(single),
         "n_negative": len(negatives),
-        "recall": sum(1 for r in positives if r[1]) / n,
-        "hit1": sum(1 for r in positives if r[1] == 1) / n,
-        "mrr": sum(1.0 / r[1] for r in positives if r[1]) / n,
+        "recall": sum(1 for r in single if r[1]) / n,
+        "hit1": sum(1 for r in single if r[1] == 1) / n,
+        "mrr": sum(1.0 / r[1] for r in single if r[1]) / n,
         # 该分组没有负例时为空召回率无意义，置 None（打印成 "-"）
         "empty_rate": (
             sum(1 for r in negatives if not r[2]) / len(negatives) if negatives else None
         ),
     }
+    if multi:
+        def _found(case: dict, titles: list[str]) -> set[str]:
+            return set(case["expect_documents"]) & set(titles)
+
+        count = len(multi)
+        metrics["multi_hop"] = {
+            "n": count,
+            # 全部期望文档都进了 top-k：多跳的「真命中」
+            "all_hit": sum(
+                1 for c, _, t in multi if len(_found(c, t)) == len(c["expect_documents"])
+            ) / count,
+            # 至少命中一篇：能区分「完全找不到」与「找到了但没找齐」
+            "partial_hit": sum(1 for c, _, t in multi if _found(c, t)) / count,
+            # 平均检索到多少比例的期望文档（2 跳时即：0 / 0.5 / 1.0 的均值）
+            "doc_recall": sum(
+                len(_found(c, t)) / len(c["expect_documents"]) for c, _, t in multi
+            ) / count,
+        }
+    return metrics
 
 
 async def evaluate(
@@ -131,23 +159,44 @@ async def evaluate(
         logging.getLogger().removeHandler(counter)
     _save_vector_cache()
 
+    # 多跳不参与「按难度分组」：它已在 _summarize 里单独统计，
+    # 混进来会多印一行 recall=0.000 的分组（因为单跳正例数为 0），纯干扰。
     by_difficulty: dict[str, list[tuple[dict, int | None, list[str]]]] = {}
     for row in rows:
+        if row[0].get("multi_hop"):
+            continue
         by_difficulty.setdefault(row[0].get("difficulty", "easy"), []).append(row)
 
     metrics = _summarize(rows)
     metrics.update(
         {
+            # 以下三个列表均**排除多跳**：多跳的命中判定是 all-of，
+            # 塞进单跳的 misses / not_top1 只会让两张表的语义相互污染。
             "misses": [
                 (c["id"], c["question"], titles[:3])
                 for c, rank, titles in rows
-                if c.get("expect_documents") and not rank
+                if c.get("expect_documents") and not c.get("multi_hop") and not rank
             ],
             # 命中但没排第 1：recall 满分时唯一能暴露问题的信号
             "not_top1": [
                 (c["id"], c["question"], titles[:3], rank)
                 for c, rank, titles in rows
-                if c.get("expect_documents") and rank and rank > 1
+                if c.get("expect_documents")
+                and not c.get("multi_hop")
+                and rank
+                and rank > 1
+            ],
+            # 多跳专项：直接列出「缺了哪篇」，这是 all-of 语义下唯一有用的诊断
+            "multi_hop_misses": [
+                (
+                    c["id"],
+                    c["question"],
+                    sorted(set(c["expect_documents"]) - set(titles)),
+                    titles[:3],
+                )
+                for c, _, titles in rows
+                if c.get("multi_hop")
+                and len(set(c["expect_documents"]) & set(titles)) < len(c["expect_documents"])
             ],
             "groups": {name: _summarize(group) for name, group in by_difficulty.items()},
             "degradations": counter.counts,
@@ -164,6 +213,12 @@ def print_metrics(label: str, metrics: dict[str, Any], top_k: int) -> None:
         f"hit@1={metrics['hit1']:.3f}  MRR={metrics['mrr']:.3f}  "
         f"负例空召回率={empty_text}"
     )
+    multi = metrics.get("multi_hop")
+    if multi:
+        print(
+            f"     多跳（{multi['n']} 条）：全命中率={multi['all_hit']:.3f}  "
+            f"部分命中率={multi['partial_hit']:.3f}  文档召回率={multi['doc_recall']:.3f}"
+        )
     degradations = metrics.get("degradations") or {}
     if degradations.get("rerank"):
         print(
@@ -223,6 +278,10 @@ async def main(args: argparse.Namespace) -> int:
         print(f"\n命中但未排第 1 {len(metrics['not_top1'])} 题：")
         for cid, question, top, rank in metrics["not_top1"]:
             print(f"  · [{cid}] 正确文档在第 {rank} 位 —— {question}\n      前 3：{top}")
+    if metrics.get("multi_hop_misses"):
+        print(f"\n多跳未找齐 {len(metrics['multi_hop_misses'])} 题（缺了哪篇）：")
+        for cid, question, missing, top in metrics["multi_hop_misses"]:
+            print(f"  ✗ [{cid}] {question}\n      缺：{missing}\n      前 3：{top}")
 
     await es_service.close()
     return 0

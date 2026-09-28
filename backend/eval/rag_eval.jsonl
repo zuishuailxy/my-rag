@@ -130,3 +130,19 @@
 {"id": "oss-misc-05", "question": "对文件或标准输入做 base64 编解码的命令？", "expect_documents": ["base64"], "expect_keywords": ["编码或解码"], "category": "oss", "difficulty": "easy"}
 {"id": "oss-misc-06", "question": "怎么把单列数据整理成多列对齐显示？", "expect_documents": ["column"], "expect_keywords": ["按列格式化输出文件"], "category": "oss", "difficulty": "hard"}
 {"id": "oss-misc-07", "question": "哪个命令常用来备份裸设备、还能边复制边转换格式？", "expect_documents": ["dd"], "expect_keywords": ["备份裸设备"], "category": "oss", "difficulty": "hard"}
+{"id": "mh-at-01", "question": "at 和 batch 在执行时机上有什么区别？", "expect_documents": ["at", "batch"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-disk-01", "question": "df 和 du 分别看什么？", "expect_documents": ["df", "du"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-cmp-01", "question": "cmp 和 diff 有什么区别？", "expect_documents": ["cmp", "diff"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-perm-01", "question": "chown 和 chgrp 分别改什么？", "expect_documents": ["chown", "chgrp"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-apt-01", "question": "apt-get 和 aptitude 有什么区别？", "expect_documents": ["apt-get", "aptitude"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-arp-01", "question": "arping 和 arptables 有什么区别？", "expect_documents": ["arping", "arptables"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-cron-01", "question": "atq 和 atrm 分别做什么？", "expect_documents": ["atq", "atrm"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-zip-01", "question": "bzip2 和 bunzip2 是什么关系？", "expect_documents": ["bzip2", "bunzip2"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-disk-02", "question": "free 和 dstat 分别统计什么？", "expect_documents": ["free", "dstat"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-cmp-02", "question": "diff 和 diff3 有什么区别？", "expect_documents": ["diff", "diff3"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-perm-02", "question": "chmod 和 chattr 改的是同一种东西吗？", "expect_documents": ["chmod", "chattr"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-perm-03", "question": "chroot 和 chcon 分别解决什么问题？", "expect_documents": ["chroot", "chcon"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-apt-02", "question": "apt-key 和 dpkg 在 Debian 里分别管什么？", "expect_documents": ["apt-key", "dpkg"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-biz-01", "question": "会议费用和差旅费用的住宿上限分别是多少？", "expect_documents": ["会议与培训费用管理办法", "01-travel-expense-policy"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-biz-02", "question": "应用发布和数据库变更的常规窗口分别是什么时候？", "expect_documents": ["02-production-release-sop", "数据库变更管理规范（SOP）"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}
+{"id": "mh-biz-03", "question": "考勤表和考勤与请休假管理办法分别讲什么？", "expect_documents": ["员工考勤表", "考勤与请休假管理办法"], "expect_keywords": [], "category": "multi_hop", "multi_hop": true}

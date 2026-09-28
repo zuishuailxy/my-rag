@@ -28,8 +28,25 @@ def test_eval_set_has_positive_and_negative() -> None:
     negative = [c for c in cases if not c["expect_documents"]]
     assert len(positive) >= 30, "正例不足"
     assert len(negative) >= 5, "负例不足（用于验证空召回率）"
+    # 多跳用例期望两篇文档，「单一要点列表」对它不适用，所以只要求单跳正例给 keyword
     for case in positive:
-        assert case["expect_keywords"], "正例应给 keyword（供后续来源/忠实度校验）"
+        if case.get("multi_hop"):
+            continue
+        assert case["expect_keywords"], "单跳正例应给 keyword（供来源/忠实度校验）"
+
+
+def test_multi_hop_cases_are_well_formed() -> None:
+    """多跳用例必须期望 ≥2 篇文档 —— 否则它根本测不到「跨文档」能力
+
+    语义提醒：单跳命中判定是 any-of，多跳是 **all-of**；
+    评测脚本按 `multi_hop` 字段把两者分开统计，误标会让指标相互掩盖。
+    """
+    cases = _load()
+    multi = [c for c in cases if c.get("multi_hop")]
+    assert multi, "应有多跳用例"
+    for case in multi:
+        assert len(case["expect_documents"]) >= 2, f"{case['id']} 只期望 1 篇，称不上多跳"
+        assert case["category"] == "multi_hop", f"{case['id']} 的 category 应为 multi_hop"
 
 
 def test_gen_eval_set_integrity() -> None:
