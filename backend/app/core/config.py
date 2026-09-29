@@ -212,7 +212,7 @@ class Settings(BaseSettings):
     #（难题正确命中的向量分最低仅 0.28，会被误杀）。降级是异常路径，
     # 宁可多放一点噪声，也不能漏真命中，故取 0.35。
     # 仅在调用方要求过滤（RAG_MIN_SCORE > 0）时生效，不改变「显式关过滤」的语义。
-    RAG_MIN_VECTOR_SCORE: float = 0.37
+    RAG_MIN_VECTOR_SCORE: float = 0.35
 
     # ---- RabbitMQ（发布后异步管线：RAG / KG / ES）----
     RABBITMQ_ENABLED: bool = True
