@@ -1,0 +1,19 @@
+{"id": "kg-ent-01", "kind": "entity", "query": "员工考勤表", "expect_entities": ["员工考勤表"], "note": "文档类实体，提及 7 次"}
+{"id": "kg-ent-02", "kind": "entity", "query": "考勤表", "expect_entities": ["考勤表"], "note": "考勤表 与 员工考勤表 互为前缀/后缀，应至少命中其一"}
+{"id": "kg-ent-03", "kind": "entity", "query": "发票管理办法", "expect_entities": ["发票管理办法"], "note": "制度文档实体"}
+{"id": "kg-ent-04", "kind": "entity", "query": "财务部", "expect_entities": ["财务部"], "note": "组织实体"}
+{"id": "kg-ent-05", "kind": "entity", "query": "财务审核员", "expect_entities": ["财务审核员"], "note": "角色实体（易与财务部混淆）"}
+{"id": "kg-ent-06", "kind": "entity", "query": "卢永明", "expect_entities": ["卢永明"], "note": "考勤表人名"}
+{"id": "kg-ent-07", "kind": "entity", "query": "刘杰", "expect_entities": ["刘杰"], "note": "考勤表人名"}
+{"id": "kg-ent-08", "kind": "entity", "query": "李宁", "expect_entities": ["李宁"], "note": "考勤表人名"}
+{"id": "kg-ent-09", "kind": "entity", "query": "线上故障修复", "expect_entities": ["线上故障修复"], "note": "流程实体（发布 SOP）"}
+{"id": "kg-ent-10", "kind": "entity", "query": "SOP-PE-2026-003", "expect_entities": ["SOP-PE-2026-003"], "note": "文档编号实体"}
+{"id": "kg-ent-11", "kind": "entity", "query": "上海赛可电子商务有限公司", "expect_entities": ["上海赛可电子商务有限公司"], "note": "长公司名（简历实体）"}
+{"id": "kg-ent-12", "kind": "entity", "query": "李先生", "expect_entities": ["李先生"], "note": "人事实体（简历）"}
+{"id": "kg-rel-01", "kind": "relation", "query": "封网期", "expect_entities": ["封网期"], "expect_relations": [["2026-Q1 封网期", "封网期"]], "note": "时间范围 BELONGS_TO 封网期"}
+{"id": "kg-rel-02", "kind": "relation", "query": "Agent Loop", "expect_entities": ["Agent Loop"], "expect_relations": [["Agent Loop", "OpenAI chat.completions"]], "note": "技术实体 USES 依赖"}
+{"id": "kg-rel-03", "kind": "relation", "query": "发票管理办法", "expect_entities": ["发票管理办法"], "expect_relations": [["差旅与费用报销管理办法（2026 版）", "发票管理办法"]], "note": "制度间引用关系（跨文档）"}
+{"id": "kg-rel-04", "kind": "relation", "query": "某某科技有限公司", "expect_entities": ["某某科技有限公司"], "expect_relations": [["增值税专用/普通发票 PDF", "某某科技有限公司"]], "note": "发票抬头关系"}
+{"id": "kg-neg-01", "kind": "negative", "query": "火星殖民计划", "expect_entities": [], "note": "图谱中不存在"}
+{"id": "kg-neg-02", "kind": "negative", "query": "量子退火算法", "expect_entities": [], "note": "图谱中不存在"}
+{"id": "kg-neg-03", "kind": "negative", "query": "分子料理配方", "expect_entities": [], "note": "图谱中不存在"}

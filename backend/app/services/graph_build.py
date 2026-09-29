@@ -46,6 +46,9 @@ from app.services.kg_extraction import extraction_service
 
 logger = logging.getLogger("GraphBuildService")
 
+# 判定「片段是否含中文」：含中文才按空白拆话题，纯英文的空格属于实体名本身
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
 # 唯一性约束 DDL
 CONSTRAINT_STATEMENTS: tuple[str, ...] = (
     "CREATE CONSTRAINT knowledge_document_id IF NOT EXISTS "
@@ -158,22 +161,40 @@ def normalize_entity_name(name: str) -> str:
 def split_graph_keywords(keyword: str | list[str]) -> list[str]:
     """把关键词拆成短名。
 
-    模型常把「发票 报销」写成一项；图匹配要拆成短名，否则对不上节点。
-    按空白 / `/` 拆分，去空、去重（大小写不敏感）；并去书名号（与实体名归一乎）。
+    拆分规则（**中文与英文的空白语义不同**，这是关键）：
+      - `/` 永远是话题分隔符；
+      - 含中文的片段：空白是「多个话题」的分隔（模型常把「发票 报销」写成一项）→ 拆；
+      - 纯英文的片段：空白是**实体名本身的一部分**
+        （`Agent Loop`、`OpenAI chat.completions`）→ **不拆**。
+
+    ⚠️ 这个区分是图谱评测实测出来的：早期一律按空白拆，会先把
+    `Agent Loop` 拆成 `Agent` + `Loop`，而 `Agent` 是大量实体的前缀，
+    把 `Agent Loop` 本身挤出了 top-k（实测该题实体召回直接归零）。
     """
     seen: set[str] = set()
     kws: list[str] = []
+
+    def _add(raw: str) -> None:
+        kw = normalize_entity_name(raw)
+        if not kw:
+            return
+        key = kw.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        kws.append(kw)
+
     parts = keyword if isinstance(keyword, list) else [keyword]
     for part in parts:
-        for raw in re.split(r"[\s/]+", str(part)):
-            kw = normalize_entity_name(raw)
-            if not kw:
+        for segment in re.split(r"/+", str(part)):
+            segment = segment.strip()
+            if not segment:
                 continue
-            key = kw.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            kws.append(kw)
+            if _CJK_RE.search(segment):
+                for piece in re.split(r"\s+", segment):
+                    _add(piece)
+            else:
+                _add(segment)
     return kws
 
 
@@ -895,10 +916,34 @@ class GraphBuildService:
                     logger.info("图谱对话检索无实体：kws=%s", " / ".join(kws))
                     return empty
 
-                # 只取本轮命中实体之间的边，不要扩到图上其它节点。
                 # 关系出处：抽取该关系的 chunk（写入时记在 r.chunkId）→ 取实体附近片段。
-                rel_result = await session.run(
+                #
+                # 两种语义，由 KG_EXPAND_NEIGHBORS 切换（图谱评测实测对比过）：
+                #   关闭：「命中实体**之间**的边」—— 精准，但只命中单个实体时关系为空；
+                #   开启：「命中实体的**一跳邻居边**」—— 无向匹配 + 只要求一端命中。
+                # 实测：关闭时关系召回 0.25（4 条里 3 条跨实体关系取不到），
+                #       开启后才能回答「跟 X 有关系的东西有哪些」这类问题。
+                expand = settings.KG_EXPAND_NEIGHBORS != "false"
+                # 关系也要有上限：实体有 LIMIT $limit，但关系原先没有 ——
+                # 只取「命中实体之间的边」时数量天然很小所以无害；一旦扩展到一跳邻居，
+                # 单条查询就可能返回几十条（实测「员工考勤表」返回 21 条），
+                # 每条还带 evidence 片段，会直接撑大模型上下文。
+                rel_cap = cap * 5
+                rel_cypher = (
                     """
+                    MATCH (a:KnowledgeEntity)-[r:RELATED_TO]-(b:KnowledgeEntity)
+                    WHERE (a.name IN $names OR b.name IN $names) AND a <> b
+                    WITH r, startNode(r) AS a2, endNode(r) AS b2
+                    OPTIONAL MATCH (c:DocumentChunk {chunkId: r.chunkId})
+                    RETURN a2.name AS source,
+                           coalesce(nullif(r.relation, 'RELATED_TO'), '关联') AS relation,
+                           b2.name AS target,
+                           c.content AS evidence
+                    ORDER BY r.weight DESC
+                    LIMIT $rel_cap
+                    """
+                    if expand
+                    else """
                     MATCH (a:KnowledgeEntity)-[r:RELATED_TO]->(b:KnowledgeEntity)
                     WHERE a.name IN $names AND b.name IN $names
                     OPTIONAL MATCH (c:DocumentChunk {chunkId: r.chunkId})
@@ -906,8 +951,12 @@ class GraphBuildService:
                            coalesce(nullif(r.relation, 'RELATED_TO'), '关联') AS relation,
                            b.name AS target,
                            c.content AS evidence
-                    """,
-                    names=names,
+                    ORDER BY r.weight DESC
+                    LIMIT $rel_cap
+                    """
+                )
+                rel_result = await session.run(
+                    rel_cypher, names=names, rel_cap=rel_cap
                 )
                 seen: set[str] = set()
                 relations: list[GraphChatRelation] = []

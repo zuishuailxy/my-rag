@@ -325,6 +325,20 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "http://localhost:3000"
     # 开关用字符串，与项目其他开关一致：仅严格 == "false" 才关闭
     LANGFUSE_TRACING: str = "true"
+    # ---- 知识图谱检索----
+    # 关系召回语义（由图谱评测实测对比后定下，数据见 scripts/eval_graph.py）：
+    #   false —— 只取「命中实体**之间**的边」：精准，但只命中单个实体时关系为空；
+    #   true（默认）—— 扩展到「命中实体的**一跳邻居**」（无向匹配、只要求一端命中）。
+    #
+    # 实测（19 条图谱评测）：
+    #   关系召回  0.250 → **1.000**
+    #   实体召回 / 出处覆盖率 / 负例空召回  三项均不变（1.000）
+    #   代价：返回关系数 1 → 115（平均每条查询 6 条），
+    #        已用 `cap*5` 上限兜住（默认 limit=8 → 最多 40 条）。
+    # 结论：召回提升 4 倍、无指标劣化、成本有上限 → 默认开启。
+    # 若某个场景更看重上下文精简，设 KG_EXPAND_NEIGHBORS=false 即可回到旧语义。
+    KG_EXPAND_NEIGHBORS: str = "true"
+
     # 联网搜索
     TAVILY_API_KEY: str | None = None
 

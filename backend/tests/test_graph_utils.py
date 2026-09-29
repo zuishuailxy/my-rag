@@ -22,6 +22,19 @@ def test_split_graph_keywords() -> None:
     assert split_graph_keywords(["报销", "报销"]) == ["报销"]
 
 
+def test_split_graph_keywords_keeps_english_names_whole() -> None:
+    """**中英文的空白语义不同**：含中文才拆话题，纯英文的空格属于实体名
+
+    图谱评测实测：早期一律按空白拆，会把 `Agent Loop` 拆成 `Agent` + `Loop`，
+    而 `Agent` 是大量实体的前缀，把 `Agent Loop` 本身挤出了 top-k——
+    该题实体召回直接归零。所以这条别删。
+    """
+    assert split_graph_keywords("Agent Loop") == ["Agent Loop"]
+    assert split_graph_keywords("OpenAI chat.completions") == ["OpenAI chat.completions"]
+    # 事件分隔符 `/` 对中英文都成立
+    assert split_graph_keywords("Agent Loop/发票") == ["Agent Loop", "发票"]
+
+
 def test_merge_graph_hits_dedup() -> None:
     def hit(query: str, names: list[str]) -> GraphChatHit:
         return {
