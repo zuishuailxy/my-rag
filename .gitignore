@@ -44,3 +44,6 @@ logs/
 
 # dev_up.sh 产生的日志
 .dev_logs/
+
+# 由 .md 导出的 PDF（源头在版控里，导出物不入库）
+*.pdf
