@@ -18,11 +18,19 @@ engine = create_async_engine(
     # 不设的后果实测过（停掉 PG 再调接口）：请求挂满 60s 不返回也不报错 ——
     # 前端表现就是「一直转圈」，60s 后才变成一个不透明的 500。
     # 设成 5s 后能快速失败，再由全局异常处理器转成 503（可重试）。
-    connect_args={"timeout": settings.DB_CONNECT_TIMEOUT},
+    #
+    # application_name：连接在 pg_stat_activity 里的标识。压测脚本据此**只统计被测
+    # 实例**的连接（同库的开发实例 / psql / GUI 一律排除），否则峰值连接数不可复算。
+    connect_args={
+        "timeout": settings.DB_CONNECT_TIMEOUT,
+        "server_settings": {"application_name": settings.DB_APPLICATION_NAME},
+    },
     # 连接池：**必须显式配置**，不能吃默认值。
     # 压测发现：默认（pool_size 5 + max_overflow 10 = 15）在**并发 10~20** 就耗尽 ——
     # `QueuePool limit of size 5 overflow 10 reached, connection timed out`，
-    # 表现为 p50 从 0.5s 直接跳到 30s（正好是 pool_timeout），大批请求 500。
+    # 表现为 p50 从 2.5s 直接跳到 31s（≈ pool_timeout 30s），大批请求 503。
+    # ⚠️ 但根因**不是池小**，而是连接被跨外部调用持有（见 app/api/permission_guard.py）；
+    #    修掉之后池保持 15 也能跑过 100 并发。
     #
     # ⚠️ 容量估算（扩容时按这个算，别拍脑袋）：
     #   每进程上限 = DB_POOL_SIZE + DB_MAX_OVERFLOW

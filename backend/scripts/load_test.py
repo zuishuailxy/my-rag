@@ -9,7 +9,9 @@
     - 端到端延迟 p50 / p95 / max、流式首字节 TTFT
     - 错误率
     - **PG 连接池压力**：运行期间采样 `pg_stat_activity` 的峰值连接数
-      （应用侧池上限 = pool_size 5 + max_overflow 10 = 15，而 PG 服务端有 100 —— 瓶颈在应用侧）
+      （应用侧池上限 = pool_size 20 + max_overflow 10 = 30，PG 服务端 100 —— 瓶颈在应用侧）
+      采样按 `application_name = loadtest-app` **只统计被测实例**：同库的开发实例 /
+      psql / GUI 一律排除，否则峰值连接数不可复算（旧版就栽在这：三个文档三个数）
 
 **用法**
     cd backend && PYTHONPATH=. RABBITMQ_ENABLED=false \\
@@ -45,6 +47,10 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(mess
 QUESTION_MARKER = "[loadtest] 差旅住宿标准是多少"
 # 每轮压测用独立 sessionId，避开「每会话每日轮次」限制；每用户限制在开跑前清掉
 QUOTA_KEY_PREFIX = "kh:llm:turns"
+# 被测实例的连接标识（与 _start_app 注入的 DB_APPLICATION_NAME 必须一致）。
+# 采样器**只统计这个标识的连接**，所以同库的其他客户端（开发实例 / psql / GUI）
+# 不会被算进峰值连接数；本进程自己的连接也因标识不同而自动排除。
+LOADTEST_APP_NAME = "loadtest-app"
 
 
 # --------------------------------------------------------------------- mock LLM
@@ -202,6 +208,8 @@ def _start_app(port: int, mock_port: int, log_path: str) -> subprocess.Popen:
         # 压测流量不该污染 Langfuse 看板
         "LANGFUSE_TRACING": "false",
         "RABBITMQ_ENABLED": "false",
+        # 给被测实例的连接打标，采样器据此只统计它自己（见 LOADTEST_APP_NAME）
+        "DB_APPLICATION_NAME": LOADTEST_APP_NAME,
     }
     log = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — 子进程持有，退出时关闭
     return subprocess.Popen(
@@ -244,19 +252,27 @@ class PgConnectionSampler:
         self._stop = False
 
     async def run(self) -> None:
-        # 整个采样过程**复用一个会话**：若每轮都新开一个，采样器自己就会制造
-        # 一堆 `idle in transaction` 连接，把被测指标污染掉（实测虚高 9 条）。
-        async with async_session_factory() as session:
-            while not self._stop:
-                try:
+        # ⚠️ **每次采样都新签出一条连接，且用 AUTOCOMMIT** —— 绝不能复用一个长事务会话。
+        # 这里踩过一个把整条结论作废的坑：复用单一会话时，`pg_stat_activity` 的可见行集
+        # **冻结在事务开始时的快照**上。实测（A/B）：同一时刻新连接看到 15 条 app 连接，
+        # 长事务会话里始终只看到 1 条 —— 于是峰值连接数恒为 1（或任意首帧值），指标失效。
+        # 文档里 16 / 31 / 32 / 40 四个数对不上的根因就在这里。
+        # 旧版复用一个会话，是想避免「采样器自己制造 idle in transaction 把指标算高」；
+        # 现在采样器的连接因 `application_name` 不同已被直接排除，那个顾虑不存在了，
+        # 所以「一条连接一次采样」既准确又不污染。
+        while not self._stop:
+            try:
+                async with engine.connect() as conn:
+                    conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
                     rows = (
-                        await session.execute(
+                        await conn.execute(
                             text(
                                 "SELECT coalesce(state, 'null') AS st, count(*) AS n "
                                 "FROM pg_stat_activity "
-                                "WHERE datname = current_database() AND pid <> pg_backend_pid() "
+                                "WHERE application_name = :app_name "
                                 "GROUP BY 1"
-                            )
+                            ),
+                            {"app_name": LOADTEST_APP_NAME},
                         )
                     ).all()
                     total = sum(int(n) for _, n in rows)
@@ -266,19 +282,20 @@ class PgConnectionSampler:
                         self.states_at_peak = {str(st): int(n) for st, n in rows}
                         # 关键：空占的连接「上一条 SQL 是什么」= 谁开的会话
                         holders = (
-                            await session.execute(
+                            await conn.execute(
                                 text(
                                     "SELECT left(regexp_replace(coalesce(query, ''), '\\s+', ' ', 'g'), 90) AS q, "
                                     "count(*) AS n FROM pg_stat_activity "
-                                    "WHERE datname = current_database() AND pid <> pg_backend_pid() "
+                                    "WHERE application_name = :app_name "
                                     "AND state = 'idle in transaction' GROUP BY 1 ORDER BY 2 DESC LIMIT 4"
-                                )
+                                ),
+                                {"app_name": LOADTEST_APP_NAME},
                             )
                         ).all()
                         self.holders_at_peak = [(str(q), int(n)) for q, n in holders]
-                except Exception:  # noqa: BLE001 — 采样失败不影响压测
-                    pass
-                await asyncio.sleep(0.2)
+            except Exception:  # noqa: BLE001 — 采样失败不影响压测
+                pass
+            await asyncio.sleep(0.2)
 
     def stop(self) -> None:
         self._stop = True

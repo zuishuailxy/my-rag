@@ -45,8 +45,10 @@ def require_permission(*codes: str) -> Callable[..., Coroutine[Any, Any, None]]:
         # `Depends(get_db_session)` 时：权限查询一跑，会话/事务/连接就被占住整条链路
         # （包括后面几秒的检索 + LLM 生成）。
         #
-        # 压测实测：并发 40 时峰值 40 条连接里有 **20 条 `idle in transaction`**，
-        # 它们的最后一条 SQL 正是这里的权限查询 —— 连接在「开着事务空等 LLM」。
+        # 压测实测（池 5+10=15、并发 20）：峰值 15 条连接（= 整池）全被占用，其中
+        # 8 条 `idle in transaction`；按「最近一条 SQL」分组，最大的一组（6 条）正是
+        # 这里的权限查询 —— 连接在「开着事务空等 LLM」。改成短生命周期会话后，
+        # **池保持 15 不变也能跑过 100 并发零失败**（修复前同样的池下并发 20 就 5/20 失败）。
         # 权限检查只需要一次查询，查完就还连接。
         async with async_session_factory() as session:
             granted = await permission_service.get_user_permission_codes(
