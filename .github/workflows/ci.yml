@@ -37,6 +37,9 @@ jobs:
       - name: Pytest（单元测试，纯逻辑、不依赖外部服务）
         run: uv run pytest -q
 
+      - name: 文档数字校验（文档里写的数字 vs 源码 / 评测集）
+        run: uv run python scripts/check_doc_numbers.py
+
   frontend:
     name: 前端（tsc + build）
     runs-on: ubuntu-latest
