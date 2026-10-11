@@ -37,6 +37,7 @@ from app.core.config import settings
 from app.services.chat_long_memory import (
     CLASSIFIER_PROMPT,
     _build_classifier, # noqa: PLC2701 冒烟需要直接验证分类器（不经过 client 门禁）
+    _build_jev_classifier, # noqa: PLC2701
     _pick_memories, # noqa: PLC2701
     chat_long_memory_service,
 )
@@ -196,6 +197,48 @@ async def main() -> None:
         f"长期偏好（「以后回答短一点」）应写 user 层，实际 user={prefer[1]}｜{prefer[3]}"
     )
     print(" 5) 分类器真实调用 ✓ 寒暄不写、长期偏好写 user 层（结构化输出可用）")
+
+    # 5b) Jev 分类器（TypeSafe Noul×2，需 TYPESAFE_API_KEY）
+    #
+    # 与 5) 同一批样例、同一套期望：Jev 若与 LLM 判定不一致，说明阈值/中文精度有问题。
+    # NoulAnswer 无 confidence，只有一个 P(是)，阈值见 MEMORY_JEV_*_THRESHOLD。
+    jev = _build_jev_classifier()
+    if jev is None:
+        print(
+            " 5b) Jev 分类器 ⋯ SKIP（未配置 TYPESAFE_API_KEY 或未装 typesafe_sdk）"
+            "⚠️ SKIP 不算通过"
+        )
+    else:
+        jev_results: list[tuple[str, bool, bool, str]] = []
+        for question, answer in samples:
+            parsed = await jev.classify(question, answer)
+            jev_results.append(
+                (question, bool(parsed.write_user), bool(parsed.write_session), parsed.reason)
+            )
+        for question, w_user, w_session, reason in jev_results:
+            print(f" · 「{question}」→ user={w_user} session={w_session}｜{reason}")
+
+        # 与 LLM 分类器逐条比对（判定不一致只告警不失败：两者都是增强项，
+        # 但真实流量下持续偏离说明阈值需要重校准——用 MEMORY_CLASSIFIER=shadow 观测）
+        for (q, l_user, l_session, _), (_, j_user, j_session, _) in zip(results, jev_results):
+            if (l_user, l_session) != (j_user, j_session):
+                print(
+                    f" ⚠️ 判定不一致「{q}」：LLM=({l_user},{l_session}) Jev=({j_user},{j_session})"
+                )
+
+        j_greet = jev_results[0]
+        assert not j_greet[1] and not j_greet[2], (
+            f"寒暄不应写入任何层，实际 user={j_greet[1]} session={j_greet[2]}｜{j_greet[3]}"
+        )
+        j_prefer = jev_results[1]
+        assert j_prefer[1], (
+            f"长期偏好应写 user 层，实际 user={j_prefer[1]}｜{j_prefer[3]}"
+        )
+        j_task = jev_results[2]
+        assert j_task[2], (
+            f"本轮任务应写 session 层，实际 session={j_task[2]}｜{j_task[3]}"
+        )
+        print(" 5b) Jev 分类器真实调用 ✓ 寒暄不写 / 偏好写 user / 本轮任务写 session")
 
     # 6) 真实 Mem0 链路（需 MEM0_API_KEY）
     if not has_key:

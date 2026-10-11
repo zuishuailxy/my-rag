@@ -6,10 +6,18 @@
 启用条件：配置 MEM0_API_KEY。未配置时 `enabled=False`，所有方法直接返回空/跳过。
 
 ### 两道工序用的模型不同（这是本模块最容易误解的一点）
-1. **分类器**（本进程内跑）：ChatOpenAI + `with_structured_output`，判断本轮该写 user 层、
-   session 层还是都不写。API Key / baseURL / model 走与 ai_chat 相同的 fallback 链
-   （OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY、OPENAI_BASE_URL → LLM_BASE_URL、
-   MODEL_NAME → LLM_MODEL），本项目里即 **deepseek-v4-flash**。
+1. **分类器**（本进程内跑）：判断本轮该写 user 层、session 层、两层、还是都不写。
+   两种实现，由 `MEMORY_CLASSIFIER` 选择：
+   - `jev`（推荐，配 TYPESAFE_API_KEY 时 `auto` 即走它）：TypeSafe **Noul × 2**，
+     每层给独立的 P(是)，可分层设阈值（user 严、session 松）；**不产自由文本**，
+     理由由概率拼出。
+   - `llm`：ChatOpenAI + `with_structured_output`，走与 ai_chat 相同的 fallback 链
+     （OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY、OPENAI_BASE_URL → LLM_BASE_URL、
+     MODEL_NAME → LLM_MODEL），本项目里即 **deepseek-v4-flash**。
+   - `shadow`：两边都跑、只记日志，实际按 LLM 结果写入（校准 Jev 阈值用）。
+   为什么用两个 Noul 而不是一个 4 路 Choice：user / session 是两个**独立维度**
+   （跨会话事实 vs 本轮上下文），Noul 保留每层独立概率、可分层设阈值、扩展第三层只需
+   再加一个 Noul；「都不写」= 两个都不过阈值，天然覆盖。
 2. **记忆抽取**（Mem0 云侧跑）：`client.add()` 由平台完成事实抽取，**SDK 不暴露模型参数**，
    只能通过 `custom_instructions` 约束输出。⚠️ 也就是说「抽取」用的**不是** deepseek —— 这是
    选托管方案的固有代价。若要让抽取也走自有模型，必须改 Mem0 OSS
@@ -43,7 +51,10 @@
   云侧后台才做事实抽取与向量化。实测同一进程内立即 `search` 命中 0 条，轮询到第 3 次
   （约 6~9 秒）才出现。这不是 bug 而是平台特性——对生产无影响（记忆是给**后续轮次**用的），
   但意味着：① 冒烟必须轮询等待，不能断言「写完立刻可检索」；② 任何「本轮写入本轮立即读回」
-  的设计都不成立。**`custom_instructions` 约束抽取口径**（见 `_EXTRACT_INSTRUCTIONS`）。
+  的设计都不成立。**`custom_instructions` 约束抽取口径**，且**必须按层区分**：
+   user 层只抽身份/岗位/长期偏好/持久约束，session 层只抽本轮任务/待办/临时约定
+   （见 `_EXTRACT_USER_INSTRUCTIONS` / `_EXTRACT_SESSION_INSTRUCTIONS`）——分类器只决定
+   「写哪层」，抽取 LLM 并不知道自己在写哪层，不分开写就会重复抽取 + 跨层污染。
 - **session 层过滤写法**：[{user_id}, {run_id}] }`，此处用等价的
   多键平铺 `{'user_id': ..., 'run_id': ...}`（mem0 的 filters 多键即隐式 AND；OSS 侧
   `memory/main.py` 文档也以 `{"AND": [f1, f2]}` 表述同一语义）。
@@ -124,12 +135,28 @@ CLASSIFIER_PROMPT = (
     "4. 一次性提问且未产生需跨轮记住的约定 → 均为 false"
 )
 
-# 抽取侧约束
-_EXTRACT_INSTRUCTIONS = (
+# 抽取侧约束（**按层区分**）
+#
+# 为什么必须分两层写：分类器只决定「写哪层」，而 `client.add()` 的抽取在 Mem0 云侧完成——
+# 两次 add 若传同一份 instructions，抽取 LLM 无从知道自己在写 user 层还是 session 层，
+# 于是「都写」时同一段文本会被两层抽出重复事实，甚至跨层污染（本轮任务进 user 层、
+# 长期身份进 session 层）。提示词里的分层规则只作用于分类，管不到抽取，必须在这里再写一遍。
+_EXTRACT_COMMON = (
     "只用用户说的话抽取记忆，一句完整中文。"
-    "只保存身份、岗位、偏好、约束，或用户声明的本轮任务。"
     "不要保存制度条文、流程、时限、负责人、系统名、引用编号。"
     "不要译成英文。"
+)
+
+# user 层：跨会话仍然成立的事实
+_EXTRACT_USER_INSTRUCTIONS = (
+    _EXTRACT_COMMON + "只抽身份、岗位、所在团队、长期偏好、持久约束；"
+    "不要抽本轮任务、待办、临时约定。"
+)
+
+# session 层：仅当前会话有效的工作上下文
+_EXTRACT_SESSION_INSTRUCTIONS = (
+    _EXTRACT_COMMON + "只抽本轮任务、进度、待办、临时约定；"
+    "不要抽身份、岗位、长期偏好。"
 )
 
 # 会话层清理（clear_session）的分页参数：get_all 每页条数 + 页数上限兜底。
@@ -205,6 +232,111 @@ def _build_classifier():
     )
 
 
+# ---------------------------------------------------------------------------
+# TypeSafe Jev 分类器（Noul × 2）
+#
+# 与 chat_query_rewrite.py 的意图识别同源：延迟导入 typesafe_sdk、失败一律回退 LLM。
+# 为什么用两个 Noul 而不是一个 4 路 Choice：
+#   1. user / session 是**两个独立维度**（跨会话事实 vs 本轮上下文），不是互斥层级；
+#   2. Noul 给每层独立的 P(是)，可分层设阈值（user 严、session 松）——这是引入 Jev 的
+#      主要收益，Choice 的 4 路概率会互相分摊；
+#   3. 扩展第三层（如 team 层）只需再加一个 Noul。
+# 「都不写」= 两个 Noul 都不过阈值，天然覆盖，不需要单独选项。
+#
+# Noul 的 instructions 要「表述成高值=是」；criteria.true/false 描述两端含义。
+# ⚠️ NoulAnswer 只有 `noul`（P(是)），没有 confidence 字段。
+# ---------------------------------------------------------------------------
+
+_MEM_JEV_USER_INSTRUCTIONS = (
+    "本轮「用户消息」包含应当跨会话记住的新事实：用户身份、岗位、所在团队、"
+    "长期偏好或持久约束。"
+)
+_MEM_JEV_USER_CRITERIA = {
+    "true": "明确出现身份、岗位、团队、长期偏好或持久约束",
+    "false": "寒暄致谢、复述知识库内容，或只有本轮临时任务",
+}
+
+_MEM_JEV_SESSION_INSTRUCTIONS = (
+    "本轮「用户消息」包含仅当前会话需要的任务、进度、待办或临时约定"
+    "（如「这次先看…」「本轮要写…」）。"
+)
+_MEM_JEV_SESSION_CRITERIA = {
+    "true": "出现本轮任务、进度、待办或临时约定",
+    "false": "没有需要在本会话内延续的工作上下文",
+}
+
+
+class JevMemoryClassifier:
+    """TypeSafe Jev 记忆分类器：Noul × 2 → 两个 bool（含概率）
+
+    与 LLM 分类器的差别：Jev 不产出自由文本，`reason` 由两层概率拼出（比一句理由
+    更利于观测与调阈值）。
+    """
+
+    def __init__(self, client_cls: Any, noul_cls: Any) -> None:
+        self._client_cls = client_cls
+        self._noul_cls = noul_cls
+
+    def _make_client(self) -> Any:
+        """构造客户端：优先显式 api_key，个别 SDK 版本只认环境变量时退回无参构造
+
+        与 chat_query_rewrite._make_typesafe_client 同款处理。
+        """
+        try:
+            return self._client_cls(api_key=settings.TYPESAFE_API_KEY)
+        except TypeError:
+            return self._client_cls()
+
+    async def classify(self, question: str, answer: str) -> MemoryClassifyResult:
+        """判定两层是否该写；异常向上抛，由调用方决定回退策略"""
+        # 助手回复只作判断上下文：state 里分开标注，避免被当成用户事实
+        state = {"user_message": question, "assistant_reply": answer[:300]}
+        async with self._make_client() as client:
+            response = await client.system_one(
+                state=state,
+                questions={
+                    "write_user": self._noul_cls(
+                        instructions=_MEM_JEV_USER_INSTRUCTIONS,
+                        criteria=_MEM_JEV_USER_CRITERIA,
+                    ),
+                    "write_session": self._noul_cls(
+                        instructions=_MEM_JEV_SESSION_INSTRUCTIONS,
+                        criteria=_MEM_JEV_SESSION_CRITERIA,
+                    ),
+                },
+            )
+        p_user = float(response.nouls["write_user"].noul)
+        p_session = float(response.nouls["write_session"].noul)
+        write_user = p_user >= settings.MEMORY_JEV_USER_THRESHOLD
+        write_session = p_session >= settings.MEMORY_JEV_SESSION_THRESHOLD
+        logger.info(
+            "记忆分类(Jev)：p_user=%.2f→%s p_session=%.2f→%s (阈值 %.2f/%.2f)",
+            p_user,
+            write_user,
+            p_session,
+            write_session,
+            settings.MEMORY_JEV_USER_THRESHOLD,
+            settings.MEMORY_JEV_SESSION_THRESHOLD,
+        )
+        return MemoryClassifyResult(
+            write_user=write_user,
+            write_session=write_session,
+            reason=f"jev p_user={p_user:.2f} p_session={p_session:.2f}",
+        )
+
+
+def _build_jev_classifier() -> JevMemoryClassifier | None:
+    """构建 Jev 分类器；未配 key / SDK 未装返回 None（与 chat_query_rewrite 同款容错）"""
+    if not settings.TYPESAFE_API_KEY:
+        return None
+    try:
+        from typesafe_sdk import AsyncTypeSafeClient, Noul  # noqa: PLC0415
+    except ImportError:
+        logger.warning("typesafe_sdk 未安装，记忆分类回退 LLM")
+        return None
+    return JevMemoryClassifier(AsyncTypeSafeClient, Noul)
+
+
 class ChatLongMemoryService:
     """对话长期记忆（Mem0）。未配置 MEM0_API_KEY 时全部跳过。
 
@@ -230,6 +362,8 @@ class ChatLongMemoryService:
 
         #（`if (!apiKey || !this.client) return;`）
         self._classifier = _build_classifier() if self._client else None
+        # Jev 分类器（Noul×2）；未配 TYPESAFE_API_KEY / SDK 未装时为 None
+        self._jev = _build_jev_classifier() if self._client else None
 
     @property
     def enabled(self) -> bool:
@@ -307,30 +441,26 @@ class ChatLongMemoryService:
     ) -> None:
         """一轮问答结束后分类并写入记忆
 
-        分类器决定写 user 层 / session 层 / 都不写。**只把用户说的话交给 Mem0 抽取**
-        （extractFrom 只有 question），助手回答仅用于让分类器判断上下文。
+        分类器（Jev / LLM，见 `_classify`）决定写 user 层 / session 层 / 两层 / 都不写。
+        **只把用户说的话交给 Mem0 抽取**（extractFrom 只有 question），助手回答仅用于让
+        分类器判断上下文。
+        两层各自带**分层抽取指令**：否则同一段文本会被抽出重复事实并跨层污染。
         写入失败只 WARN——记忆丢一条不影响本轮对话。
         """
-        if self._client is None or self._classifier is None:
+        if self._client is None:
+            return
+        result = await self._classify(question, answer)
+        if result is None:
             return
         extract_from = [{"role": "user", "content": question}]
         try:
-            result: MemoryClassifyResult = await self._classifier.ainvoke(
-                [
-                    SystemMessage(CLASSIFIER_PROMPT),
-                    HumanMessage(
-                        f"用户：{question}\n助手（仅供判断，不要当作用户事实）：{answer[:300]}"
-                    ),
-                ]
-            )
-
             written: list[str] = []
             if result.write_user:
                 # ⚠️ 实体 ID 走顶层（不能包 filters），见模块注释「实体 ID 的传法」
                 await self._client.add(
                     extract_from,
                     user_id=str(user_id),
-                    custom_instructions=_EXTRACT_INSTRUCTIONS,
+                    custom_instructions=_EXTRACT_USER_INSTRUCTIONS,
                 )
                 written.append("user")
             if result.write_session:
@@ -338,12 +468,88 @@ class ChatLongMemoryService:
                     extract_from,
                     user_id=str(user_id),
                     run_id=str(session_id),
-                    custom_instructions=_EXTRACT_INSTRUCTIONS,
+                    custom_instructions=_EXTRACT_SESSION_INSTRUCTIONS,
                 )
                 written.append("session")
             logger.info("Mem0 分类：%s；写入=%s", result.reason, ",".join(written) or "无")
         except Exception as err: # noqa: BLE001
             logger.warning("Mem0 写入失败：%s", err)
+
+    # ---------------------------------------------------------------- 分类分派
+
+    async def _classify_llm(
+        self, question: str, answer: str
+    ) -> MemoryClassifyResult | None:
+        """LLM 分类（ChatOpenAI + with_structured_output）；不可用返回 None"""
+        if self._classifier is None:
+            return None
+        result: MemoryClassifyResult = await self._classifier.ainvoke(
+            [
+                SystemMessage(CLASSIFIER_PROMPT),
+                HumanMessage(
+                    f"用户：{question}\n助手（仅供判断，不要当作用户事实）：{answer[:300]}"
+                ),
+            ]
+        )
+        return result
+
+    async def _classify(
+        self, question: str, answer: str
+    ) -> MemoryClassifyResult | None:
+        """按 MEMORY_CLASSIFIER 分派记忆分类；两者都不可用返回 None（本轮不写）
+
+        - auto：优先 Jev，失败回退 LLM（记忆是增强项，不因分类器故障断链）
+        - jev：只用 Jev，失败即放弃本轮
+        - llm：只用 LLM
+        - shadow：两边都跑、只记日志，**按 LLM 结果写入**（校准 Jev 阈值用，切换前先跑这个）
+        """
+        mode = settings.MEMORY_CLASSIFIER
+        if mode == "shadow":
+            return await self._classify_shadow(question, answer)
+        if mode == "llm":
+            return await self._classify_llm(question, answer)
+        if self._jev is not None:
+            try:
+                return await self._jev.classify(question, answer)
+            except Exception as err: # noqa: BLE001
+                logger.warning("Jev 记忆分类失败：%s", err)
+                if mode == "jev":
+                    return None
+        elif mode == "jev":
+            logger.warning("MEMORY_CLASSIFIER=jev 但未配置 TYPESAFE_API_KEY，本轮不写记忆")
+            return None
+        return await self._classify_llm(question, answer)
+
+    async def _classify_shadow(
+        self, question: str, answer: str
+    ) -> MemoryClassifyResult | None:
+        """影子模式：Jev 与 LLM 都跑，比较判定是否一致，**按 LLM 结果写入**
+
+        目的：拿真实流量看 Jev 在中文上的判定质量与概率分布，再决定阈值/是否切换。
+        Jev 侧概率由 `JevMemoryClassifier.classify` 的 INFO 日志输出。
+        """
+        llm_result = await self._classify_llm(question, answer)
+        if self._jev is None:
+            return llm_result
+        try:
+            jev_result = await self._jev.classify(question, answer)
+        except Exception as err: # noqa: BLE001
+            logger.warning("记忆分类 shadow：Jev 调用失败 %s", err)
+            return llm_result
+        agree = (
+            llm_result is not None
+            and llm_result.write_user == jev_result.write_user
+            and llm_result.write_session == jev_result.write_session
+        )
+        logger.info(
+            "记忆分类 shadow：llm=user:%s/session:%s | jev=user:%s/session:%s | 一致=%s",
+            llm_result.write_user if llm_result else None,
+            llm_result.write_session if llm_result else None,
+            jev_result.write_user,
+            jev_result.write_session,
+            agree,
+        )
+        return llm_result
 
     async def clear_session(self, user_id: str, session_id: str) -> None:
         """删除该会话的会话层记忆

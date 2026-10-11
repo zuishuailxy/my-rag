@@ -383,6 +383,22 @@ class Settings(BaseSettings):
     MEM0_HOST: str | None = None
     MEM0_TOP_K: int = 5
 
+    # 记忆分类器实现（决定本轮写 user 层 / session 层 / 两层 / 都不写）：
+    #   auto   = 配了 TYPESAFE_API_KEY 用 Jev（TypeSafe Noul×2），否则 LLM  ← 默认
+    #   jev    = 只用 Jev，失败即放弃本轮（不回退 LLM）
+    #   llm    = 只用 LLM（ChatOpenAI + with_structured_output）
+    #   shadow = 两边都跑、只记日志，**实际按 LLM 结果写入**（用于校准 Jev 阈值）
+    MEMORY_CLASSIFIER: str = "auto"
+    # Jev 判定的概率阈值（Noul 返回 P(是)，无 confidence 字段，直接卡概率）：
+    # user 层跨会话留存、写错代价高 → 门槛严；session 层临时且 clear_session 会清 → 放宽
+    #
+    # 阈值依据（2026-10-11 用真实 key 跑中文用例实测）：
+    #   user 层：真 user 事实 p=0.85~0.97；制度/流程类误报 p=0.48       → 0.70 落在空隙中
+    #   session 层：真 session 用例 p=0.95；纯 user 用例的误判带 0.55~0.62 → 0.75 卡在两者之间
+    # ⚠️ 样本仅十余条，切换生产前建议用 MEMORY_CLASSIFIER=shadow 跑真实流量再校准。
+    MEMORY_JEV_USER_THRESHOLD: float = 0.70
+    MEMORY_JEV_SESSION_THRESHOLD: float = 0.75
+
     # ---- Neo4j（KG 知识图谱存储；与 docker-compose 中 neo4j 服务一致）----
     NEO4J_ENABLED: bool = True
     # 本地开发走宿主机映射端口 7687；容器内部署时覆盖为 bolt://neo4j:7687
