@@ -15,7 +15,7 @@
 分工（路线 A：TypeSafe 管决策、LLM 管改写）：
   - **意图识别走 TypeSafe**（结构化判定 SaaS，`system_one(state=..., questions=...)`
     返回类型化结果，非 OpenAI 兼容 LLM）。只用一个 `Choice` 原语做 5 路分类。
-  - **查询改写仍走生成式 LLM**（deepseek-v4-flash）：TypeSafe 的 Noul/Choice/Score
+  - **查询改写仍走生成式 LLM**（deepseek-flash）：TypeSafe 的 Noul/Choice/Score
     原语是判别式的，生成不了自由文本，所以 `standalone_query` 不能交给它。
   - 回退：TypeSafe 未安装 / 未配 key / 调用失败 → 用 LLM 的 `need_retrieve`
     推导意图（True→kb，False→chitchat），再不行落到 kb。
@@ -27,7 +27,7 @@
 刻意差异：
 - **结构化输出改用 `method="function_calling"` 且关闭 thinking**：
   `withStructuredOutput(rewriteSchema)` 走所选模型（qwen-plus）默认的 jsonSchema 通道；
-  本项目 LLM 是 **deepseek-v4-flash**，不支持 json_schema 严格模式、也不接受带 name 的
+  本项目 LLM 是 **deepseek-flash**，不支持 json_schema 严格模式、也不接受带 name 的
   tool_choice（详见 kg_extraction.py / chat_long_memory.py 同类注释）。故显式指定
   function_calling + `extra_body={"thinking": {"type": "disabled"}}`。
 - **TypeSafe 依赖是本次新增**：SDK 未进 requirements，`_load_typesafe()` 延迟导入，
@@ -323,7 +323,7 @@ def _build_llm() -> ChatOpenAI | None:
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=base_url,
-        # deepseek-v4-flash 默认 thinking 模式，不支持强制 tool_choice
+        # deepseek-flash 默认 thinking 模式，不支持强制 tool_choice
         #（"Thinking mode does not support this tool_choice"），结构化输出必须关闭
         extra_body={"thinking": {"type": "disabled"}},
     )

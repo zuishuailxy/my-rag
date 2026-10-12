@@ -8,7 +8,7 @@ DeepSeek 走 OpenAI 兼容 Chat Completions，不支持 json_schema 严格模式
 用函数调用方式拿到结构化结果。</p>
 
 <p>配置（config.py）：OPENAI_API_KEY / LLM_API_KEY / DASHSCOPE_API_KEY、
-LLM_BASE_URL（默认 DeepSeek）、LLM_MODEL（默认 deepseek-v4-flash）、
+LLM_BASE_URL（默认 DeepSeek）、LLM_MODEL（默认 deepseek-flash）、
 KG_MAX_ENTITIES / KG_MAX_RELATIONS / KG_LLM_TIMEOUT_MS</p>
 """
 import logging
@@ -168,7 +168,7 @@ def _build_structured_llm():
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=settings.LLM_BASE_URL,
-        # deepseek-v4-flash 默认 thinking 模式，不支持强制 tool_choice
+        # deepseek-flash 默认 thinking 模式，不支持强制 tool_choice
         #（报错 "Thinking mode does not support this tool_choice"），
         # 结构化输出（function_calling）必须关闭 thinking
         extra_body={"thinking": {"type": "disabled"}},

@@ -13,7 +13,7 @@
      理由由概率拼出。
    - `llm`：ChatOpenAI + `with_structured_output`，走与 ai_chat 相同的 fallback 链
      （OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY、OPENAI_BASE_URL → LLM_BASE_URL、
-     MODEL_NAME → LLM_MODEL），本项目里即 **deepseek-v4-flash**。
+     MODEL_NAME → LLM_MODEL），本项目里即 **deepseek-flash**。
    - `shadow`：两边都跑、只记日志，实际按 LLM 结果写入（校准 Jev 阈值用）。
    为什么用两个 Noul 而不是一个 4 路 Choice：user / session 是两个**独立维度**
    （跨会话事实 vs 本轮上下文），Noul 保留每层独立概率、可分层设阈值、扩展第三层只需
@@ -219,7 +219,7 @@ def _build_classifier():
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=base_url,
-        # deepseek-v4-flash 默认 thinking 模式，不支持强制 tool_choice
+        # deepseek-flash 默认 thinking 模式，不支持强制 tool_choice
         # （"Thinking mode does not support this tool_choice"），结构化输出必须关掉
         extra_body={"thinking": {"type": "disabled"}},
     )

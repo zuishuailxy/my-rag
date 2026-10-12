@@ -6,10 +6,10 @@ RAG 对话服务
 
 大模型统一用 DeepSeek（项目 LLM 约定，与 kg_extraction 一致）：
 - baseUrl：OPENAI_BASE_URL → LLM_BASE_URL（默认 https://api.deepseek.com/v1）
-- model：MODEL_NAME → LLM_MODEL（默认 deepseek-v4-flash，即 DeepSeek-V4-Flash）
+- model：MODEL_NAME → LLM_MODEL（默认 deepseek-flash，即 DeepSeek-V4.1-Flash）
 - API Key fallback 链：OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY
 
-deepseek-v4-flash 默认 thinking 模式，与 kg_extraction 一致关闭以得到直接回答。
+deepseek-flash 默认 thinking 模式，与 kg_extraction 一致关闭以得到直接回答。
 """
 import json
 import logging
@@ -228,7 +228,7 @@ def _build_llm() -> ChatOpenAI | None:
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=base_url,
-        # deepseek-v4-flash 默认 thinking 模式，关闭以得到直接可溯源回答（对齐 kg_extraction）
+        # deepseek-flash 默认 thinking 模式，关闭以得到直接可溯源回答（对齐 kg_extraction）
         extra_body={"thinking": {"type": "disabled"}},
     )
 

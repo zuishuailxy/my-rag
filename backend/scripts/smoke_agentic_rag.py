@@ -190,7 +190,7 @@ async def main() -> None:
     if saved_llm is None:
         # 无 Key 时用 dummy 只建图（不会发起调用），测完还原
         ai_stream_service._llm = ChatDeepSeek(
-            api_key=SecretStr("dummy"), model="deepseek-v4-flash"
+            api_key=SecretStr("dummy"), model="deepseek-flash"
         )
     try:
         mounts = {
@@ -223,7 +223,7 @@ async def main() -> None:
     ai_stream_mod.chat_query_rewrite_service = fake_rewr
     if ai_stream_service._llm is None:
         ai_stream_service._llm = ChatDeepSeek(
-            api_key=SecretStr("dummy"), model="deepseek-v4-flash"
+            api_key=SecretStr("dummy"), model="deepseek-flash"
         )
     try:
         persist2: list[dict] = []
@@ -311,7 +311,7 @@ async def main() -> None:
     ai_stream_mod.graph_build_service = fake_graph
     if ai_stream_service._llm is None:
         ai_stream_service._llm = ChatDeepSeek(
-            api_key=SecretStr("dummy"), model="deepseek-v4-flash"
+            api_key=SecretStr("dummy"), model="deepseek-flash"
         )
     try:
         agent = ai_stream_service.create_turn_agent(None, 5, [], _plan("kb"), "差旅谁审批？")

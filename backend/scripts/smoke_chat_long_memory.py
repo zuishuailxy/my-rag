@@ -7,7 +7,7 @@
    条目非 dict 或 memory 为空）都不炸，空串被过滤（)`）
 3. build_system_message：两层皆空返回 None（调用方据此跳过注入）
 4. build_system_message：拼接格式（【用户长期记忆】/【当前会话记忆】+ `- ` 条目 + 免责句）
-5. 分类器：**真实调用 LLM**（本项目 = deepseek-v4-flash），三条样例的 write_user /
+5. 分类器：**真实调用 LLM**（本项目 = deepseek-flash），三条样例的 write_user /
    write_session 判定 —— 验证 CLASSIFIER_PROMPT + `function_calling` 结构化输出可用
 6. 真实 Mem0 链路（**仅当配置了 MEM0_API_KEY 时**）：remember_turn 写 user 层 → 轮询
    检索命中 → 直接写一条 session 层 → clear_session → 轮询确认会话层清空**且 user 层

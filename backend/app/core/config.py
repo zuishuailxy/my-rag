@@ -234,8 +234,11 @@ class Settings(BaseSettings):
     LLM_API_KEY: str | None = None
     # DeepSeek OpenAI 兼容端点
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
-    # 模型：deepseek-v4-flash（DeepSeek-V4-Flash）
-    LLM_MODEL: str = "deepseek-v4-flash"
+    # 模型：deepseek-flash（DeepSeek-V4.1-Flash）
+    # ⚠️ 用**规范名**：`deepseek-v4-flash` 是已退役别名（仍接受、按 Flash 价计费），
+    # 但 API 响应回显的是规范名 `deepseek-flash` —— 用别名会让 Langfuse 的价格匹配
+    # （按上报的模型名匹配）落空 → 成本恒为 0。见 scripts/setup_langfuse_models.py。
+    LLM_MODEL: str = "deepseek-flash"
     # 单 chunk 最多实体 / 关系数，防止图爆炸。
     # ⚠️ 实测 12/15 对中文密集文档偏小：01-travel-expense-policy 两块都**正好抽满 12**，
     # 「私车公用申请表」这类实体被挤掉 → 后续图谱对话检索按实体名匹配就查不到。
@@ -250,7 +253,7 @@ class Settings(BaseSettings):
     # OPENAI_API_KEY 在上方 API Key fallback 链区声明（EMBEDDING_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY），
     # 此处复用同一字段，勿重复声明（pydantic 第二次赋值会静默覆盖）。
     OPENAI_BASE_URL: str | None = None
-    # 模型覆盖：MODEL_NAME → LLM_MODEL（默认 deepseek-v4-flash）
+    # 模型覆盖：MODEL_NAME → LLM_MODEL（默认 deepseek-flash）
     MODEL_NAME: str | None = None
     # LLM 单次作答超时
     AI_CHAT_TIMEOUT_MS: int = 60000
@@ -297,7 +300,7 @@ class Settings(BaseSettings):
     # 生成侧评测（LLM-as-judge）单次判分超时：要读完整上下文 + 回答，比作答慢
     AI_EVAL_TIMEOUT_MS: int = 90000
     # 流式对话思考开关：严格 == "false" 才关，
-    # 默认开——deepseek-v4-flash 开思考后 reasoning_content 随流式 delta 返回
+    # 默认开——deepseek-flash 开思考后 reasoning_content 随流式 delta 返回
     LLM_ENABLE_THINKING: str = "true"
 
     # ---- 多模态图像识别（图片 OCR；Qwen-VL via DashScope 兼容口）----
@@ -378,7 +381,7 @@ class Settings(BaseSettings):
     # 每层各取多少条（(config.get('MEM0_TOP_K', 5))`）。
     # ⚠️ 记忆的「抽取」在 Mem0 云侧完成，SDK 不暴露模型参数，只能用 custom_instructions
     # 约束输出；本进程只跑「分类器」（判断写 user 层 / session 层 / 都不写），走下方
-    # OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY 链，本项目即 deepseek-v4-flash。
+    # OPENAI_API_KEY → LLM_API_KEY → DASHSCOPE_API_KEY 链，本项目即 deepseek-flash。
     MEM0_API_KEY: str | None = None
     MEM0_HOST: str | None = None
     MEM0_TOP_K: int = 5

@@ -93,7 +93,7 @@ def _build_summary_llm() -> ChatOpenAI | None:
         # DeepSeek 走 Chat Completions 兼容层，不要切 OpenAI Responses API
         use_responses_api=False,
         base_url=base_url,
-        # deepseek-v4-flash 默认 thinking 模式，摘要类调用关闭
+        # deepseek-flash 默认 thinking 模式，摘要类调用关闭
         extra_body={"thinking": {"type": "disabled"}},
     )
 
