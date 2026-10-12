@@ -7,11 +7,8 @@
    两者共用 `hybrid_retrieval_service.retrieve`，此处保留是为方案 B 提供 search 域入口。
 均需 `search` 权限。
 
-状态码刻意差异：()`，本项目
-**查询类 POST 统一返回 200**（/search、/search/hybrid、/rag/search、/ai/chat）—— 查询语义
-下 200 更贴切；写操作仍显式 201（auth / users / role / document / ai sessions）。
-前端封装的 post 只判 2xx，无契约影响。
 """
+
 from fastapi import Depends
 from typing import Annotated
 

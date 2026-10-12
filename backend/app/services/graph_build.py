@@ -20,6 +20,7 @@ Neo4j 不可用时跳过写入（不抛错阻断发布消费）；
     节点（曾观测到同一 documentId 出现 4 份 KnowledgeDocument）。加了约束后并发
     MERGE 同一 key 会拿到 transient error，由 _run_write 自动重试。
 """
+
 import asyncio
 import logging
 import re
@@ -91,9 +92,7 @@ def _evidence_snippet(
     start = max(0, idx - window // 2)
     end = min(len(text), start + window)
     return (
-        ("…" if start > 0 else "")
-        + text[start:end]
-        + ("…" if end < len(text) else "")
+        ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
     )
 
 
@@ -126,7 +125,7 @@ class GraphChatRelation(TypedDict):
     relation: str
     target: str
     # 关系出处：抽取该关系的 chunk 里、两个实体附近的片段
-    #（None = 旧边无 chunkId，需重建图谱才有）
+    # （None = 旧边无 chunkId，需重建图谱才有）
     evidence: str | None
 
 
@@ -326,9 +325,7 @@ class GraphBuildService:
                 for statement in CONSTRAINT_STATEMENTS:
                     # consume() 不可省：不消费则服务端报错不会被观察到
                     await (await session.run(statement)).consume()
-            logger.info(
-                "Neo4j 唯一性约束已就绪：count=%d", len(CONSTRAINT_STATEMENTS)
-            )
+            logger.info("Neo4j 唯一性约束已就绪：count=%d", len(CONSTRAINT_STATEMENTS))
         except Exception as err:
             logger.warning(
                 "Neo4j 约束创建失败（KG 写入继续，但并发下可能产生重复节点）：%s",
@@ -376,7 +373,8 @@ class GraphBuildService:
 
         async with self._driver.session() as session:
             # ① 文档节点：按 id 幂等 upsert，保留首次 createdAt
-            await self._run_write(session,
+            await self._run_write(
+                session,
                 """
                 // 以文档业务 id 为唯一键：存在则命中，不存在则创建
                 MERGE (d:KnowledgeDocument {id: $id})
@@ -395,10 +393,9 @@ class GraphBuildService:
                 categoryId=doc.category_id,
                 authorId=_opt_str(doc.author_id),
                 teamId=_opt_str(doc.team_id),
-
                 isPublic=bool(doc.is_public),
                 status=doc.status,
-# ''`（overview 的文档→标签边按逗号拆）
+                # ''`（overview 的文档→标签边按逗号拆）
                 tags=doc.tags or "",
                 now=_now_iso(),
             )
@@ -421,7 +418,8 @@ class GraphBuildService:
             total_entities = 0
             for chunk in chunks:
                 # ③ chunk 节点 + 文档→块边：Document -[HAS_CHUNK]-> Chunk
-                await self._run_write(session,
+                await self._run_write(
+                    session,
                     """
                     // 以全局唯一 chunkId 幂等创建/更新块节点
                     MERGE (c:DocumentChunk {chunkId: $chunkId})
@@ -505,7 +503,8 @@ class GraphBuildService:
             return
         try:
             async with self._driver.session() as session:
-                await self._run_write(session,
+                await self._run_write(
+                    session,
                     """
                     MATCH (d:KnowledgeDocument {id: $id})
                     SET d.isPublic = $isPublic, d.teamId = $teamId, d.authorId = $authorId,
@@ -518,10 +517,8 @@ class GraphBuildService:
                     authorId=_opt_str(author_id),
                     now=_now_iso(),
                 )
-        except Exception as err: # noqa: BLE001
-            logger.warning(
-                "图谱可见性更新失败：documentId=%s, %s", document_id, err
-            )
+        except Exception as err:  # noqa: BLE001
+            logger.warning("图谱可见性更新失败：documentId=%s, %s", document_id, err)
             return
         logger.info("图谱可见性已更新：documentId=%s", document_id)
 
@@ -531,7 +528,8 @@ class GraphBuildService:
             return
         async with self._driver.session() as session:
             # 删除文档节点及其所有 chunk（DETACH 会一并拆掉相连关系边）
-            await self._run_write(session,
+            await self._run_write(
+                session,
                 """
                 // 定位待删文档
                 MATCH (d:KnowledgeDocument {id: $id})
@@ -544,14 +542,15 @@ class GraphBuildService:
                 id=document_id,
             )
             # 孤儿实体清理：没有任何 chunk MENTIONS 的实体视为无引用，整节点删除
-            await self._run_write(session,
+            await self._run_write(
+                session,
                 """
                 MATCH (e:KnowledgeEntity)
                 // 入边 MENTIONS 为空 ⇒ 已无任何文档块引用该实体
                 WHERE NOT (e)<-[:MENTIONS]-()
                 // DETACH 同时清掉 RELATED_TO 等残留关系，避免悬空边
                 DETACH DELETE e
-                """
+                """,
             )
         logger.info("KG 图谱已删除：documentId=%s", document_id)
 
@@ -574,8 +573,9 @@ class GraphBuildService:
                 continue
             aliases = list(entity.aliases)
             if entity.name != name and entity.name not in aliases:
-                aliases.append(entity.name) # 原始写法（带《）进别名
-            await self._run_write(session,
+                aliases.append(entity.name)  # 原始写法（带《）进别名
+            await self._run_write(
+                session,
                 """
                 MERGE (e:KnowledgeEntity {name: $name})
                 ON CREATE SET e.type = $type, e.description = $description,
@@ -595,7 +595,8 @@ class GraphBuildService:
             count += 1
 
             if result.chunk_id:
-                await self._run_write(session,
+                await self._run_write(
+                    session,
                     """
                     MATCH (c:DocumentChunk {chunkId: $chunkId})
                     MATCH (e:KnowledgeEntity {name: $name})
@@ -610,7 +611,8 @@ class GraphBuildService:
             target = normalize_entity_name(rel.target)
             if not source or not target:
                 continue
-            await self._run_write(session,
+            await self._run_write(
+                session,
                 """
                 MATCH (a:KnowledgeEntity {name: $source})
                 MATCH (b:KnowledgeEntity {name: $target})
@@ -955,9 +957,7 @@ class GraphBuildService:
                     LIMIT $rel_cap
                     """
                 )
-                rel_result = await session.run(
-                    rel_cypher, names=names, rel_cap=rel_cap
-                )
+                rel_result = await session.run(rel_cypher, names=names, rel_cap=rel_cap)
                 seen: set[str] = set()
                 relations: list[GraphChatRelation] = []
                 for row in await rel_result.data():
@@ -1043,9 +1043,6 @@ class GraphBuildService:
         RELATED_TO 边数 / 提及次数、type 分布、Top 实体、最近文档、主查询、关键词
         补充查询，逐条 Cypher 都带 neo4j_document_access_where。scope=None 表示
         不过滤，API 端点必须传 access_from_user(user)。
-
-        刻意差异：参数名 from_time/to_time —— from 是 Python 保留字；
-        HTTP 查询参数仍叫 from/to。
         """
         empty: dict[str, Any] = {
             "nodes": [],
@@ -1189,7 +1186,7 @@ class GraphBuildService:
                 ]
 
                 # 主查询：按标题/摘要/标签 + 时间筛文档，LIMIT 后挂上 MENTIONS 实体
-                #（可按 entityType 再筛）；可见性条件与上面各统计口径同一条
+                # （可按 entityType 再筛）；可见性条件与上面各统计口径同一条
                 main_params: dict[str, Any] = {
                     "kw": kw,
                     "entityType": etype,
@@ -1283,7 +1280,8 @@ class GraphBuildService:
                 def split_tags(raw: Any) -> list[str]:
                     """逗号分隔标签串拆分"""
                     return [
-                        t.strip() for t in str(raw or "").replace("，", ",").split(",")
+                        t.strip()
+                        for t in str(raw or "").replace("，", ",").split(",")
                         if t.strip()
                     ]
 

@@ -1,6 +1,6 @@
 """联网搜索服务
 
-⚠️ 刻意迁移：（api.bochaai.com），本项目改用 Tavily
+本项目用 Tavily
 （api.tavily.com），对外接口形状保持一致（WebSearchHit / WebSearchResult），
 供 ai_stream 的 web_search 工具调用。字段映射：
 
@@ -8,9 +8,6 @@
 - url ← results[].url
 - snippet ← results[].content（Tavily 无 summary/snippet 之分，content 即摘要）
 - siteName ← Tavily 不返回，取 URL hostname 兜底（前端展示用）
-
-Tavily 无 Bocha 的 freshness=noLimit 等价参数（默认全网检索），省略；
-失败不抛错——返回 items=[] + error 文案，由上层决定是否调用工具失败。
 """
 
 import logging
@@ -67,7 +64,7 @@ class WebSearchService:
 
         body = {
             "query": query,
-            #), 10)
+            # ), 10)
             "max_results": min(max(count, 1), 10),
         }
         try:

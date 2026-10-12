@@ -6,14 +6,8 @@ Redis 客户端封装
 - 方法一一对照：get / set(key, value, ttlSeconds?) / del（Python 里改名 delete，
   因 del 是关键字）/ ttl；onModuleDestroy → close()。
 
-刻意差异（文档化）：
-- ioredis 构造即后台建连、maxRetriesPerRequest=3 控制单条命令重试；redis-py 是
-  惰性建连、断线后每条命令自动重连，无 per-request 重试上限参数，语义上等价覆盖
-  开发场景（Redis 短暂不可用时后续命令自愈），不做额外封装。
-- start() 里的 ping 仅健康检查打日志：失败降级为 WARNING 不阻断启动（house 风格，
-  与 ES/Neo4j 一致）；后续命令若 Redis 仍不可用会照常抛错，由调用方处理——
-  验证码这类数据不能像 ES 索引写入那样静默跳过。
 """
+
 import logging
 
 from redis.asyncio import Redis

@@ -59,8 +59,8 @@ class CreateSessionRequest(BaseModel):
 class QuerySessionRequest(BaseModel):
     """会话分页查询
 
-    刻意差异：page / pageSize 补了上下界（page ≥1，pageSize 1~100），
-，按项目分页 DTO 惯例收紧。
+        page / pageSize 补了上下界（page ≥1，pageSize 1~100），
+    ，按项目分页 DTO 惯例收紧。
     """
 
     page: int = Field(default=1, ge=1, description="页码，从 1 开始")

@@ -10,6 +10,7 @@
 
 客户端复用 app.db.es 单例。
 """
+
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -37,14 +38,26 @@ DOCUMENT_INDEX_SETTINGS: dict[str, Any] = {
 }
 
 # 字段名保持 camelCase：
-# 
+#
 # 中文正文走 IK 分词（镜像自带 analysis-ik）：索引期细粒度 ik_max_word，查询期 ik_smart。
 DOCUMENT_MAPPINGS: dict[str, Any] = {
     "properties": {
         "id": {"type": "keyword"},
-        "title": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-        "summary": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-        "content": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+        "title": {
+            "type": "text",
+            "analyzer": "ik_max_word",
+            "search_analyzer": "ik_smart",
+        },
+        "summary": {
+            "type": "text",
+            "analyzer": "ik_max_word",
+            "search_analyzer": "ik_smart",
+        },
+        "content": {
+            "type": "text",
+            "analyzer": "ik_max_word",
+            "search_analyzer": "ik_smart",
+        },
         "tags": {"type": "keyword"},
         "status": {"type": "integer"},
         "isPublic": {"type": "boolean"},
@@ -98,7 +111,7 @@ class SearchIndexService:
                 },
             )
             return True
-        except Exception as err: # noqa: BLE001 —— 索引不存在等情形均降级
+        except Exception as err:  # noqa: BLE001 —— 索引不存在等情形均降级
             logger.warning("kh_document 可见性 mapping 更新失败：%s", err)
             return False
 
@@ -111,16 +124,16 @@ class SearchIndexService:
     ) -> bool:
         """已发布文档只改公开 / 团队 / 作者时，就地补写 kh_document 的可见性字段
 
-        chunk 侧 es_chunk_index_service.update_visibility 的文档级版本：文档由公开转
-        私有后若不同步，未授权用户仍能通过 POST /search 搜到该文档的标题与摘要。
+                chunk 侧 es_chunk_index_service.update_visibility 的文档级版本：文档由公开转
+                私有后若不同步，未授权用户仍能通过 POST /search 搜到该文档的标题与摘要。
 
-：按 _id（= 文档 ID）
-        **单条 update**，不是 update_by_query —— 差别在「文档不在索引里」时的表现：
-        update 会抛 document_missing_exception → 落到 WARN 分支；update_by_query 则是
-        updated=0 静默返回 True，会把「这篇文档压根没进过索引」这种异常伪装成成功。
+        ：按 _id（= 文档 ID）
+                **单条 update**，不是 update_by_query —— 差别在「文档不在索引里」时的表现：
+                update 会抛 document_missing_exception → 落到 WARN 分支；update_by_query 则是
+                updated=0 静默返回 True，会把「这篇文档压根没进过索引」这种异常伪装成成功。
 
-        空值统一写空串（与 chunk 侧 / _doc_map 的 `or ""` 一致，便于 term 查询）；
-        ES 不可用或写入失败只记日志返回 False，不抛错（调用方不阻断文档保存）。
+                空值统一写空串（与 chunk 侧 / _doc_map 的 `or ""` 一致，便于 term 查询）；
+                ES 不可用或写入失败只记日志返回 False，不抛错（调用方不阻断文档保存）。
         """
         if not es_service.is_available or es_service.client is None:
             logger.warning(
@@ -141,7 +154,7 @@ class SearchIndexService:
             )
             logger.info("文档可见性已更新：documentId=%s", document_id)
             return True
-        except Exception as err: # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
             message = str(err)
             # 索引不存在 = 没有可更新的文档，视作已同步（与 chunk 侧同一约定）
             if "index_not_found" in message:
@@ -158,7 +171,9 @@ class SearchIndexService:
         """
         c = es_service.client
         if c is None:
-            logger.warning("跳过搜索索引写入（ES 不可用）：documentId=%s", doc.get("id"))
+            logger.warning(
+                "跳过搜索索引写入（ES 不可用）：documentId=%s", doc.get("id")
+            )
             return
 
         await self.ensure_es_index()
@@ -212,7 +227,7 @@ class SearchIndexService:
         # 可见性字段取 DOC_VISIBILITY_FIELDS（camelCase）。
         # 字段缺失或未回填的历史记录会因 term 不命中而对外不可见（偏保守，不泄露）。
         scope = scope or empty_scope()
-        #(params.pageSize ?? 10, 50) —— schema 已限 50，这里双保险
+        # (params.pageSize ?? 10, 50) —— schema 已限 50，这里双保险
         page_size = min(page_size, 50)
         from_ = (page - 1) * page_size
 
@@ -220,10 +235,6 @@ class SearchIndexService:
         if c is None:
             logger.warning("跳过搜索查询（ES 不可用）")
             return {"items": [], "total": 0, "page": page, "pageSize": page_size}
-
-        # 刻意差异：先确保索引存在再搜。ensure_index 幂等，
-        # 代价仅一次 HEAD/GET；好处是首个空库上搜索不会因 index_not_found 被 catch 吞成
-        # 「搜索查询失败」告警。行为等价（都返回空分页），无副作用。
         await self.ensure_es_index()
 
         filters: list[dict[str, Any]] = []
@@ -276,7 +287,11 @@ class SearchIndexService:
 
         # total 可能是 number（旧版）或 {value, relation}（ES8 默认）
         total_raw = response.get("hits", {}).get("total", 0)
-        total = total_raw if isinstance(total_raw, int) else (total_raw or {}).get("value", 0)
+        total = (
+            total_raw
+            if isinstance(total_raw, int)
+            else (total_raw or {}).get("value", 0)
+        )
 
         items: list[dict[str, Any]] = []
         for hit in response.get("hits", {}).get("hits", []):
@@ -311,7 +326,11 @@ class SearchIndexService:
 
 def _utc_iso() -> str:
     """ES date 字段用的 UTC ISO-8601（toISOString(）"""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 # 全局单例

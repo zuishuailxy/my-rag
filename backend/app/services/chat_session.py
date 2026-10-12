@@ -6,12 +6,6 @@
 ：先删消息再删会话——DDL 的 session_id 外键虽有
 ON DELETE CASCADE，，不依赖库级级联。
 
-刻意差异：
-- append_turn 里显式赋 updated_at = func.now()：标题不变且无字段变更时
-  SQLAlchemy 不发 UPDATE，() 强制
-  save() 触发更新，这里用 SQL 表达式赋值达到同样效果（每次问答必刷新）。
-- _get_owned 非法 / 不存在的会话 id 统一 404「会话不存在」。
-
 缓存联动：
 - `list_recent_messages` 只查库，供调用方在 Redis 热窗口 miss 时回填；它**自己
   不写 Redis**——写窗口是 ChatShortMemoryService 的职责，两处各自实现过滤口径
@@ -38,7 +32,11 @@ from app.models.ai_session import (
     AiMessage,
     AiSession,
 )
-from app.schemas.ai import CreateSessionRequest, QuerySessionRequest, UpdateSessionRequest
+from app.schemas.ai import (
+    CreateSessionRequest,
+    QuerySessionRequest,
+    UpdateSessionRequest,
+)
 from app.services.chat_long_memory import chat_long_memory_service
 from app.services.chat_short_memory import chat_short_memory_service
 from app.services.chat_summary import chat_session_summary_service
@@ -67,7 +65,9 @@ class ChatSessionService:
         page = query.page
         page_size = query.pageSize
         cond = AiSession.user_id == int(user_id)
-        total = await session.scalar(select(func.count()).select_from(AiSession).where(cond))
+        total = await session.scalar(
+            select(func.count()).select_from(AiSession).where(cond)
+        )
         stmt = (
             select(AiSession)
             .where(cond)
@@ -76,14 +76,21 @@ class ChatSessionService:
             .limit(page_size)
         )
         rows = (await session.scalars(stmt)).all()
-        return {"items": list(rows), "total": int(total or 0), "page": page, "pageSize": page_size}
+        return {
+            "items": list(rows),
+            "total": int(total or 0),
+            "page": page,
+            "pageSize": page_size,
+        }
 
     async def create(
         self, session: AsyncSession, user_id: str, dto: CreateSessionRequest
     ) -> AiSession:
         """新建会话：标题 trim 后取前 80 字，缺省用默认标题"""
         title = (dto.title or "").strip() or DEFAULT_TITLE
-        entity = AiSession(id=next_snowflake_id(), user_id=int(user_id), title=title[:80])
+        entity = AiSession(
+            id=next_snowflake_id(), user_id=int(user_id), title=title[:80]
+        )
         session.add(entity)
         await session.commit()
         # server_default 的 created_at / updated_at 需 refresh 后可读
@@ -92,7 +99,11 @@ class ChatSessionService:
         return entity
 
     async def rename(
-        self, session: AsyncSession, user_id: str, session_id: str, dto: UpdateSessionRequest
+        self,
+        session: AsyncSession,
+        user_id: str,
+        session_id: str,
+        dto: UpdateSessionRequest,
     ) -> AiSession:
         """会话改名：trim + 截断 80 字"""
         entity = await self._get_owned(session, user_id, session_id)
@@ -102,13 +113,17 @@ class ChatSessionService:
         await session.refresh(entity)
         return entity
 
-    async def remove(self, session: AsyncSession, user_id: str, session_id: str) -> dict:
+    async def remove(
+        self, session: AsyncSession, user_id: str, session_id: str
+    ) -> dict:
         """删除会话：先删消息再删会话，最后清缓存，返回 { message: '已删除' }。清理顺序：库删除提交后再清 Redis / Mem0——
         先清缓存再删库的话，若删库失败就出现「缓存已清但数据还在」，
         虽不影响正确性（回落数据库）但会让窗口白丢一次。
         """
         entity = await self._get_owned(session, user_id, session_id)
-        await session.execute(sa_delete(AiMessage).where(AiMessage.session_id == entity.id))
+        await session.execute(
+            sa_delete(AiMessage).where(AiMessage.session_id == entity.id)
+        )
         await session.execute(sa_delete(AiSession).where(AiSession.id == entity.id))
         await session.commit()
         # 缓存清理失败只 WARN（三个 service 内部已各自吞异常并记日志）
@@ -176,7 +191,9 @@ class ChatSessionService:
             entity = await self._get_owned(session, user_id, session_id)
         else:
             entity = await self.create(
-                session, user_id, CreateSessionRequest(title=title_from_question(question))
+                session,
+                user_id,
+                CreateSessionRequest(title=title_from_question(question)),
             )
 
         if entity.title == DEFAULT_TITLE:

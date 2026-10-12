@@ -4,6 +4,7 @@
 对 RRF 粗排后的候选块打相关性分并重排（rerank 阶段）。
 未启用 / 未配置 Key / 调用失败时返回 None，由上层降级为 RRF 顺序。
 """
+
 import logging
 from dataclasses import replace
 
@@ -22,7 +23,7 @@ class RerankerService:
     """文本 reranker（DashScope text-rerank 专用端点）"""
 
     def __init__(self) -> None:
-        #(..., 'true') !== 'false'` 一致
+        # (..., 'true') !== 'false'` 一致
         self.enabled = settings.RAG_RERANK_ENABLED != "false"
         # API Key fallback 链：RERANK_API_KEY → DASHSCOPE_API_KEY → OPENAI_API_KEY
         self.api_key = (
@@ -64,11 +65,10 @@ class RerankerService:
         }
 
         try:
-            # 刻意差异：（依赖 Node 默认），Python 侧加 30s 上限防悬挂
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(self.endpoint, headers=headers, json=payload)
                 body = resp.json()
-        except Exception as err: # 网络 / 超时 / 非 JSON
+        except Exception as err:  # 网络 / 超时 / 非 JSON
             logger.warning("Rerank 异常，降级为 RRF：%s", err)
             return None
 

@@ -10,15 +10,6 @@
 评估结果 `RetrieveEval` 是推给前端过程条 `data-eval` 的：`ok` 表示「资料切题」，
 不是「有条数」。只有切题时 `hits` 才非空（给模型引用）；不切题时 `hits` 为空，
 `raw_hits` 仍保留给改写器。
-
-（迁移代价，刻意记录）：
-()` 直接返回 `ChunkHit[]`；本项目的
-  `HybridRetrievalService.retrieve()` 返回 camelCase dict，故此处用
-  `ChunkHit.from_row` 归一（与 ai_stream / ai_chat 现有做法一致）。
-。Python 的异步生成器**无法在回调里
-  yield**，所以流式链路（ai_stream.py）不调 `retrieve_until_relevant`，而是用
-  `retrieve_and_grade` + `to_eval` 手工内联、逐次 yield `data-eval`；本模块的
-  `retrieve_until_relevant` 主要给非流式 ai_chat 用。
 """
 
 import logging
@@ -35,13 +26,13 @@ logger = logging.getLogger("AgenticRetrieve")
 
 # 推给前端 data-eval；ok 表示资料切题，不是「有条数」
 RetrieveEvalReason = Literal[
-    "ok", # 首轮检索切题
-    "retried_ok", # 改写后再查切题
-    "empty", # 首轮无命中
-    "retried_empty", # 改写后再查仍无命中
-    "irrelevant", # 首轮有命中但不切题
-    "retried_irrelevant", # 改写后再查仍不切题
-    "error", # 检索接口失败
+    "ok",  # 首轮检索切题
+    "retried_ok",  # 改写后再查切题
+    "empty",  # 首轮无命中
+    "retried_empty",  # 改写后再查仍无命中
+    "irrelevant",  # 首轮有命中但不切题
+    "retried_irrelevant",  # 改写后再查仍不切题
+    "error",  # 检索接口失败
 ]
 
 
@@ -139,7 +130,7 @@ async def retrieve_and_grade(
             eval=to_eval(grade, display_query, retried, retry_query),
             used_query=used_query,
         )
-    except Exception as error: # noqa: BLE001 —— 检索失败不抛，收敛成 error 评估
+    except Exception as error:  # noqa: BLE001 —— 检索失败不抛，收敛成 error 评估
         detail = str(error)
         logger.warning("检索失败：query=%r err=%s", used_query[:80], detail)
         return GradedRetrieve(

@@ -6,9 +6,8 @@
 - GET /api/v1/ai/sessions/{id}/messages：会话消息列表
 - PATCH|DELETE /api/v1/ai/sessions/{id}：改名 / 删除
 均需 `search` 权限。
-
-状态码刻意差异：/rag/search 与 /ai/chat 是查询类 POST，本项目统一返回 200（`@Post(）；口径与理由见 api/v1/search.py 模块注释。
 """
+
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -85,9 +84,11 @@ def _message_vo(m: AiMessage) -> MessageResponse:
     """实体 → 响应 VO（bigint 转字符串；sources 由 JSONB 直接构造 ChatSource）"""
     # JSONB 列类型上声明为 dict|list|None，写入侧保证是 list[dict] | None，
     # 此处 isinstance 收窄后交由 pydantic 把 dict 逐项校验成 ChatSource
-    raw_sources = cast("list[dict[str, Any]] | None", m.sources) if isinstance(
-        m.sources, list
-    ) else None
+    raw_sources = (
+        cast("list[dict[str, Any]] | None", m.sources)
+        if isinstance(m.sources, list)
+        else None
+    )
     return MessageResponse(
         id=str(m.id),
         sessionId=str(m.session_id),
@@ -120,7 +121,9 @@ async def rag_search(dto: RagSearchRequest, user: _USER) -> list[HybridChunkItem
 async def ai_chat(dto: ChatRequest, user: _USER, db: _DB) -> ChatResponse:
     """RAG 对话：混合检索 + DeepSeek 作答，写入本人会话（无 sessionId 则新建）"""
     await _enforce_quota(user, dto.sessionId)
-    result = await ai_chat_service.chat(db, dto.content, top_k=dto.topK, user=user, session_id=dto.sessionId)
+    result = await ai_chat_service.chat(
+        db, dto.content, top_k=dto.topK, user=user, session_id=dto.sessionId
+    )
     return ChatResponse(**result)
 
 
@@ -128,7 +131,9 @@ async def ai_chat(dto: ChatRequest, user: _USER, db: _DB) -> ChatResponse:
     "/chat/stream",
     dependencies=[Depends(require_permission("search"))],
 )
-async def ai_chat_stream(dto: ChatStreamRequest, user: _USER, db: _DB) -> StreamingResponse:
+async def ai_chat_stream(
+    dto: ChatStreamRequest, user: _USER, db: _DB
+) -> StreamingResponse:
     """流式对话：agent 流式作答，UI Message Stream（AI SDK v6 SSE 协议）
 
     响应头
@@ -178,7 +183,9 @@ async def list_sessions(
     status_code=201,
     dependencies=[Depends(require_permission("search"))],
 )
-async def create_session(dto: CreateSessionRequest, user: _USER, db: _DB) -> SessionResponse:
+async def create_session(
+    dto: CreateSessionRequest, user: _USER, db: _DB
+) -> SessionResponse:
     """新建会话（标题缺省用「新对话」）"""
     entity = await chat_session_service.create(db, user.user_id, dto)
     return _session_vo(entity)
@@ -210,7 +217,9 @@ async def rename_session(
     "/sessions/{session_id}",
     dependencies=[Depends(require_permission("search"))],
 )
-async def remove_session(session_id: str, user: _USER, db: _DB) -> SessionDeleteResponse:
+async def remove_session(
+    session_id: str, user: _USER, db: _DB
+) -> SessionDeleteResponse:
     """删除会话及其全部消息"""
     result = await chat_session_service.remove(db, user.user_id, session_id)
     return SessionDeleteResponse(**result)

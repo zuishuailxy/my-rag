@@ -5,6 +5,7 @@
 - 正文：MongoDB（document_content，motor）
 - 关联：content_id ↔ Mongo _id，documentId ↔ 文档 id
 """
+
 import logging
 import re
 from datetime import datetime, timezone
@@ -117,18 +118,12 @@ class DocumentService:
     ) -> dict:
         """创建文档：生成雪花 ID → 写 Mongo 正文（拿 ObjectId）→ 写 Postgres 元数据
 
-        actor 为当前登录用户（(dto, user)` 的 @CurrentUser()，**必传**）：
+                actor 为当前登录用户（(dto, user)` 的 @CurrentUser()，**必传**）：
 
-        authorId / createBy / updateBy 三者**恒为 actor.userId**，一律不读 DTO
-。CreateDocumentDto 里虽有 authorId / createBy 字段，
-        但服务层忽略 → 客户端无法在创建时伪造作者、创建人或「最后修改人」。
-        ⚠️ 刻意差异说明：，
-        经核对为笔误（CreateDocumentDto 无 updateBy 字段，写 `dto.updateBy` 编译不过），
-        实际效果等价 `actor.userId`，此处按效果对齐。
-        副作用（刻意为之）：导入场景显式传 createBy=原作者时，createBy / updateBy
-        记的都是实际执行导入的操作者，不会被复制成原作者。
-
-        Postgres 写入失败时回滚删除已写入的 Mongo 正文，避免脏数据。
+                authorId / createBy / updateBy 三者**恒为 actor.userId**，一律不读 DTO
+        。CreateDocumentDto 里虽有 authorId / createBy 字段，
+                但服务层忽略 → 客户端无法在创建时伪造作者、创建人或「最后修改人」。
+                Postgres 写入失败时回滚删除已写入的 Mongo 正文，避免脏数据。
         """
         requested_status = (
             dto.status if dto.status is not None else DocumentStatus.DRAFT
@@ -138,7 +133,9 @@ class DocumentService:
             DocumentStatus.DRAFT,
             DocumentStatus.PUBLISHED,
         ):
-            raise HTTPException(status_code=400, detail="创建文档仅允许草稿或已发布状态")
+            raise HTTPException(
+                status_code=400, detail="创建文档仅允许草稿或已发布状态"
+            )
         # DOCUMENT_REQUIRE_APPROVAL=true 时必须先草稿，再通过 publish / 提交审核发布
         if (
             requested_status == DocumentStatus.PUBLISHED
@@ -442,7 +439,7 @@ class DocumentService:
                         "contentSummary": content_summary,
                         "updatedAt": _utcnow(),
                     },
-                    "$inc": {"version": 1}, # 版本号 +1
+                    "$inc": {"version": 1},  # 版本号 +1
                 },
             )
             if result.matched_count == 0:
@@ -569,9 +566,8 @@ class DocumentService:
         # PDF 图片上传器（RustFS；未启用时解析器自动降级为纯文本）
         uploader = None
         if rustfs_service.is_enabled():
-            async def _upload_pdf_image(
-                data: bytes, name: str, ctype: str
-            ) -> str:
+
+            async def _upload_pdf_image(data: bytes, name: str, ctype: str) -> str:
                 return await rustfs_service.upload_bytes(
                     data, file_name=name, content_type=ctype, prefix="pdf-images"
                 )
@@ -664,7 +660,9 @@ class DocumentService:
 
     # --------------------------------------------------------------- publish
 
-    async def publish(self, session: AsyncSession, doc_id: str, actor: AuthUser) -> dict:
+    async def publish(
+        self, session: AsyncSession, doc_id: str, actor: AuthUser
+    ) -> dict:
         """发布文档
 
         - 需审核：Draft / Published → PendingReview（不建索引）
@@ -789,23 +787,23 @@ class DocumentService:
     ) -> None:
         """更新后根据状态变化同步索引
 
-        - Published → 非 Published：清索引
-        - 仍为 Published 且正文变了：**免审**时重建索引；**需审**时等再次发布 / 审核通过
-          ⚠️ 该分支只在免审时短路 return —— 需审时不返回，流程继续往下走
-        - 仍为 Published 且可见性变了（is_public / team_id）：
-          就地更新三处索引的可见性字段 —— chunk（ES kh_chunk）、文档级
-          （ES kh_document）、图谱文档节点（Neo4j KnowledgeDocument），
-          不必重新分块 / 重新嵌入 / 重新拉全文 / 重新抽实体建图
-。
+                - Published → 非 Published：清索引
+                - 仍为 Published 且正文变了：**免审**时重建索引；**需审**时等再次发布 / 审核通过
+                  ⚠️ 该分支只在免审时短路 return —— 需审时不返回，流程继续往下走
+                - 仍为 Published 且可见性变了（is_public / team_id）：
+                  就地更新三处索引的可见性字段 —— chunk（ES kh_chunk）、文档级
+                  （ES kh_document）、图谱文档节点（Neo4j KnowledgeDocument），
+                  不必重新分块 / 重新嵌入 / 重新拉全文 / 重新抽实体建图
+        。
 
-        两个分支可**同时命中**：免审下重建索引本身就带上了新可见性（本分支再刷一次幂等），
-        需审下不重建索引，可见性完全靠本分支兜住 —— 故本分支不得被上面的 return 吞掉。
+                两个分支可**同时命中**：免审下重建索引本身就带上了新可见性（本分支再刷一次幂等），
+                需审下不重建索引，可见性完全靠本分支兜住 —— 故本分支不得被上面的 return 吞掉。
 
-        为什么必须处理可见性变更：检索可见性靠索引上的 is_public/team_id/author_id
-        过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索、
-        文档级全文检索（POST /search）或图谱四个端点（/graph/*）命中其内容 /
-        标题摘要 / 提及实体。
-        （PG 向量侧按 JOIN kh_document 实时取，不受此影响，但仍一并更新保持两侧一致）
+                为什么必须处理可见性变更：检索可见性靠索引上的 is_public/team_id/author_id
+                过滤，文档由公开转私有后若不同步，未授权用户仍能通过 chunk 混合检索、
+                文档级全文检索（POST /search）或图谱四个端点（/graph/*）命中其内容 /
+                标题摘要 / 提及实体。
+                （PG 向量侧按 JOIN kh_document 实时取，不受此影响，但仍一并更新保持两侧一致）
         """
         was_published = old_status == DocumentStatus.PUBLISHED
         is_published = new_status == DocumentStatus.PUBLISHED
@@ -850,7 +848,7 @@ class DocumentService:
                 await graph_build_service.update_visibility(
                     doc.id, doc.is_public, doc.team_id, doc.author_id
                 )
-            except Exception as err: # noqa: BLE001
+            except Exception as err:  # noqa: BLE001
                 logger.warning(
                     "可见性同步失败（不影响文档保存）：documentId=%s, %s", doc.id, err
                 )
@@ -938,4 +936,3 @@ class DocumentService:
         # 汉字替换为空格避免与英文粘连，再按空白分词
         latin = len(re.sub(r"[\u4e00-\u9fff]", " ", trimmed).strip().split())
         return cjk + latin
-

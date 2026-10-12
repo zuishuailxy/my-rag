@@ -25,8 +25,7 @@
 ，需另行决策。
 
 ### 刻意差异
-- **用 `AsyncMemoryClient` 而非 `MemoryClient`**：，Python 的
-  同步版是阻塞 HTTP —— 本服务位于流式问答的请求路径上，直接用同步版会卡住事件循环。
+- Python 的同步版是阻塞 HTTP —— 本服务位于流式问答的请求路径上，直接用同步版会卡住事件循环。
   异步版语义对齐且不阻塞。
 - **实体 ID 的传法三个方法各不相同（必须按方法区分，不能统一）**：mem0ai 2.0.20 对应 v3
   云 API，三个端点对实体 ID 的位置要求不一致，且**SDK 的类型注释是错的**（`AddMemoryOptions` /
@@ -221,7 +220,7 @@ def _build_classifier():
         use_responses_api=False,
         base_url=base_url,
         # deepseek-v4-flash 默认 thinking 模式，不支持强制 tool_choice
-        #（"Thinking mode does not support this tool_choice"），结构化输出必须关掉
+        # （"Thinking mode does not support this tool_choice"），结构化输出必须关掉
         extra_body={"thinking": {"type": "disabled"}},
     )
 
@@ -344,7 +343,7 @@ class ChatLongMemoryService:
     """
 
     def __init__(self) -> None:
-        #)：默认值写在 config.py，此处直接读
+        # )：默认值写在 config.py，此处直接读
         self._top_k = settings.MEM0_TOP_K
 
         api_key = settings.MEM0_API_KEY or ""
@@ -360,7 +359,7 @@ class ChatLongMemoryService:
         else:
             logger.warning("未配置 MEM0_API_KEY，跳过长期记忆")
 
-        #（`if (!apiKey || !this.client) return;`）
+        # （`if (!apiKey || !this.client) return;`）
         self._classifier = _build_classifier() if self._client else None
         # Jev 分类器（Noul×2）；未配 TYPESAFE_API_KEY / SDK 未装时为 None
         self._jev = _build_jev_classifier() if self._client else None
@@ -409,7 +408,7 @@ class ChatLongMemoryService:
                 "user": _pick_memories(user_res),
                 "session": _pick_memories(session_res),
             }
-        except Exception as err: # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
             logger.warning("Mem0 检索失败：%s", err)
             return empty
 
@@ -471,8 +470,10 @@ class ChatLongMemoryService:
                     custom_instructions=_EXTRACT_SESSION_INSTRUCTIONS,
                 )
                 written.append("session")
-            logger.info("Mem0 分类：%s；写入=%s", result.reason, ",".join(written) or "无")
-        except Exception as err: # noqa: BLE001
+            logger.info(
+                "Mem0 分类：%s；写入=%s", result.reason, ",".join(written) or "无"
+            )
+        except Exception as err:  # noqa: BLE001
             logger.warning("Mem0 写入失败：%s", err)
 
     # ---------------------------------------------------------------- 分类分派
@@ -511,12 +512,14 @@ class ChatLongMemoryService:
         if self._jev is not None:
             try:
                 return await self._jev.classify(question, answer)
-            except Exception as err: # noqa: BLE001
+            except Exception as err:  # noqa: BLE001
                 logger.warning("Jev 记忆分类失败：%s", err)
                 if mode == "jev":
                     return None
         elif mode == "jev":
-            logger.warning("MEMORY_CLASSIFIER=jev 但未配置 TYPESAFE_API_KEY，本轮不写记忆")
+            logger.warning(
+                "MEMORY_CLASSIFIER=jev 但未配置 TYPESAFE_API_KEY，本轮不写记忆"
+            )
             return None
         return await self._classify_llm(question, answer)
 
@@ -533,7 +536,7 @@ class ChatLongMemoryService:
             return llm_result
         try:
             jev_result = await self._jev.classify(question, answer)
-        except Exception as err: # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
             logger.warning("记忆分类 shadow：Jev 调用失败 %s", err)
             return llm_result
         agree = (
@@ -554,22 +557,22 @@ class ChatLongMemoryService:
     async def clear_session(self, user_id: str, session_id: str) -> None:
         """删除该会话的会话层记忆
 
-        只删 session 层（run_id 维度），不动 user 层——用户偏好跨会话保留。
-        删除失败只 WARN。
+                只删 session 层（run_id 维度），不动 user 层——用户偏好跨会话保留。
+                删除失败只 WARN。
 
-({userId, runId})`（此处即
-        `delete_all(user_id=..., run_id=...)`）。实测（2026-09-18，真实 key）该方法
-        **完全忽略 run_id，直接清空该 user_id 下的全部记忆**：
-          删除前 user 层 4 条 / 本会话 1 条 / 其他会话 1 条
-          delete_all(user_id=UID, run_id=SID) 之后 → 0 / 0 / 0
+        ({userId, runId})`（此处即
+                `delete_all(user_id=..., run_id=...)`）。实测（2026-09-18，真实 key）该方法
+                **完全忽略 run_id，直接清空该 user_id 下的全部记忆**：
+                  删除前 user 层 4 条 / 本会话 1 条 / 其他会话 1 条
+                  delete_all(user_id=UID, run_id=SID) 之后 → 0 / 0 / 0
 
-        全部长期记忆」——用户偏好会被静默清空，且因为只剩一行 WARN 而完全不会被发现。
-        故这里改为「先按 filters 列出该会话的记忆 id，再逐条 delete」：
-          - `get_all(filters={'user_id':…, 'run_id':…})` 的 run_id 过滤**是有效的**
-            （实测同 user 下 4 条 → 命中 1 条），
-          - `delete(memory_id)` 精确只删目标（实测 4 → 3）。
-        代价是 N 次请求（会话层记忆通常只有个位数，可接受）；若将来单会话记忆量级变大，
-        需改成批量删除接口（`batch_delete`）。
+                全部长期记忆」——用户偏好会被静默清空，且因为只剩一行 WARN 而完全不会被发现。
+                故这里改为「先按 filters 列出该会话的记忆 id，再逐条 delete」：
+                  - `get_all(filters={'user_id':…, 'run_id':…})` 的 run_id 过滤**是有效的**
+                    （实测同 user 下 4 条 → 命中 1 条），
+                  - `delete(memory_id)` 精确只删目标（实测 4 → 3）。
+                代价是 N 次请求（会话层记忆通常只有个位数，可接受）；若将来单会话记忆量级变大，
+                需改成批量删除接口（`batch_delete`）。
         """
         client = self._client
         if client is None:
@@ -585,7 +588,7 @@ class ChatLongMemoryService:
                     session_id,
                     len(memory_ids),
                 )
-        except Exception as err: # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
             logger.warning("Mem0 会话层清理失败：%s", err)
 
     async def _session_memory_ids(
