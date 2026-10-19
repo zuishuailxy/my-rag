@@ -8,7 +8,7 @@
 - **基础设施**：Docker Compose 一键编排（PostgreSQL / Elasticsearch / Neo4j / MongoDB / Redis / RabbitMQ / RustFS / Langfuse）
 
 > 📖 **想快速建立全貌读 [`项目导读.md`](项目导读.md)** —— 两条主链路图 + **功能↔代码对照表** + 逐文件职责 + 踩过的坑。
-> 深入设计见 [`AgenticRAG流程.md`](AgenticRAG流程.md)（Agentic RAG 全链路）等。
+> 深入设计见 [`docs/architecture/AgenticRAG流程.md`](docs/architecture/AgenticRAG流程.md)（Agentic RAG 全链路）等，完整清单见文末[📚 文档](#-文档)。
 
 ## 📈 效果与工程数据
 
@@ -407,12 +407,26 @@ connection timed out, timeout 30.00
 
 ## 📚 文档
 
-- [`AgenticRAG流程.md`](AgenticRAG流程.md) —— Agentic RAG 全链路（意图路由 / 工具循环 / 事件契约 / 前端对接）
-- [`长短期记忆.md`](长短期记忆.md) —— 短期热窗口 + 长期记忆 + 滚动摘要
-- [`文档可见性与写权限.md`](文档可见性与写权限.md) —— 三层鉴权与可见性口径
-- [`发布索引链路.md`](发布索引链路.md) —— 发布后异步索引管线
-- [`上传解析模块.md`](上传解析模块.md) —— 多格式解析与资源托管
-- [`文档模块CRUD.md`](文档模块CRUD.md) —— 文档模块设计
+设计与实现说明在 `docs/architecture/`，逐题应答材料在 `docs/interview/` —— 目录职责与索引见 [`docs/README.md`](docs/README.md)。
+
+### 设计文档（`docs/architecture/`）
+
+| 文档 | 内容 |
+| --- | --- |
+| [`AgenticRAG流程.md`](docs/architecture/AgenticRAG流程.md) | Agentic RAG 全链路（意图路由 / 工具循环 / 事件契约 / 前端对接） |
+| [`长短期记忆.md`](docs/architecture/长短期记忆.md) | 短期热窗口 + 长期记忆 + 滚动摘要 |
+| [`文档可见性与写权限.md`](docs/architecture/文档可见性与写权限.md) | 三层鉴权与可见性口径 |
+| [`发布索引链路.md`](docs/architecture/发布索引链路.md) | 发布后异步索引管线 |
+| [`上传解析模块.md`](docs/architecture/上传解析模块.md) | 多格式解析与资源托管 |
+| [`文档模块CRUD.md`](docs/architecture/文档模块CRUD.md) | 文档模块设计 |
+
+### 面试材料（`docs/interview/`）
+
+| 文档 | 内容 |
+| --- | --- |
+| [`面试实战问答集.md`](docs/interview/面试实战问答集.md) | 21 题逐题应答（问题 → 口述答案 → 代码锚点 → 边界） |
+| [`面试应答稿.md`](docs/interview/面试应答稿.md) | 重点项目问题的口述稿与追问预案 |
+| [`面试题库-AgenticRAG.md`](docs/interview/面试题库-AgenticRAG.md) | Agentic RAG 专项题库 |
 
 ---
 

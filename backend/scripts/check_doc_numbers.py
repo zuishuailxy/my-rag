@@ -312,13 +312,13 @@ CLAIMS: tuple[Claim, ...] = (
     # ---- 应答稿 / 问答集：对外数字必须一致 ----
     # ⚠️ 简历类文件（简历-项目一-修订版.md / 简历素材汇总.md）在公开发布前已撤下，
     #    它们的 CLAIMS 条目同步移除；文件若重新入库，记得把条目加回来。
-    Claim("面试应答稿.md", r"后端 (\d+) 文件", "backend_files"),
-    Claim("面试应答稿.md", r"(\d+) 端点 · 60 脚本", "endpoints"),
+    Claim("docs/interview/面试应答稿.md", r"后端 (\d+) 文件", "backend_files"),
+    Claim("docs/interview/面试应答稿.md", r"(\d+) 端点 · 60 脚本", "endpoints"),
     # 面试实战问答集：逐题累积的现场作答稿，里面单列了一张「可报数字」表。
     # 它最容易和简历 / README 分叉（实测：端点数曾写 78+3、脚本数曾写 62），
     # 而这张表恰好是面试现场照着念的那张 —— 说出去的数字必须只有一套口径。
-    Claim("面试实战问答集.md", r"\| REST 端点 \| \*\*(\d+) 个\*\*", "endpoints"),
-    Claim("面试实战问答集.md", r"工程脚本\s+\| `backend/scripts/` (\d+) 个", "scripts_total"),
+    Claim("docs/interview/面试实战问答集.md", r"\| REST 端点 \| \*\*(\d+) 个\*\*", "endpoints"),
+    Claim("docs/interview/面试实战问答集.md", r"工程脚本\s+\| `backend/scripts/` (\d+) 个", "scripts_total"),
     # ---- 压测实测值：只保证「所有文档说的是同一个数」，不保证它是最新测量 ----
     Claim("README.md", r"并发 20 时 (\d+)/20 失败", "pre_fix_fail_at_20"),
     Claim("README.md", r"\| 修复前（`Depends` 守卫） \| 15 \|.*\| (\d+) \|", "pre_fix_peak_conn"),
@@ -327,13 +327,37 @@ CLAIMS: tuple[Claim, ...] = (
     # 一旦回流就「模式未命中」→ 失败。捕获的是跳变后的 31s。
     Claim("todo.md", r"p50 2\.5s→(\d+)s", "pre_fix_p50_s"),
     Claim("项目导读.md", r"p50 从 2\.5s 跳到 (\d+)s", "pre_fix_p50_s"),
-    Claim("面试题库-AgenticRAG.md", r"p50 从 2\.5 秒跳到 (\d+) 秒", "pre_fix_p50_s"),
-    Claim("面试应答稿.md", r"p50 从 2\.5 秒直接跳到 (\d+) 秒", "pre_fix_p50_s"),
+    Claim("docs/interview/面试题库-AgenticRAG.md", r"p50 从 2\.5 秒跳到 (\d+) 秒", "pre_fix_p50_s"),
+    Claim("docs/interview/面试应答稿.md", r"p50 从 2\.5 秒直接跳到 (\d+) 秒", "pre_fix_p50_s"),
 )
 
 
 def _load_lines(rel: str) -> list[str]:
     return (REPO / rel).read_text(encoding="utf-8").splitlines()
+
+
+# 反向断言扫描的目录白名单：**只看项目文档，不扫数据与依赖**
+_DOC_SCAN_DIRS = ("docs",)
+_DOC_SCAN_FILES = ("README.md", "项目导读.md", "todo.md")
+# 明确排除：评测语料是**被检索的数据**（内容里出现"峰值连接"等词属于正常），
+# 以及 node_modules / .venv 等依赖目录。
+_DOC_SCAN_SKIP = ("node_modules", ".venv", "volumes", ".git", "eval")
+
+
+def _iter_docs() -> list[Path]:
+    """待扫的项目文档（递归，含 docs/ 子目录）
+
+    刻意不扫 `backend/eval/`：那里的 md 是喂给检索的语料，不是项目文档，
+    用它们做反向断言会误报。
+    """
+    out: list[Path] = [REPO / name for name in _DOC_SCAN_FILES if (REPO / name).exists()]
+    for d in _DOC_SCAN_DIRS:
+        out.extend(sorted((REPO / d).rglob("*.md")))
+    return [
+        p
+        for p in out
+        if p.is_file() and not any(s in p.parts for s in _DOC_SCAN_SKIP)
+    ]
 
 
 def check_forbidden(failures: list[str]) -> int:
@@ -342,10 +366,14 @@ def check_forbidden(failures: list[str]) -> int:
     为什么需要这层：错误结论会以**新措辞**回流 —— 「31 → 2」被清掉后，
     「从 31 降到 2」「峰值连接 2」还留在另外两份文档里，人工 grep 漏了三次。
     所以要反向断言，而不是只检查「数字写对了」。
+
+    ⚠️ 必须**递归**扫，不能用 `REPO.glob("*.md")`：文档挪进 `docs/` 后，
+    只扫根目录会从13 份掉到 4 份，反向断言等于静默失效 —— 而静默失效比
+    没有校验更糟（本脚本的设计前提之一）。
     """
     hits = 0
     exempted = 0
-    for path in sorted(REPO.glob("*.md")):
+    for path in sorted(_iter_docs()):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if _is_self_correction(line):
                 exempted += 1
