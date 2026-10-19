@@ -132,6 +132,19 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
     (r"\*\*峰值连接\*\* ?\| ?16", "旧表格「峰值连接 16/31/2」：16 是采样器首帧值，不是测量值"),
 )
 
+# **自纠语境豁免**：文档里主动承认「这个数字是假的、我推翻过」是加分项，
+# 恰恰不该被拦。误伤过一次 —— 面试问答集里「我推翻过一次自己的数字：旧文档
+# 「峰值连接 31→2」是采样器…导致的假值」被 3 条模式同时命中，而这句话恰恰
+# 是整份材料里最可信的一段。所以先看整行有没有自纠词，有则整行豁免。
+_SELF_CORRECTION = re.compile(
+    r"推翻|作废|假值|不是测量值|不是真的|已废弃|旧文档|曾经|写错|更正|订正|误判|旧读数|已删除"
+)
+
+
+def _is_self_correction(line: str) -> bool:
+    """该行是否在「主动承认并纠正某个旧说法」"""
+    return bool(_SELF_CORRECTION.search(line))
+
 # 反向断言的自我校验样本：**全部逐字取自 git 历史**（前 8 条）与当前正确文档
 # （后 6 条，其中第 1 条专门用来卡「误伤」——它含 `31 → 2` 却是在**解释**这个错误）。
 # 只跑 `--self-test`，不进 CI 主流程。
@@ -152,6 +165,9 @@ _GOOD_SAMPLES: tuple[str, ...] = (
     "| 修复后（默认） | 30 | 20/0，p50 2.8s | 40/0，p50 2.1s | 100/0，p50 9.9s | 30 |",
     "  实测峰值活跃连接 = 15",
     "> 池**保持 15 不动**，只修掉「连接跨外部调用持有」，100 并发就零失败",
+    # ↓ 主动承认旧数字是假的 —— 反向断言必须放行（真实误伤案例，逐字取自面试问答集）
+    "- **你的数字可靠吗？**→ **我推翻过一次自己的数字。** 旧文档\"峰值连接 31→2\"是采样器复用长事务会话导致的假值（行集冻结在事务开始快照），**整条结论作废**，改成每次新签 AUTOCOMMIT 连接后重测。**测量方法错了，测得再认真也是错的。**",
+    "于是旧文档里那个\"31 → 2\"就是这么来的——**它不是测量值，是首帧快照值**。**我的\"峰值连接从 31 降到 2\"这个结论是假的**",
 )
 
 
@@ -164,10 +180,20 @@ def _self_test() -> int:
     """
     failed = 0
     for sample in _BAD_SAMPLES:
+        # 自纠语境豁免对 BAD 样本同样生效 —— 否则「承认旧数字是假的」这句会被
+        # 自己判成"该拦"，测试就变成了自欺欺人。
+        if _is_self_correction(sample):
+            failed += 1
+            print(f"  ❌ 样本写错：它含自纠语境（不该出现在「必须拦下」组）：{sample[:60]}")
+            continue
         if not any(re.search(pat, sample) for pat, _ in FORBIDDEN):
             failed += 1
             print(f"  ❌ 漏过（该拦没拦）：{sample}")
     for sample in _GOOD_SAMPLES:
+        if _is_self_correction(sample):
+            # 靠豁免放行也算通过，但明确打出来，避免误以为是被模式放行的
+            print(f"  ↩️  靠自纠豁免放行（应如此）：{sample[:60]}")
+            continue
         hit = next((pat for pat, _ in FORBIDDEN if re.search(pat, sample)), None)
         if hit:
             failed += 1
@@ -283,18 +309,9 @@ CLAIMS: tuple[Claim, ...] = (
     Claim("README.md", r"从 12 条扩到 (\d+) 条", "gen_total"),
     # ---- README：规模 ----
     Claim("README.md", r"知识库共 \*\*(\d+) 篇文档 / 467 块\*\*", "indexed_docs", note="需 --with-db"),
-    # ---- 简历 / 素材 / 应答稿：对外数字必须一致 ----
-    Claim("简历-项目一-修订版.md", r"后端 \*\*(\d+) 文件 / [\d,]+ 行", "backend_files"),
-    Claim("简历-项目一-修订版.md", r"\*\*\d+ 文件 / ([\d,]+) 行 / \d+ 个端点\*\*", "backend_lines", tolerance=LINE_TOLERANCE),
-    Claim("简历-项目一-修订版.md", r"\*\*\d+ 文件 / [\d,]+ 行 / (\d+) 个端点\*\*", "endpoints"),
-    Claim("简历-项目一-修订版.md", r"Web 端 \*\*(\d+) 个页面\*\*", "frontend_pages"),
-    Claim("简历-项目一-修订版.md", r"前端 \*\*React 19 / ([\d,]+) 行\*\*", "frontend_lines", tolerance=LINE_TOLERANCE),
-    Claim("简历-项目一-修订版.md", r"自建 \*\*(\d+) 条\*\*评测集", "eval_total"),
-    Claim("简历-项目一-修订版.md", r"(\d+) 个单元测试", "unit_tests"),
-    Claim("简历-项目一-修订版.md", r"(\d+) 个跑真实依赖", "smoke_scripts"),
-    Claim("简历素材汇总.md", r"\*\*(\d+) 个文件 / ([\d,]+) 行\*\*", "backend_files"),
-    Claim("简历素材汇总.md", r"\*\*(\d+) 个\*\*（其中冒烟 43 个）", "scripts_total"),
-    Claim("简历素材汇总.md", r"\*\*(\d+) 条\*\*（检索 148 \+ 生成 58 \+ \*\*图谱 19\*\*）", "eval_total"),
+    # ---- 应答稿 / 问答集：对外数字必须一致 ----
+    # ⚠️ 简历类文件（简历-项目一-修订版.md / 简历素材汇总.md）在公开发布前已撤下，
+    #    它们的 CLAIMS 条目同步移除；文件若重新入库，记得把条目加回来。
     Claim("面试应答稿.md", r"后端 (\d+) 文件", "backend_files"),
     Claim("面试应答稿.md", r"(\d+) 端点 · 60 脚本", "endpoints"),
     # 面试实战问答集：逐题累积的现场作答稿，里面单列了一张「可报数字」表。
@@ -312,8 +329,6 @@ CLAIMS: tuple[Claim, ...] = (
     Claim("项目导读.md", r"p50 从 2\.5s 跳到 (\d+)s", "pre_fix_p50_s"),
     Claim("面试题库-AgenticRAG.md", r"p50 从 2\.5 秒跳到 (\d+) 秒", "pre_fix_p50_s"),
     Claim("面试应答稿.md", r"p50 从 2\.5 秒直接跳到 (\d+) 秒", "pre_fix_p50_s"),
-    Claim("简历素材汇总.md", r"p50 从 2\.5s 跳到 (\d+)s", "pre_fix_p50_s"),
-    Claim("简历素材汇总.md", r"p50 2\.5s→(\d+)s", "pre_fix_p50_s"),
 )
 
 
@@ -329,8 +344,12 @@ def check_forbidden(failures: list[str]) -> int:
     所以要反向断言，而不是只检查「数字写对了」。
     """
     hits = 0
+    exempted = 0
     for path in sorted(REPO.glob("*.md")):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if _is_self_correction(line):
+                exempted += 1
+                continue
             for pattern, reason in FORBIDDEN:
                 if re.search(pattern, line):
                     hits += 1
@@ -338,6 +357,8 @@ def check_forbidden(failures: list[str]) -> int:
                         f"{path.name}:{lineno}  出现已证伪的说法：{line.strip()[:70]}\n"
                         f"    → {reason}"
                     )
+    if exempted:
+        print(f"  ↩️  {exempted} 行含自纠语境（承认并纠正旧说法），已豁免反向断言")
     return hits
 
 
@@ -391,6 +412,15 @@ def main() -> int:
     for claim in CLAIMS:
         if claim.fact not in facts:
             print(f"  ⏭  {claim.path}: 「{claim.fact}」需要 --with-db，本次跳过")
+            continue
+        # 文件可能已被删除（求职材料常在发布前撤下）。这里报可读错误而不是让
+        # _load_lines 抛 FileNotFoundError —— 后者看不出是「文件没了」还是「脚本坏了」。
+        if not (REPO / claim.path).exists():
+            failures.append(
+                f"{claim.path}: 文件不存在，但门禁仍在核对它的事实「{claim.fact}」\n"
+                f"    → 若该文档已撤下，请连同这里的 CLAIMS 条目一起删除；"
+                f"若只是改名/移位，请更新 claim.path"
+            )
             continue
         if claim.path not in lines_cache:
             lines_cache[claim.path] = _load_lines(claim.path)
