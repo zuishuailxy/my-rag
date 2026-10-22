@@ -30,7 +30,7 @@
 一条命令起全栈（基础设施 → 后端 → 前端），已运行的进程会自动复用、不重复启动：
 
 ```bash
-git clone <repo> && cd my-rag
+git clone https://github.com/zuishuailxy/my-rag.git && cd my-rag
 ./scripts/dev_up.sh          # 只起基础设施：./scripts/dev_up.sh --infra
 ```
 
