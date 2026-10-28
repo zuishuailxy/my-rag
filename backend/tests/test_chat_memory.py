@@ -57,6 +57,26 @@ def test_per_message_truncation() -> None:
     assert len(assistant_line) == len("助手：") + 120, "助手侧截断到 120 字"
 
 
+def test_long_answer_does_not_starve_other_messages() -> None:
+    # 单条上限的独立价值：一条 3000 字长回答不能把 2000 预算吃光。
+    # 实测过三种写法：只留总预算时，这条长回答会让整段上下文变空（或只剩它一条），
+    # 前面的用户问题——往往才是指代来源——全被挤掉。
+    history: list = [
+        HumanMessage("年假需要提前几天申请"),
+        AIMessage("年假需提前 3 个工作日申请。"),
+    ]
+    for i in range(4):
+        history.append(HumanMessage(f"无关话题{i}"))
+        history.append(AIMessage(f"无关回答{i}"))
+    history.append(HumanMessage("那调休呢"))
+    history.append(AIMessage("制度原文" * 750))
+
+    context = compact_rewrite_context(history)
+    assert "年假需要提前几天申请" in context, "长回答不应吃光预算"
+    assert "那调休呢" in context, "最新一轮必须保留"
+    assert len(context.split("\n")) == 12, "12 条应全部装下（单条已截断）"
+
+
 def test_empty_and_blank_history() -> None:
     assert compact_rewrite_context([]) == ""
     assert compact_rewrite_context([HumanMessage("   ")]) == "", "空白正文应被跳过"
