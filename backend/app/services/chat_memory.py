@@ -12,8 +12,7 @@
 刻意差异：
   - `compact_rewrite_context` 的截断用 Python 码点切片（`text[:200]`），
     `slice(0, 200)` 按 UTF-16 码元切 —— 对中文两者等价，差别只在 emoji 等
-    代理对字符上（Python 不会把字符切成半个）。：限制长度、
-    避免制度原文污染 query。
+    代理对字符上（Python 不会把字符切成半个）。
 """
 
 from collections.abc import Sequence
@@ -29,11 +28,18 @@ __all__ = [
     "message_text",
 ]
 
-# 检索改写上下文的截断长度
+# 检索改写上下文的窗口与预算
+# 12 条 ≈ 6 轮问答。实测：指代对象在第一轮、中间隔 8 轮无关话题时，
+# 4 条窗口（2 轮）会把指代对象挤出窗口 → 改写出「报销单需提前几天申请？」（错），
+# 12 条能覆盖到，且典型场景只多约 200 字符。
+_REWRITE_HISTORY_WINDOW = 12
+# 单条上限：用户侧重（指代对象、主题词都在用户话里）；
+# 助手侧只留开头，够定位话题即可，不必复述制度原文。
 _REWRITE_USER_MAX_CHARS = 200
 _REWRITE_ASSISTANT_MAX_CHARS = 120
-# 改写只回看最近几轮
-_REWRITE_HISTORY_WINDOW = 4
+# 整段字符预算：12 条 × 单条上限最多 2400，用总预算兜住最坏情况。
+# 2000 字符 ≈ 1300 token，典型 12 条约 1000 字符，只在长回答时才触顶。
+_REWRITE_CONTEXT_MAX_CHARS = 2000
 
 
 def message_text(message: BaseMessage) -> str:
@@ -89,21 +95,32 @@ def db_rows_to_messages(rows: Sequence[AiMessage]) -> list[BaseMessage]:
 
 
 def compact_rewrite_context(history: Sequence[BaseMessage]) -> str:
-    """给检索改写器用的紧凑上下文
+    """给检索改写器 / 意图路由用的紧凑上下文
 
-    只回看最近 `_REWRITE_HISTORY_WINDOW` 条，助手侧截断到更短——
-    因为助手回答里常含制度原文，直接喂给改写器会让 query 被原文带偏。
-    格式：每条一行 `用户：…` / `助手：…`，用换行拼接。
+    窗口：最近 `_REWRITE_HISTORY_WINDOW` 条（用户、助手各算一条）。
+    预算：整段不超过 `_REWRITE_CONTEXT_MAX_CHARS` 字符，**从最近往回累加** ——
+    预算不够时优先保最新话题；装不下的那条整条丢弃，而不是截半句
+    （半句会让模型照着残句补全指代，比没有更糟）。
+    格式：每条一行 `用户：…` / `助手：…`，按时间顺序输出。
     """
     if not history:
         return ""
     lines: list[str] = []
-    for message in list(history)[-_REWRITE_HISTORY_WINDOW:]:
+    used = 0
+    for message in reversed(list(history)[-_REWRITE_HISTORY_WINDOW:]):
         text = message_text(message)
         if not text:
             continue
         if isinstance(message, HumanMessage):
-            lines.append(f"用户：{text[:_REWRITE_USER_MAX_CHARS]}")
+            line = f"用户：{text[:_REWRITE_USER_MAX_CHARS]}"
         elif isinstance(message, AIMessage):
-            lines.append(f"助手：{text[:_REWRITE_ASSISTANT_MAX_CHARS]}")
+            line = f"助手：{text[:_REWRITE_ASSISTANT_MAX_CHARS]}"
+        else:
+            continue
+        cost = len(line) + 1  # +1：行间换行符
+        if used + cost > _REWRITE_CONTEXT_MAX_CHARS:
+            break
+        lines.append(line)
+        used += cost
+    lines.reverse()
     return "\n".join(lines)

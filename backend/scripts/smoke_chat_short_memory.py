@@ -13,7 +13,7 @@
 9. 脏数据容错：值是非法 JSON / 不是数组时返回 None 且不抛（失败只 WARN）
 10. clear：删除后回到未命中
 11. 纯函数：db_rows_to_messages 的 role / 空正文过滤；compact_rewrite_context 的
-    窗口与截断；message_text 的 str / 块列表 / None 三种 content 形态
+    窗口条数 / 单条截断 / 总字符预算；message_text 的 str / 块列表 / None 三种形态
 
 ⚠️ 本模块的 save / clear 都「吞异常只 WARN」（缓存不可用不能影响对话），
 所以冒烟第 0 步必须**显式 ping 确认 Redis 真的通** —— 否则 save 静默失败、
@@ -201,27 +201,41 @@ async def main() -> None:
     )
     print(" 11) dbRowsToMessages ✓ role / 空正文过滤，正文已 trim")
 
-    # 11b) compact_rewrite_context：只看最近 4 条 + 截断长度
-    long_history = [
-        HumanMessage("H" * 500),
-        AIMessage("A" * 500),
-        HumanMessage("早" * 10),
-        AIMessage("早答" * 10),
-        HumanMessage("最近问"),
-        AIMessage("最近答"),
-    ]
-    ctx = compact_rewrite_context(long_history)
-    lines = ctx.split("\n")
-    assert len(lines) == 4, f"只回看最近 4 条，实际 {len(lines)} 行"
-    assert lines[-2] == "用户：最近问" and lines[-1] == "助手：最近答", (
-        f"格式应为 `用户：…` / `助手：…`，实际末两行 {lines[-2:]!r}"
-    )
+    # 11b) compact_rewrite_context：最近 12 条 + 单条截断 + 总预算 2000
+    window_history: list = []
+    for i in range(30):
+        window_history.append(HumanMessage(f"问{i}") if i % 2 == 0 else AIMessage(f"答{i}"))
+    window_ctx = compact_rewrite_context(window_history)
+    window_lines = window_ctx.split("\n")
+    assert len(window_lines) == 12, f"只回看最近 12 条，实际 {len(window_lines)} 行"
+    assert window_lines[0] == "用户：问18", f"窗口应从倒数第 12 条开始，实际 {window_lines[0]!r}"
+    assert window_lines[-1] == "助手：答29", f"末行应为最新一条，实际 {window_lines[-1]!r}"
+
     clipped = compact_rewrite_context([HumanMessage("长" * 500), AIMessage("答" * 500)])
     user_line, assistant_line = clipped.split("\n")
     assert len(user_line) == len("用户：") + 200, "用户侧应截断到 200 字"
-    assert len(assistant_line) == len("助手：") + 120, "助手侧应截断到 120 字（避免原文污染 query）"
+    assert len(assistant_line) == len("助手：") + 120, "助手侧应截断到 120 字"
+
+    # 总预算：12 条满额用户消息共 12×203=2436 字符，应只装下最近 9 条（9×203=1827）
+    budget_history = [HumanMessage(str(i) * 200) for i in range(12)]
+    budget_ctx = compact_rewrite_context(budget_history)
+    assert len(budget_ctx) <= 2000, f"总预算 2000 字符，实际 {len(budget_ctx)}"
+    assert len(budget_ctx.split("\n")) == 9, f"预算内应装下 9 条，实际 {len(budget_ctx.split(chr(10)))}"
+    assert budget_ctx.split("\n")[0] == "用户：" + "3" * 200, "预算不够时应保最新的、丢最老的"
+
+    # 指代对象在 4 轮之外（旧窗口 4 条会丢掉它）
+    deep_history: list = [HumanMessage("年假需要提前几天申请"), AIMessage("年假需提前 3 个工作日申请。")]
+    for i in range(4):
+        deep_history.append(HumanMessage(f"无关话题{i}"))
+        deep_history.append(AIMessage(f"无关回答{i}"))
+    deep_history.append(HumanMessage("这个流程要多久"))
+    deep_ctx = compact_rewrite_context(deep_history)
+    assert "年假" in deep_ctx, "4 轮之前的指代对象必须留在上下文里（旧 4 条窗口会丢）"
+    assert "这个流程要多久" in deep_ctx, "最新一轮必须在上下文里"
     assert compact_rewrite_context([]) == "", "空历史返回空串"
-    print(" 12) compactRewriteContext ✓ 最近 4 条 / 用户 200 字 / 助手 120 字")
+    print(
+        " 12) compactRewriteContext ✓ 最近 12 条 / 用户 200 字 / 助手 120 字 / 总预算 2000 字符"
+    )
 
     # 11c) message_text：三种 content 形态
     assert message_text(HumanMessage(" 纯文本 ")) == "纯文本"

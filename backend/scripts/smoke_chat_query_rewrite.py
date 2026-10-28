@@ -752,6 +752,14 @@ async def main() -> None:
         assert fake.messages is not None, "依赖上文应调 LLM 改写"
         print(" 12d) 依赖上文 → LLM 改写消解指代 ✓")
 
+        # 12d-2) 门控只吃 question：压缩窗口放宽只作用于下游改写器，
+        # 不改变门控输入口径（避免「历史里出现过这个」污染自足判断）
+        assert _FakeTypeSafeClient.last_state is not None
+        assert set(_FakeTypeSafeClient.last_state) == {"question"}, (
+            f"门控 state 应只有 question，实际 {_FakeTypeSafeClient.last_state}"
+        )
+        print(" 12d-2) 门控只吃 question（窗口放宽不改变门控输入）✓")
+
         # 12e) 门控不可用（TypeSafe 关闭）→ 仍回退 LLM（kb_like 兜底）
         chat_query_rewrite_service._typesafe_client_cls = None
         chat_query_rewrite_service._typesafe_choice_cls = None

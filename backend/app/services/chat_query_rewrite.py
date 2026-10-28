@@ -742,6 +742,11 @@ class ChatQueryRewriteService:
         返回 "standalone"=自足，直接用原问题；"needs_context"=依赖上文，需 LLM 消解
         指代；"no_retrieve"=无需检索（寒暄等）。None 表示判不了，调用方走 LLM 兜底
         （即保守地当作需要改写）。
+
+        刻意只吃 question，不给 history：判的是「这句话自身有没有指代 / 省略」，
+        多喂历史反而会让「历史里出现过『这个』」污染当前这句自足问题的判断。
+        窗口放宽（chat_memory 的 12 条 / 2000 字符预算）只作用于下游的改写器，
+        不改变门控的输入口径。
         """
         if self._typesafe_client_cls is None or self._typesafe_choice_cls is None:
             return None
