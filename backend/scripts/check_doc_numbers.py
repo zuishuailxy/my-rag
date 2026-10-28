@@ -69,6 +69,8 @@ def _eval_facts() -> dict[str, int]:
         "gen_unanswerable": len(unanswerable),
         "graph_total": len(graph),
         "eval_total": len(rag) + len(gen) + len(graph),
+        # README 首页的对外口径：检索 + 生成 = 206（图谱 19 条另计）
+        "rag_plus_gen": len(rag) + len(gen),
     }
 
 
@@ -301,11 +303,14 @@ LINE_TOLERANCE = 0.01
 
 CLAIMS: tuple[Claim, ...] = (
     # ---- README：评测集构成（指标的分母，最容易过期）----
-    Claim("README.md", r"\*\*(\d+) 条评测集\*\*", "rag_total"),
-    Claim("README.md", r"（(\d+) 单跳 \+ 16 多跳 \+ 12 负例）", "rag_single"),
+    Claim("README.md", r"\*\*(\d+) 条评测集\*\*", "rag_plus_gen", note="检索 + 生成；图谱另计"),
+    Claim(
+        "README.md",
+        r"检索 (\d+) = \d+ 单跳 \+ 16 多跳 \+ 12 负例",
+        "rag_total",
+    ),
     Claim("README.md", r"其中 \*\*(\d+) 条难例\*\*", "rag_hard"),
     Claim("README.md", r"难题 = (\d+) 条近义改写题", "rag_hard"),
-    Claim("README.md", r"（(\d+) 条评测集）", "rag_single_plus_negative", note="消融表用的子集"),
     Claim("README.md", r"从 12 条扩到 (\d+) 条", "gen_total"),
     # ---- README：规模 ----
     Claim("README.md", r"知识库共 \*\*(\d+) 篇文档 / 467 块\*\*", "indexed_docs", note="需 --with-db"),
