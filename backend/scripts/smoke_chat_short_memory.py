@@ -13,7 +13,7 @@
 9. 脏数据容错：值是非法 JSON / 不是数组时返回 None 且不抛（失败只 WARN）
 10. clear：删除后回到未命中
 11. 纯函数：db_rows_to_messages 的 role / 空正文过滤；compact_rewrite_context 的
-    窗口条数 / 单条截断 / 总字符预算；message_text 的 str / 块列表 / None 三种形态
+    窗口条数 / 消息全文进入 / 硬顶兜底；message_text 的 str / 块列表 / None 三种形态
 
 ⚠️ 本模块的 save / clear 都「吞异常只 WARN」（缓存不可用不能影响对话），
 所以冒烟第 0 步必须**显式 ping 确认 Redis 真的通** —— 否则 save 静默失败、
@@ -201,7 +201,7 @@ async def main() -> None:
     )
     print(" 11) dbRowsToMessages ✓ role / 空正文过滤，正文已 trim")
 
-    # 11b) compact_rewrite_context：最近 12 条 + 单条截断 + 总预算 2000
+    # 11b) compact_rewrite_context：最近 12 条 + 全文进入 + 硬顶兜底
     window_history: list = []
     for i in range(30):
         window_history.append(HumanMessage(f"问{i}") if i % 2 == 0 else AIMessage(f"答{i}"))
@@ -211,17 +211,22 @@ async def main() -> None:
     assert window_lines[0] == "用户：问18", f"窗口应从倒数第 12 条开始，实际 {window_lines[0]!r}"
     assert window_lines[-1] == "助手：答29", f"末行应为最新一条，实际 {window_lines[-1]!r}"
 
-    clipped = compact_rewrite_context([HumanMessage("长" * 500), AIMessage("答" * 500)])
-    user_line, assistant_line = clipped.split("\n")
-    assert len(user_line) == len("用户：") + 200, "用户侧应截断到 200 字"
-    assert len(assistant_line) == len("助手：") + 120, "助手侧应截断到 120 字"
+    # 全文进入：500 字的消息原样保留，不按条截断
+    full = compact_rewrite_context([HumanMessage("长" * 500), AIMessage("答" * 500)])
+    user_line, assistant_line = full.split("\n")
+    assert user_line == "用户：" + "长" * 500, "用户消息应全文保留"
+    assert assistant_line == "助手：" + "答" * 500, "助手消息应全文保留"
 
-    # 总预算：12 条满额用户消息共 12×203=2436 字符，应只装下最近 9 条（9×203=1827）
-    budget_history = [HumanMessage(str(i) * 200) for i in range(12)]
-    budget_ctx = compact_rewrite_context(budget_history)
-    assert len(budget_ctx) <= 2000, f"总预算 2000 字符，实际 {len(budget_ctx)}"
-    assert len(budget_ctx.split("\n")) == 9, f"预算内应装下 9 条，实际 {len(budget_ctx.split(chr(10)))}"
-    assert budget_ctx.split("\n")[0] == "用户：" + "3" * 200, "预算不够时应保最新的、丢最老的"
+    # 硬顶：只有单条就超硬顶（粘贴整份文档）才截，保留开头而不是丢整条
+    huge_ctx = compact_rewrite_context([HumanMessage("长" * 40000)])
+    assert len(huge_ctx) <= 30000, f"硬顶 30000 字符，实际 {len(huge_ctx)}"
+    assert huge_ctx.startswith("用户：长"), "超硬顶时应保留开头，不能返回空串"
+
+    # 12 条各 2000 字 = 24000 字符 < 硬顶，应全部保留（不再有 2000 预算）
+    wide_history = [HumanMessage(str(i) * 2000) for i in range(12)]
+    wide_ctx = compact_rewrite_context(wide_history)
+    assert len(wide_ctx.split("\n")) == 12, f"宽输入应装下 12 条，实际 {len(wide_ctx.split(chr(10)))}"
+    assert len(wide_ctx) > 24000, f"应全文保留约 2.4 万字符，实际 {len(wide_ctx)}"
 
     # 指代对象在 4 轮之外（旧窗口 4 条会丢掉它）
     deep_history: list = [HumanMessage("年假需要提前几天申请"), AIMessage("年假需提前 3 个工作日申请。")]
@@ -234,7 +239,7 @@ async def main() -> None:
     assert "这个流程要多久" in deep_ctx, "最新一轮必须在上下文里"
     assert compact_rewrite_context([]) == "", "空历史返回空串"
     print(
-        " 12) compactRewriteContext ✓ 最近 12 条 / 用户 200 字 / 助手 120 字 / 总预算 2000 字符"
+        " 12) compactRewriteContext ✓ 最近 12 条 / 消息全文 / 硬顶 30000 字符"
     )
 
     # 11c) message_text：三种 content 形态

@@ -1,7 +1,9 @@
-"""短期记忆的纯函数：紧凑上下文的窗口 / 单条截断 / 总字符预算。
+"""短期记忆的纯函数：紧凑上下文的窗口 / 全文输入 / 硬顶。
 
-这些断言是回归守卫：窗口从 4 条放宽到 12 条、并加总预算之后，
-「指代对象在 4 轮之外」这种场景必须还能被改写器看到。
+这些断言是回归守卫：
+  - 窗口 12 条，「指代对象在 4 轮之外」必须还能被改写器看到
+  - 消息全文进入，不按条截断（截断会丢掉位置靠后的指代对象）
+  - 只有单条超硬顶（粘贴整份文档）才截，且不返回空串
 """
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -39,28 +41,25 @@ def test_indirect_reference_beyond_four_turns_survives() -> None:
     assert context.rstrip().endswith("这个流程要多久"), "最新一轮必须在末尾"
 
 
-def test_total_budget_drops_oldest_whole_lines() -> None:
-    # 12 条满额用户消息 = 12×(200+3+1) 字符，超预算 → 只装最新的若干条
-    history = [HumanMessage(str(i) * 200) for i in range(12)]
-    context = compact_rewrite_context(history)
-    lines = context.split("\n")
-    assert len(context) <= _REWRITE_CONTEXT_MAX_CHARS == 2000, "整段不得超过预算"
-    assert 0 < len(lines) < 12, "长消息应触发丢弃，而不是全部保留"
-    assert lines[0] == "用户：" + "3" * 200, "预算不够时保最新的、丢最老的"
-    assert lines[-1] == "用户：" + ("11" * 200)[:200], "最新一条应在末尾"
-
-
-def test_per_message_truncation() -> None:
+def test_messages_are_not_truncated() -> None:
+    # 全文进入：用户 500 字、助手 500 字都原样保留，不再截 200 / 120
     context = compact_rewrite_context([HumanMessage("长" * 500), AIMessage("答" * 500)])
     user_line, assistant_line = context.split("\n")
-    assert len(user_line) == len("用户：") + 200, "用户侧截断到 200 字"
-    assert len(assistant_line) == len("助手：") + 120, "助手侧截断到 120 字"
+    assert user_line == "用户：" + "长" * 500, "用户消息应全文保留"
+    assert assistant_line == "助手：" + "答" * 500, "助手消息应全文保留"
 
 
-def test_long_answer_does_not_starve_other_messages() -> None:
-    # 单条上限的独立价值：一条 3000 字长回答不能把 2000 预算吃光。
-    # 实测过三种写法：只留总预算时，这条长回答会让整段上下文变空（或只剩它一条），
-    # 前面的用户问题——往往才是指代来源——全被挤掉。
+def test_hard_cap_truncates_oversized_single_message() -> None:
+    # 单条就超过硬顶（用户粘贴整份文档）：截到硬顶保留开头，
+    # 而不是整条丢弃 —— 整条丢弃会让上下文变空串，改写器直接不跑
+    context = compact_rewrite_context([HumanMessage("长" * (_REWRITE_CONTEXT_MAX_CHARS + 5000))])
+    assert len(context) <= _REWRITE_CONTEXT_MAX_CHARS, "不得超过硬顶"
+    assert context.startswith("用户：长"), "应保留开头而不是丢弃整条"
+    assert len(context) > _REWRITE_CONTEXT_MAX_CHARS - 10, "应尽量用满硬顶"
+
+
+def test_long_answer_keeps_earlier_history() -> None:
+    # 一条 3000 字长回答不该把前面的历史挤掉：硬顶足够宽，12 条全部保留
     history: list = [
         HumanMessage("年假需要提前几天申请"),
         AIMessage("年假需提前 3 个工作日申请。"),
@@ -72,9 +71,10 @@ def test_long_answer_does_not_starve_other_messages() -> None:
     history.append(AIMessage("制度原文" * 750))
 
     context = compact_rewrite_context(history)
-    assert "年假需要提前几天申请" in context, "长回答不应吃光预算"
+    assert "年假需要提前几天申请" in context, "长回答不应挤掉更早的用户提问"
     assert "那调休呢" in context, "最新一轮必须保留"
-    assert len(context.split("\n")) == 12, "12 条应全部装下（单条已截断）"
+    assert len(context.split("\n")) == 12, "12 条应全部装下（单条不截断）"
+    assert len(context) > 3000, "长回答应全文进入，而不是被截成 120 字"
 
 
 def test_empty_and_blank_history() -> None:

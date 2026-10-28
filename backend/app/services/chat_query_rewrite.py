@@ -745,7 +745,7 @@ class ChatQueryRewriteService:
 
         刻意只吃 question，不给 history：判的是「这句话自身有没有指代 / 省略」，
         多喂历史反而会让「历史里出现过『这个』」污染当前这句自足问题的判断。
-        窗口放宽（chat_memory 的 12 条 / 2000 字符预算）只作用于下游的改写器，
+        上游放宽（chat_memory 的 12 条窗口、消息全文）只作用于下游的改写器，
         不改变门控的输入口径。
         """
         if self._typesafe_client_cls is None or self._typesafe_choice_cls is None:

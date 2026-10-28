@@ -4,15 +4,10 @@
   - message_text 取消息正文（LangChain content 可能是 str 或块列表）
   - is_working_message 只有 human / ai 两类算「有效记忆」
   - db_rows_to_messages kh_ai_message 行 → LangChain 消息
-  - compact_rewrite_context 检索改写器用的紧凑上下文（助手只留短摘要）
+  - compact_rewrite_context 检索改写器用的上下文（消息全文，不按条截断）
 
 前两个是短期记忆窗口的过滤口径：Redis 与 Postgres 两条来源都用同一套判定，
 保证「回填」与「热窗口」内容一致（否则回填一次会把检索资料/思考块灌进窗口）。
-
-刻意差异：
-  - `compact_rewrite_context` 的截断用 Python 码点切片（`text[:200]`），
-    `slice(0, 200)` 按 UTF-16 码元切 —— 对中文两者等价，差别只在 emoji 等
-    代理对字符上（Python 不会把字符切成半个）。
 """
 
 from collections.abc import Sequence
@@ -28,18 +23,14 @@ __all__ = [
     "message_text",
 ]
 
-# 检索改写上下文的窗口与预算
+# 检索改写上下文的窗口
 # 12 条 ≈ 6 轮问答。实测：指代对象在第一轮、中间隔 8 轮无关话题时，
 # 4 条窗口（2 轮）会把指代对象挤出窗口 → 改写出「报销单需提前几天申请？」（错），
-# 12 条能覆盖到，且典型场景只多约 200 字符。
+# 12 条能覆盖到。热窗口本身是 20 条，12 条不越界。
 _REWRITE_HISTORY_WINDOW = 12
-# 单条上限：用户侧重（指代对象、主题词都在用户话里）；
-# 助手侧只留开头，够定位话题即可，不必复述制度原文。
-_REWRITE_USER_MAX_CHARS = 200
-_REWRITE_ASSISTANT_MAX_CHARS = 120
-# 整段字符预算：12 条 × 单条上限最多 2400，用总预算兜住最坏情况。
-# 2000 字符 ≈ 1300 token，典型 12 条约 1000 字符，只在长回答时才触顶。
-_REWRITE_CONTEXT_MAX_CHARS = 2000
+# 硬顶：只防「用户粘贴整份文档」这类极端输入撑爆上下文，不是日常压缩。
+# 真实回答 p99 = 2305 字符、12 条全量约 2.8 万字符，正常对话远达不到这里。
+_REWRITE_CONTEXT_MAX_CHARS = 30000
 
 
 def message_text(message: BaseMessage) -> str:
@@ -95,12 +86,17 @@ def db_rows_to_messages(rows: Sequence[AiMessage]) -> list[BaseMessage]:
 
 
 def compact_rewrite_context(history: Sequence[BaseMessage]) -> str:
-    """给检索改写器 / 意图路由用的紧凑上下文
+    """给检索改写器 / 意图路由用的上下文
 
-    窗口：最近 `_REWRITE_HISTORY_WINDOW` 条（用户、助手各算一条）。
-    预算：整段不超过 `_REWRITE_CONTEXT_MAX_CHARS` 字符，**从最近往回累加** ——
-    预算不够时优先保最新话题；装不下的那条整条丢弃，而不是截半句
-    （半句会让模型照着残句补全指代，比没有更糟）。
+    窗口：最近 `_REWRITE_HISTORY_WINDOW` 条（用户、助手各算一条），
+    **消息正文全文进入**，不按条截断 —— 改写要消解的是「第 5 项」「末尾那条
+    例外」这类指代，被截掉的那半句往往正好装着指代对象。实测：全文输入比
+    截 120 字多带回了位置靠后的实体（「拒绝日志」→ 带出 ausearch -m avc），
+    也没有出现条文细节污染检索词的情况。
+
+    硬顶：整段不超过 `_REWRITE_CONTEXT_MAX_CHARS` 字符，**从最近往回累加**。
+    只有单条自身就超硬顶（粘贴整份文档）时才会截该条，正常对话不触发。
+
     格式：每条一行 `用户：…` / `助手：…`，按时间顺序输出。
     """
     if not history:
@@ -112,14 +108,21 @@ def compact_rewrite_context(history: Sequence[BaseMessage]) -> str:
         if not text:
             continue
         if isinstance(message, HumanMessage):
-            line = f"用户：{text[:_REWRITE_USER_MAX_CHARS]}"
+            prefix = "用户："
         elif isinstance(message, AIMessage):
-            line = f"助手：{text[:_REWRITE_ASSISTANT_MAX_CHARS]}"
+            prefix = "助手："
         else:
             continue
+        line = prefix + text
         cost = len(line) + 1  # +1：行间换行符
         if used + cost > _REWRITE_CONTEXT_MAX_CHARS:
-            break
+            # 走到这里说明单条就顶到硬顶：截到剩余额度，保住最新话题一截，
+            # 而不是整条丢掉让上下文变空
+            room = _REWRITE_CONTEXT_MAX_CHARS - used - len(prefix) - 1
+            if room <= 0:
+                break
+            line = prefix + text[:room]
+            cost = len(line) + 1
         lines.append(line)
         used += cost
     lines.reverse()
