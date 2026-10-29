@@ -15,8 +15,20 @@ from app.pipeline.types import ChunkHit
 
 logger = logging.getLogger("RerankerService")
 
-# 单挑文本送入 rerank 前的最大长度
-_MAX_DOC_CHARS = 2000
+# 单条文档「长度告警」阈值 —— 只告警，**不截断**。
+#
+# 历史：这里曾是 _MAX_DOC_CHARS = 2000 的硬截断（从 TS 版对齐而来，未经验证）。
+# 实测 467 条 chunk，最长 rerank 输入 1093 字符，**该阈值一次都没触发过**；
+# 而 DashScope qwen3.7-text-rerank 的单条上限是 30,000 token（≈6 万字符），
+# 2000 只有真实上限的 1/30 —— 它既没防住什么，也没优化什么。
+#
+# 为什么不截：chunk 长度应由 RAG_CHUNK_SIZE 保证，而不是在送 API 时二次静默裁剪。
+# 静默裁剪有两个坏处：① 丢掉 chunk 尾部（实测 LLM 侧截 800 时 4.1% 的评测答案
+# 关键词落在截断区）；② 掩盖 chunk 配置失控 —— 该报的错被切成「看起来正常」。
+#
+# 超限时 API 会直接返回 HTTP 400（官方明确「不会截断输入内容」），
+# 这里提前打 WARN 让它可观测，而不是等 rerank 静默降级成 RRF 排序。
+_WARN_DOC_CHARS = 8000
 
 
 class RerankerService:
@@ -51,6 +63,16 @@ class RerankerService:
             return None
 
         documents = [self._to_document(hit) for hit in candidates]
+        oversized = [len(d) for d in documents if len(d) > _WARN_DOC_CHARS]
+        if oversized:
+            logger.warning(
+                "rerank 输入异常长（未截断，交 API 判定）：%d/%d 条超 %d 字符，最长 %d。"
+                "通常意味着 RAG_CHUNK_SIZE 被调大，请确认单条未超模型上限（3 万 token）",
+                len(oversized),
+                len(documents),
+                _WARN_DOC_CHARS,
+                max(oversized),
+            )
         payload = {
             "model": self.model,
             "input": {"query": query, "documents": documents},
@@ -105,12 +127,12 @@ class RerankerService:
 
     @staticmethod
     def _to_document(hit: ChunkHit) -> str:
-        """候选块 → 送入 rerank 的纯文本（标题 + 章节标题 + 正文，超长截断）"""
+        """候选块 → 送入 rerank 的纯文本（标题 + 章节标题 + 正文全文）。
+
+        不截断：长度由 RAG_CHUNK_SIZE 控制，见 _WARN_DOC_CHARS 的说明。
+        """
         heading = f"{hit.heading}\n" if hit.heading else ""
-        text = f"{hit.documentTitle}\n{heading}{hit.content}".strip()
-        if len(text) > _MAX_DOC_CHARS:
-            text = f"{text[:_MAX_DOC_CHARS]}..."
-        return text
+        return f"{hit.documentTitle}\n{heading}{hit.content}".strip()
 
 
 # 全局单例

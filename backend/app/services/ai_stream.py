@@ -72,10 +72,8 @@ from app.services.web_search import web_search_service
 
 logger = logging.getLogger("AiStreamService")
 
-# 溯源摘录长度
+# 溯源摘录长度（发给前端的 excerpt；**只影响展示**，不影响送模型的正文）
 _EXCERPT_LEN = 200
-# 上下文里每条资料正文截断
-_CONTEXT_SNIPPET_LEN = 800
 # 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 
@@ -431,15 +429,16 @@ def _pack_retrieve_result(
                 "title": f"[{src['index']}] {src['documentTitle']}",
             }
         )
+    # 送模型的正文**不截断**（历史：曾截 800 字符，从 TS 版对齐而来）。
+    # 实测库里 467 条 chunk：40% 超过 800 字符，用评测集 112 个答案关键词匹配，
+    # 4.1% 的命中落在 800 字符之后 → 被静默切掉；落在 1000 之后的为 0。
+    # 长度上限由 RAG_CHUNK_SIZE（512 token ≈ 1024 字符）保证，不在这里二次裁剪：
+    # 一句话的成本（5 条 × 1KB ≈ 5k 字符）远低于丢掉答案的代价。
     context = "\n\n".join(
         f"[{sources[i]['index']}] {hit.documentTitle}"
         + (f" / {hit.heading}" if hit.heading else "")
         + "\n"
-        + (
-            hit.content[:_CONTEXT_SNIPPET_LEN] + "..."
-            if len(hit.content) > _CONTEXT_SNIPPET_LEN
-            else hit.content
-        )
+        + hit.content
         for i, hit in enumerate(hits)
     )
     result: dict[str, Any] = {

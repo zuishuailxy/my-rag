@@ -47,3 +47,30 @@ def test_citation_regex() -> None:
 def test_excerpt_truncates() -> None:
     assert excerpt("  a   b  ") == "a b"
     assert excerpt("x" * 300).endswith("...")
+
+
+def test_context_keeps_full_content() -> None:
+    """正文全文进 context，不做 800 字符截断
+
+    回归守卫：曾用 `_CONTEXT_SNIPPET_LEN = 800` 硬截（从 TS 版对齐而来）。
+    实测库里 467 条 chunk，40% 超过 800 字符；用评测集 112 个答案关键词匹配，
+    4.1% 的命中落在 800 字符之后 → 被静默切掉。长度上限由 RAG_CHUNK_SIZE 保证，
+    不在拼接时二次裁剪。
+    """
+    tail = "<<答案在这>>"
+    content = "中" * 1500 + tail
+    hit = ChunkHit(
+        chunkId="c-long",
+        documentId="d1",
+        documentTitle="长文",
+        content=content,
+        heading="节",
+        score=0.9,
+    )
+    out = _pack_retrieve_result([hit], "q", [], _CollectWriter())
+
+    assert tail in out["context"], "context 不能丢掉 800 字符之后的内容"
+    assert content in out["context"], "正文应完整保留"
+    # excerpt 仍然截断：它只用于前端溯源卡片展示，与送模型的正文无关
+    assert len(out["items"][0]["excerpt"]) <= 203
+

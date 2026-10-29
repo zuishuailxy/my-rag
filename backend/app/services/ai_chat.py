@@ -33,10 +33,8 @@ from app.services.retrieval import hybrid_retrieval_service
 
 logger = logging.getLogger("AiChatService")
 
-# 溯源摘录长度
+# 溯源摘录长度（发给前端的 excerpt；**只影响展示**，不影响送模型的正文）
 _EXCERPT_LEN = 200
-# 上下文里每条资料正文截断
-_CONTEXT_SNIPPET_LEN = 800
 # 匹配回答中引用编号 [n]
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 _TEMPERATURE = 0.2
@@ -191,16 +189,14 @@ class AiChatService:
 
     @staticmethod
     def build_context(hits: list[ChunkHit]) -> str:
-        """把召回块拼成 LLM 上下文（编号 [n] + 标题 + 章节 + 正文截断）"""
+        """把召回块拼成 LLM 上下文（编号 [n] + 标题 + 章节 + 正文全文）
+
+        正文不截断：长度上限由 RAG_CHUNK_SIZE 保证（见 ai_stream 同一处的说明）。
+        """
         parts = []
         for i, src in enumerate(hits, start=1):
             heading = f" / {src.heading}" if src.heading else ""
-            snippet = (
-                src.content[:_CONTEXT_SNIPPET_LEN] + "..."
-                if len(src.content) > _CONTEXT_SNIPPET_LEN
-                else src.content
-            )
-            parts.append(f"[{i}] {src.documentTitle}{heading}\n{snippet}")
+            parts.append(f"[{i}] {src.documentTitle}{heading}\n{src.content}")
         return "\n\n".join(parts)
 
 
