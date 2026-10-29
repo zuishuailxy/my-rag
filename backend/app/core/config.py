@@ -385,6 +385,11 @@ class Settings(BaseSettings):
     MEM0_API_KEY: str | None = None
     MEM0_HOST: str | None = None
     MEM0_TOP_K: int = 5
+    # 检索**整体**预算（毫秒，两层 user/session 共用同一 deadline；≤0 表示不限）。
+    # ⚠️ 刻意不复用 AI_CHAT_TIMEOUT_MS（60s）：记忆坐在 TTFT 的关键路径上，
+    # 一次慢请求就能把首字拖到一分钟，而它只是背景信息 —— 宁可这轮没有记忆注入。
+    # 实测 p50 1847ms，1500ms 会让少数慢请求降级，这是有意的取舍。
+    MEM0_SEARCH_TIMEOUT_MS: int = 1500
 
     # 记忆分类器实现（决定本轮写 user 层 / session 层 / 两层 / 都不写）：
     #   auto   = 配了 TYPESAFE_API_KEY 用 Jev（TypeSafe Noul×2），否则 LLM  ← 默认

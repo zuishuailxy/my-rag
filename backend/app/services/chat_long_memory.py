@@ -69,6 +69,7 @@
 分类器结果落库审计。
 """
 
+import asyncio
 import logging
 from typing import Any, TypedDict
 
@@ -336,6 +337,15 @@ def _build_jev_classifier() -> JevMemoryClassifier | None:
     return JevMemoryClassifier(AsyncTypeSafeClient, Noul)
 
 
+def _search_timeout_s(timeout_ms: int) -> float | None:
+    """检索预算：毫秒 → 秒；≤0 视为不限（返回 None）
+
+    单独抽成纯函数：`ChatLongMemoryService.__init__` 要建 Mem0 客户端（约 1.3s），
+    为测一个换算去构造整个服务不值得。
+    """
+    return timeout_ms / 1000 if timeout_ms > 0 else None
+
+
 class ChatLongMemoryService:
     """对话长期记忆（Mem0）。未配置 MEM0_API_KEY 时全部跳过。
 
@@ -345,6 +355,11 @@ class ChatLongMemoryService:
     def __init__(self) -> None:
         # )：默认值写在 config.py，此处直接读
         self._top_k = settings.MEM0_TOP_K
+        # 检索整体预算（秒）。≤0 视为不限 —— 与「配置成 0 = 立刻全超时」相比，
+        # 后者会让记忆功能静默失效，排查成本高。
+        self._timeout_s: float | None = _search_timeout_s(
+            settings.MEM0_SEARCH_TIMEOUT_MS
+        )
 
         api_key = settings.MEM0_API_KEY or ""
         host = settings.MEM0_HOST or ""
@@ -378,36 +393,50 @@ class ChatLongMemoryService:
         """检索两层记忆
 
         user 层按 user_id 过滤；session 层额外叠加 run_id（= sessionId）。
-        未配置 sessionId 时不查会话层。任何异常只 WARN 并返回空（记忆不可用
-        不能阻断对话）。
+        未配置 sessionId 时不查会话层。
+
+        整体受 `MEM0_SEARCH_TIMEOUT_MS` 约束（两层共用同一 deadline）。
+        超时 / 任何异常都只 WARN 并返回空 —— 记忆不可用不能阻断对话，
+        而且它坐在 TTFT 关键路径上，慢就等于用户盯着空白屏幕。
         """
         empty: LongMemoryHits = {"user": [], "session": []}
         if self._client is None:
             return empty
         try:
-            # ⚠️ search 是三个方法里**唯一**要求实体 ID 放 filters 的（放顶层会被 SDK 的
-            # ENTITY_PARAMS 白名单校验直接 raise）。add / delete_all 恰恰相反，走顶层。
-            # 详见模块注释「实体 ID 的传法三个方法各不相同」——不要图省事统一。
-            user_res = await self._client.search(
-                query,
-                filters={"user_id": str(user_id)},
-                top_k=self._top_k,
-            )
-            if session_id:
-                session_res = await self._client.search(
+            # 整体预算（两层共用同一 deadline，不是每层各一份）：记忆是背景信息，
+            # 宁可这轮不注入，也不能让它把 TTFT 拖长。asyncio.timeout(None) = 不限。
+            async with asyncio.timeout(self._timeout_s):
+                # ⚠️ search 是三个方法里**唯一**要求实体 ID 放 filters 的（放顶层会被 SDK 的
+                # ENTITY_PARAMS 白名单校验直接 raise）。add / delete_all 恰恰相反，走顶层。
+                # 详见模块注释「实体 ID 的传法三个方法各不相同」——不要图省事统一。
+                user_res = await self._client.search(
                     query,
-                    filters={
-                        "user_id": str(user_id),
-                        "run_id": str(session_id),
-                    },
+                    filters={"user_id": str(user_id)},
                     top_k=self._top_k,
                 )
-            else:
-                session_res = {"results": []}
-            return {
-                "user": _pick_memories(user_res),
-                "session": _pick_memories(session_res),
-            }
+                if session_id:
+                    session_res = await self._client.search(
+                        query,
+                        filters={
+                            "user_id": str(user_id),
+                            "run_id": str(session_id),
+                        },
+                        top_k=self._top_k,
+                    )
+                else:
+                    session_res = {"results": []}
+                return {
+                    "user": _pick_memories(user_res),
+                    "session": _pick_memories(session_res),
+                }
+        except TimeoutError:
+            logger.warning(
+                "Mem0 检索超时（预算 %ss），本轮按无记忆处理：userId=%s, sessionId=%s",
+                self._timeout_s,
+                user_id,
+                session_id,
+            )
+            return empty
         except Exception as err:  # noqa: BLE001
             logger.warning("Mem0 检索失败：%s", err)
             return empty
