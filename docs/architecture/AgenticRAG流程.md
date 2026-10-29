@@ -111,7 +111,7 @@ start → data-session → data-status(intent) → data-intent
 
 ### 4.3 记忆与摘要
 
-- **长期记忆（Mem0）**：`search(user_id, session_id, question)` 出 user/session 两层，`build_system_message` 拼成 SystemMessage 前置。注意用**原始问题**，不是建议检索词。
+- **长期记忆（Mem0）**：`search(user_id, session_id, question)` 出 user/session 两层（**两层并行发出，共用一个 1500ms deadline**），`build_system_message` 拼成 SystemMessage 前置。注意用**原始问题**，不是建议检索词。
 - **滚动摘要（持久化）**：`chat_session_summary_service.try_load` 读 Redis + Postgres（双写）；`build_system_message` 前置。作答后后台 `fold`（fire-and-forget）把滑出热窗口的旧历史增量折叠。
 ：（只在 agent state 内、每轮重算、不持久）；本项目用跨请求持久化的滚动摘要。
 

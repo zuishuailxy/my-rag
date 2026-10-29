@@ -346,6 +346,23 @@ def _search_timeout_s(timeout_ms: int) -> float | None:
     return timeout_ms / 1000 if timeout_ms > 0 else None
 
 
+def _layer_payload(raw: Any, layer: str) -> dict[str, Any]:
+    """把 `gather(return_exceptions=True)` 的一项归一成 payload
+
+    两层并行之后，「一层挂了」与「两层都挂了」必须能分开 —— 否则日志只剩
+    「没有记忆」，定位时连是哪层超时都看不出来。
+
+    只降级 `Exception`；`CancelledError` 必须上抛，不能把「请求被取消」
+    伪装成「这轮没有记忆」。
+    """
+    if isinstance(raw, BaseException):
+        if isinstance(raw, asyncio.CancelledError):
+            raise raw
+        logger.warning("Mem0 %s 层检索失败：%s", layer, raw)
+        return {"results": []}
+    return raw if isinstance(raw, dict) else {"results": []}
+
+
 class ChatLongMemoryService:
     """对话长期记忆（Mem0）。未配置 MEM0_API_KEY 时全部跳过。
 
@@ -390,13 +407,16 @@ class ChatLongMemoryService:
         session_id: str | None,
         query: str,
     ) -> LongMemoryHits:
-        """检索两层记忆
+        """并行检索两层记忆
 
         user 层按 user_id 过滤；session 层额外叠加 run_id（= sessionId）。
         未配置 sessionId 时不查会话层。
 
-        整体受 `MEM0_SEARCH_TIMEOUT_MS` 约束（两层共用同一 deadline）。
-        超时 / 任何异常都只 WARN 并返回空 —— 记忆不可用不能阻断对话，
+        **两层同时发出**：它们只共享 query，一层的结果不参与另一层的过滤条件。
+        串行时 1500ms 预算要覆盖两次往返（实测 span p50 1038ms），并行后只覆盖一次。
+
+        整体受 `MEM0_SEARCH_TIMEOUT_MS` 约束（两层共用同一 deadline，不是每层一份）。
+        单层超时 / 异常只降级该层；整体超时按无记忆处理 —— 记忆不可用不能阻断对话，
         而且它坐在 TTFT 关键路径上，慢就等于用户盯着空白屏幕。
         """
         empty: LongMemoryHits = {"user": [], "session": []}
@@ -409,26 +429,30 @@ class ChatLongMemoryService:
                 # ⚠️ search 是三个方法里**唯一**要求实体 ID 放 filters 的（放顶层会被 SDK 的
                 # ENTITY_PARAMS 白名单校验直接 raise）。add / delete_all 恰恰相反，走顶层。
                 # 详见模块注释「实体 ID 的传法三个方法各不相同」——不要图省事统一。
-                user_res = await self._client.search(
-                    query,
-                    filters={"user_id": str(user_id)},
-                    top_k=self._top_k,
-                )
-                if session_id:
-                    session_res = await self._client.search(
+                calls = [
+                    self._client.search(
                         query,
-                        filters={
-                            "user_id": str(user_id),
-                            "run_id": str(session_id),
-                        },
+                        filters={"user_id": str(user_id)},
                         top_k=self._top_k,
                     )
-                else:
-                    session_res = {"results": []}
-                return {
-                    "user": _pick_memories(user_res),
-                    "session": _pick_memories(session_res),
-                }
+                ]
+                if session_id:
+                    calls.append(
+                        self._client.search(
+                            query,
+                            filters={
+                                "user_id": str(user_id),
+                                "run_id": str(session_id),
+                            },
+                            top_k=self._top_k,
+                        )
+                    )
+                # 结果按**入参顺序**返回，不按完成顺序 —— 这是下面能按下标认层的前提；
+                # 换成 as_completed 就得给每个请求带 tag，属无谓复杂化。
+                # return_exceptions=True：一层失败不取消另一层，各自降级。
+                # ⚠️ 代价：超时轮次没法像串行那样「第一层超了就省掉第二次请求」——
+                # 请求已经发出去了；换来的是每轮正常对话都省一次往返。
+                raw = await asyncio.gather(*calls, return_exceptions=True)
         except TimeoutError:
             logger.warning(
                 "Mem0 检索超时（预算 %ss），本轮按无记忆处理：userId=%s, sessionId=%s",
@@ -440,6 +464,13 @@ class ChatLongMemoryService:
         except Exception as err:  # noqa: BLE001
             logger.warning("Mem0 检索失败：%s", err)
             return empty
+
+        return {
+            "user": _pick_memories(_layer_payload(raw[0], "user")),
+            "session": (
+                _pick_memories(_layer_payload(raw[1], "session")) if session_id else []
+            ),
+        }
 
     def build_system_message(self, hits: LongMemoryHits) -> SystemMessage | None:
         """把两层记忆拼成一条 SystemMessage；两层都空返回 None
