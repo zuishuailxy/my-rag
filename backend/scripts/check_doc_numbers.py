@@ -322,6 +322,15 @@ CLAIMS: tuple[Claim, ...] = (
     #    把脚本数当成了字面量 —— 每加一个脚本就得改本脚本，否则门禁红。
     Claim("docs/interview/面试应答稿.md", r"(\d+) 端点 · \d+ 脚本", "endpoints"),
     Claim("docs/interview/面试应答稿.md", r"\d+ 端点 · (\d+) 脚本", "scripts_total"),
+    # ⚠️ 单测数曾经是「算而不用」：`_unit_test_count()` 一直在 main() 里算进
+    #    `facts["unit_tests"]`，却没有任何 CLAIM 引用它 —— 等于没校验。结果漂了两次
+    #    都没被门禁发现（98→110、110→113 全靠人工比对）。加这条就是把它接上。
+    Claim(
+        "docs/interview/面试应答稿.md",
+        r"· (\d+) 单测 ·",
+        "unit_tests",
+        note="pytest --collect-only 实际收集；增删测试必须同步这行",
+    ),
     # 面试实战问答集：逐题累积的现场作答稿，里面单列了一张「可报数字」表。
     # 它最容易和简历 / README 分叉（实测：端点数曾写 78+3、脚本数曾写 62），
     # 而这张表恰好是面试现场照着念的那张 —— 说出去的数字必须只有一套口径。
