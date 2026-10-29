@@ -187,6 +187,11 @@ def _start_mock(port: int, llm_delay_s: float, embedding: list[float]) -> Thread
     _MockLLMHandler.llm_delay_s = llm_delay_s
     # ThreadingHTTPServer：mock 必须能并发，否则它自己成了瓶颈
     server = ThreadingHTTPServer(("127.0.0.1", port), _MockLLMHandler)
+    # ⚠️ 默认 listen backlog 只有 5，并发上百时容易丢新连接，所以拉到 256。
+    # 但**它治不了「Connection reset」**：实测拉大后 100 并发仍有零星 500，
+    # 真正的元凶是子进程继承了 HTTP_PROXY，把 127.0.0.1 的 mock 也塞进代理
+    # （见 _start_app 里的 NO_PROXY）。两个都留着，但别把 backlog 当解药。
+    server.request_queue_size = 256
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -199,6 +204,13 @@ def _start_app(port: int, mock_port: int, log_path: str) -> subprocess.Popen:
     """
     env = {
         **os.environ,
+        # ⚠️ 必须让 mock 走直连：本机若有 HTTP_PROXY（开发机上很常见），
+        # 子进程会继承它，于是 127.0.0.1:mock 也被塞进代理 —— 代理在并发下重置连接，
+        # 客户端看到 `upstream connect failed: Connection reset by peer (os error 54)`，
+        # 最后变成应用侧 500。实测非流式 100 并发里 19 个 500 就是这么来的，
+        # 差点被当成应用 bug。压测工具不能自己制造失败。
+        "NO_PROXY": "127.0.0.1,localhost",
+        "no_proxy": "127.0.0.1,localhost",
         "OPENAI_BASE_URL": f"http://127.0.0.1:{mock_port}/v1",
         "EMBEDDING_BASE_URL": f"http://127.0.0.1:{mock_port}/v1",
         "OPENAI_API_KEY": "mock",
@@ -249,6 +261,11 @@ class PgConnectionSampler:
         self.samples: list[int] = []
         self.states_at_peak: dict[str, int] = {}
         self.holders_at_peak: list[tuple[str, int]] = []
+        # 全部采样里「idle in transaction」最长持续了多久（秒）。
+        # ⚠️ 只看**条数**会误判：短事务本身也会处于这个状态，并发高时同时有十来条
+        # 完全正常。真正的病态是「单条持续几秒」—— 那才是开着事务等外部调用。
+        # 修复前实测约 4.6s；修复后应在几十毫秒量级。
+        self.max_idle_txn_s: float = 0.0
         self._stop = False
 
     async def run(self) -> None:
@@ -277,6 +294,19 @@ class PgConnectionSampler:
                     ).all()
                     total = sum(int(n) for _, n in rows)
                     self.samples.append(total)
+                    # 最长空占时长：`state_change` 到现在的间隔（同一事务停留多久）
+                    oldest = (
+                        await conn.execute(
+                            text(
+                                "SELECT coalesce(max(EXTRACT(EPOCH FROM (now() - state_change))), 0) "
+                                "FROM pg_stat_activity "
+                                "WHERE application_name = :app_name "
+                                "AND state = 'idle in transaction'"
+                            ),
+                            {"app_name": LOADTEST_APP_NAME},
+                        )
+                    ).scalar()
+                    self.max_idle_txn_s = max(self.max_idle_txn_s, float(oldest or 0))
                     # 保留峰值时刻的快照，而不是最后一次的快照
                     if total >= (max(self.samples) if self.samples else 0):
                         self.states_at_peak = {str(st): int(n) for st, n in rows}
@@ -514,6 +544,7 @@ def _write_results(
     pool_capacity: int,
     worst_peak: int,
     started_at: str,
+    max_idle_txn_s: float = 0.0,
 ) -> None:
     """落盘：**per-request 原始耗时数组** + 环境元信息
 
@@ -531,6 +562,9 @@ def _write_results(
             "llm_delay_s": args.llm_delay,
             "pool_capacity": pool_capacity,
             "peak_conn_observed": worst_peak,
+            # 最长 `idle in transaction` 持续秒数：判「连接是否被开着事务等外部调用」
+            # 的关键证据（看条数会被短事务误导）
+            "max_idle_in_txn_s": round(max_idle_txn_s, 3),
             "definitions": {
                 "ttft": "请求发出 → 首个 text-delta / reasoning-delta 帧（不是 SSE 首帧）",
                 "total": "请求发出 → 响应流结束",
@@ -620,15 +654,24 @@ async def main(args: argparse.Namespace) -> int:
         )
         print(f"  峰值时刻连接状态：{breakdown}")
         idle_tx = sampler.states_at_peak.get("idle in transaction", 0)
-        if idle_tx:
+        # 判据是**持续时间**，不是条数：并发高时短事务同时有十来条是正常的，
+        # 病态的是「单条持续几秒」（开着事务等外部调用）。修复前 ≈4.6s，修复后几十毫秒。
+        if sampler.max_idle_txn_s >= 1.0:
             print(
-                f"  ⚠️ 其中 {idle_tx} 条为 `idle in transaction` —— 连接被「开着事务等外部调用」空占，"
+                f"  ⚠️ 最长 `idle in transaction` 持续 {sampler.max_idle_txn_s:.2f}s"
+                f"（峰值时刻 {idle_tx} 条）—— 连接被「开着事务等外部调用」空占，"
                 "这是吞吐上限的关键项，单纯加池只能缓解"
             )
             if sampler.holders_at_peak:
                 print("  空占连接的最后一条 SQL（= 谁开的会话）：")
                 for query_text, count in sampler.holders_at_peak:
                     print(f"    ×{count:>3}  {query_text}")
+        elif idle_tx:
+            print(
+                f"  ✓ 最长 `idle in transaction` 仅 {sampler.max_idle_txn_s * 1000:.0f}ms"
+                f"（峰值时刻 {idle_tx} 条）—— 属于短事务本身，"
+                "不存在「占着连接等外部调用」"
+            )
 
     if any(row["errors"] for row in rows):
         print("  ⚠️ 出现失败请求 —— 说明并发已超出当前配置的处理能力（详见上方错误样例）")
@@ -636,7 +679,9 @@ async def main(args: argparse.Namespace) -> int:
         print("  ✅ 未出现失败请求")
 
     if args.out:
-        _write_results(args.out, args, rows, capacity, worst, started_at)
+        _write_results(
+            args.out, args, rows, capacity, worst, started_at, sampler.max_idle_txn_s
+        )
         print(f"  原始样本已落盘：{args.out}")
 
     removed = await _cleanup_sessions()
