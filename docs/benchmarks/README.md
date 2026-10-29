@@ -107,6 +107,10 @@ TimeoutError: QueuePool limit of size 20 overflow 10 reached, connection timed o
 > ⚠️ **这张表的口径在第二批之后不再成立**：`stages` 是墙钟分段，两个外部依赖并行后
 > 它们不再各占一份 TTFT，而是合并成 `max(classify, memory)`。第二批起日志同时输出
 > `spans`（各段独立测时，可重叠），两者不可互相推导。
+>
+> ⚠️ **`memory` 那一行（1847ms / 40%）也不要再引用**：那批采集时没有统计 429，
+> 后续补测发现 Mem0 月度配额耗尽（1000/1000）。这个数字可能是 SDK 退避重试的耗时，
+> 不是检索延迟。`classify` 那一行不受影响。见结果七。
 
 ## 第一批暴露的三个问题
 
@@ -213,52 +217,68 @@ TimeoutError: QueuePool limit of size 20 overflow 10 reached, connection timed o
 > 「等事件循环」**——冒烟在 classify 睡的 800ms 里连采 127 次 `checkedout()`，恒为 0。
 > 修复前同一测法采到的是「整个 4.6 秒都占着」。
 
-## 结果七：并行到底省了多少（75 条真实分段样本）
+## 结果七：并行省了多少 —— 本节旧结论已撤回
 
-`--levels 5,20 --rounds 3 --endpoint stream --app-log-level info`，从
-`scripts/.load_test_server.log` 里抓 75 条 `本轮耗时` 逐条解析。
+这一节原先写的是「记忆本身 1326ms、两段 span 之和 2608ms 是串行代价、退回串行 TTFT 会到 2722ms」。
+**这三条都不成立，撤回**。原因有两层，第二层是补测时才发现的。
 
-真实一行（未经修饰）：
+### 第一层：`spans.memory` 的计时口径是错的（代码已修，`01ce086`）
 
-```
-本轮耗时：sessionId=…, ttft_ms=1134.1, total_ms=1195.5,
-stages=session:12.9,history:13.1,summary:13.5,classify:1038.4,memory:0.1,prepare:9.9,stream:85.5,persist:22.2,
-spans=classify:1038.4,memory:1038.4
-```
+`span_start()` 在 `create_task` 之前，`mark_span("memory")` 却在 `await mem_task` **之后**，
+于是这个 span 覆盖了「启动 → classify 跑完 → 发 intent 帧 → await」，打出来的值 ≈ `classify` 的值：
 
-注意 `stages` 里 `memory:0.1` 而 `spans` 里 `memory:1038.4` —— **同一个请求、同一个环节，两个数字差 1 万倍**，
-这就是并行后 `stages` 不能回答「这段本身多慢」的直接证明：记忆检索确实花了一秒，只是它藏在意图路由的墙钟里。
-
-| 口径 | 指标 | p50 | p95 | max |
-| --- | --- | --- | --- | --- |
-| 墙钟 | **TTFT** | **1450ms** | 3192ms | 3305ms |
-| 墙钟 | total | 1499ms | 3260ms | 3361ms |
-| `stages` | `classify`（意图路由占的墙钟） | 1304ms | 3071ms | 3182ms |
-| `stages` | `memory`（记忆占的墙钟） | **0ms** | 80ms | 485ms |
-| `stages` | `session`/`history`/`summary`/`prepare`/`stream` 合计 | 149ms | — | — |
-| `spans` | `classify` 本身耗时 | 1304ms | 3071ms | 3182ms |
-| `spans` | `memory` 本身耗时 | **1326ms** | 3071ms | 3182ms |
-| `spans` | **两段之和（若串行要付的账）** | **2608ms** | 6142ms | 6364ms |
-
-> ⚠️ **这批 `spans` 是「Mem0 两层串行」时采的**：`memory` 1326ms ≈ user 层 + session 层两次往返之和。
-> 2026-10-29 傍晚起 `search()` 内部改为两层同发（见 `docs/specs/2026-10-29-Mem0两层检索并行.md`），
-> `memory` span 预期降到单次往返量级 —— **尚未重测**。引用 1326ms 时必须说明它是并行前的口径。
-
-**串行的账被消掉了多少**（只用同一次运行内的算术，不跨批次比，避免外部抖动冒充成果）：
-
-| 说法 | 数字 |
+| | 75 条实测 |
 | --- | --- |
-| 两段外部依赖 span 之和（串行代价） | p50 2608ms |
-| 实测 TTFT | p50 **1450ms** |
-| 若退回串行，TTFT 会变成 | p50 **2722ms** |
-| `memory` 比 `classify` 还慢的样本 | **34 / 75**（比例 p50 = 1.00） |
+| `spans.classify` p50 | 1304ms |
+| `spans.memory` p50 | 1326ms（只差 157ms） |
+| `spans.classify` p95 | 3071ms |
+| `spans.memory` p95 | 3071ms（差 0.1ms） |
 
-`max(classify, memory)` 谁赢都不固定：75 条里 34 条是记忆更慢。**并行不是「顺手优化」，而是
-让两个都要 1.3 秒的依赖互相遮蔽** —— 单靠调快其中一个（比如给 Mem0 加 1500ms 预算）只能兜住长尾，
-省不下这段均值的钱。
+p95 差 0.1ms，说明它根本不是独立测量。所以当初那句「同一环节差 1 万倍，证明记忆确实花了一秒」
+是把 classify 的墙钟当成了记忆的耗时。修法：计时收进 task（起点与收尾都在里面），
+变异验证见 `tests/test_ai_stream_parallel.py::test_memory_span_excludes_classify_wall_clock`。
 
-校验一下这个解释站不站得住：用 `自有代码耗时 + max(两段外部)` 预测 TTFT，与实测的残差
-p50 = **−39ms**（即实测比理想并行还多花约 40ms，是重叠不完备的部分）。模型对得上。
+### 第二层：修好计时之后，仍然测不到检索延迟（Mem0 配额耗尽）
+
+修完重跑 75 条（`--levels 5,20 --rounds 3`）：
+
+| 项 | 值 |
+| --- | --- |
+| 命中 1500ms 预算超时 | **57 / 75（76%）** |
+| app 日志里的 `429 Too Many Requests` | **69 处** |
+| 直接调 6 次（预算设为不限） | 全部 429，耗时 270~1449ms |
+| 配额状态 | **1000 / 1000 已用尽**，`quota_reset = 2026-11-24` |
+
+也就是说：`spans.memory` 现在测到的是「429 + SDK 退避重试」的耗时，**不是检索延迟**。
+它贴着 1500ms 预算（p50 1507ms、max 1802ms），正是「重试到超时」的形状，不是真实 RTT。
+
+### 所以这一节能说什么
+
+| 能说 | 不能说 |
+| --- | --- |
+| 并行在结构上一定省掉 `min(classify, memory)` 那份等待 —— 两者互不依赖，只共享 `query` | 「省了 1.3 秒」：没有可信的 memory 延迟 |
+| `stages.memory` 会显示 0ms：记忆确实被 classify 的墙钟遮蔽（46/75 条 memory < classify） | 「两段之和 2608ms 是串行代价」：那个和是两个 classify |
+| `stages` 与 `spans` 是两个口径、不可互推（这点成立，只是当时举的例子错了） | 任何具体的 Mem0 检索耗时数字 |
+
+第三批（修正计时后）能引用的只有这些：
+
+| 指标 | p50 | p95 | max |
+| --- | --- | --- | --- |
+| TTFT（墙钟） | 2234ms | 3982ms | 4592ms |
+| `stages.classify` | 1712ms | 3399ms | 4121ms |
+| `stages.memory`（墙钟残余） | 0ms | 622ms | 672ms |
+| `spans.classify` | 1712ms | 3399ms | 4121ms |
+| `spans.memory` | 1507ms | 1737ms | 1802ms — **不可引用，见上** |
+
+### 要重新量化，得先做三件事
+
+1. 换一个有配额的 Mem0 key（或等 `2026-11-24` 重置）；
+2. 给 `429` 加快速失败（现在它被 SDK 退避重试拖到预算边缘，白占 1.5s，
+   而且会让「记忆不可用」伪装成「记忆很慢」）；
+3. 再跑一次本节命令。
+
+这三件都还没做。在那之前，**本文档不再出现任何 Mem0 检索延迟的数字**。
+
 
 > 口径提醒：这批是 **75 条、mock LLM、单档小样本**，与第一批那张 60 样本表**不可混算**，
 > 也不能拿它的 `classify` p50（1304ms）去说「意图路由变快了」—— 那段代码没改，
