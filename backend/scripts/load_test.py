@@ -196,11 +196,17 @@ def _start_mock(port: int, llm_delay_s: float, embedding: list[float]) -> Thread
     return server
 
 
-def _start_app(port: int, mock_port: int, log_path: str) -> subprocess.Popen:
+def _start_app(
+    port: int, mock_port: int, log_path: str, log_level: str = "warning"
+) -> subprocess.Popen:
     """起一个用 mock 的 uvicorn（不动你 8000 上那个实例）
 
     服务端 stderr 存文件而不是丢弃：**失败时必须能看到真实异常**，
     否则只能从 HTTP 500 反推，那不叫定位、叫猜。
+
+    `log_level` 默认 `warning`（压测只看失败）。要拿 `本轮耗时：… stages=…, spans=…`
+    这类 INFO 埋点，必须显式传 `info` —— 它们本来就是 INFO 级别，被 warning 挡住了，
+    于是「压测跑完却没有分段样本」。
     """
     env = {
         **os.environ,
@@ -225,7 +231,7 @@ def _start_app(port: int, mock_port: int, log_path: str) -> subprocess.Popen:
     }
     log = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 — 子进程持有，退出时关闭
     return subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning"],
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port), "--log-level", log_level],
         env=env,
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -593,11 +599,12 @@ async def main(args: argparse.Namespace) -> int:
     await redis_service.start()
     mock = _start_mock(args.mock_port, args.llm_delay, await _read_one_embedding())
     log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".load_test_server.log")
-    app_proc = _start_app(args.port, args.mock_port, log_path)
+    app_proc = _start_app(args.port, args.mock_port, log_path, args.app_log_level)
     base_url = f"http://127.0.0.1:{args.port}"
 
     print(f"mock LLM : http://127.0.0.1:{args.mock_port}/v1（人为延迟 {args.llm_delay}s）")
     print(f"测试实例 : {base_url}（独立于你 8000 上那个）")
+    print(f"服务端日志: {log_path}（--app-log-level {args.app_log_level}）")
     if not await _wait_ready(base_url):
         app_proc.terminate()
         mock.shutdown()
@@ -719,6 +726,12 @@ if __name__ == "__main__":
         "--out",
         default="",
         help="结果落盘路径（JSON，含 per-request 原始耗时数组）；留空只打印",
+    )
+    parser.add_argument(
+        "--app-log-level",
+        choices=["warning", "info"],
+        default="warning",
+        help="被测实例日志级别；要拿 stages/spans 分段埋点必须用 info",
     )
     parsed = parser.parse_args()
     parsed.levels = [int(x) for x in parsed.levels.split(",") if x.strip()]
