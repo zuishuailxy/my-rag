@@ -1,11 +1,10 @@
-"""查询改写的纯函数：意图→工具开关、评估上下文截断、门控输入口径。"""
+"""查询改写的纯函数：意图→工具开关、评估上下文不截断、门控输入口径。"""
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.pipeline.types import ChunkHit
 from app.services.chat_query_rewrite import (
-    _RELEVANCE_SNIPPET_LEN,
     ChatQueryRewriteService,
     RewriteResult,
     summarize_hits,
@@ -31,18 +30,42 @@ def test_to_plan_chitchat_no_tools() -> None:
     assert not plan["allow_retrieve"] and not plan["allow_graph"] and not plan["allow_web"]
 
 
-def test_summarize_hits_keeps_tail() -> None:
-    # 关键句在 chunk 中后段：截断过短会让评估器误判不切题（回归守卫）
+def test_summarize_hits_keeps_full_content() -> None:
+    """关键句在 chunk 中后段时不能被截掉
+
+    回归守卫（两次）：曾截 180 —— 评估器只看到开头的「差旅管理办法」标题 →
+    误判不切题 → 合法命中被丢 → 回答「知识库无内容」；改 1200 后只是「恰好够」，
+    chunk size 一调就重新截。现在改为不截断，长度上限交给 RAG_CHUNK_SIZE。
+    """
+    tail = "私车公用需填写《私车公用申请表》。"
     hit = ChunkHit(
         chunkId="c",
         documentId="d",
         documentTitle="差旅与费用报销管理办法",
-        content=("出差交通费按职级报销。" * 60) + "私车公用需填写《私车公用申请表》。",
+        # 约 3300 字，远超历史上任何一个截断阈值
+        content=("出差交通费按职级报销。" * 300) + tail,
         heading="交通费",
         score=0.2,
     )
-    assert _RELEVANCE_SNIPPET_LEN >= 800, "截断长度应能覆盖完整 chunk"
-    assert "私车公用申请表" in summarize_hits([hit])
+    out = summarize_hits([hit])
+    assert tail in out, "正文尾部必须保留（不再按长度截断）"
+    assert hit.documentTitle in out
+    # 压空白仍生效：连空白被压成单空格（不是截断，是有意的扁平化）
+    assert "  " not in out
+
+
+def test_summarize_hits_flattens_whitespace() -> None:
+    """压空白保留：省 token 且把表格/多行文本压平，与截断无关"""
+    hit = ChunkHit(
+        chunkId="c",
+        documentId="d",
+        documentTitle="表格文档",
+        content="第一行\n\n\n第二行\t\t第三行",
+        heading=None,
+        score=0.5,
+    )
+    out = summarize_hits([hit])
+    assert "第一行 第二行 第三行" in out
 
 
 class _FakeChoice:

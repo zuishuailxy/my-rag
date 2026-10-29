@@ -337,9 +337,9 @@ _spawn(summary.fold(...)) # fire-and-forget
 7. **TypeSafe 判别式**：意图/切题/是否改写走 TypeSafe `Choice`，改写/评估回退走 LLM。TypeSafe 不可用不影响主流程。
 8. **sources 落库**：只存回答中实际引用 `[n]` 的条目，未标注存空列表。
 9. **`data-sources` 取最后一个**：后端每次推全量、AI SDK 无 id 会 append；前端聚合时必须取最后一份快照。
-10. **评估上下文不能太短**：`summarize_hits` 送入评估器的正文截断用 `_RELEVANCE_SNIPPET_LEN`，（本项目 1200，覆盖实测最大 1016 字的 chunk）**。中文 chunk 约 700~1000 字，关键句常在中后段（实测「私车公用」在 759 字 chunk 的第 644 字）；截 180 会让评估器只看到 chunk 开头的「差旅管理办法」标题 → 误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。这是「文档搜得到、stream 查不到」的常见根因。
+10. **评估上下文不能太短**：`summarize_hits` 送评估器 / 改写器的正文现在**不截断**（只压空白，`\s+` → 单空格）。历史上截过 180：中文 chunk 约 700~1000 字，关键句常在中后段（实测「私车公用」在 759 字 chunk 的第 644 字），评估器只看得到 chunk 开头的「差旅管理办法」标题 → 误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。后来改进到 1200（覆盖实测最大 1036 字的 chunk），但那仍是「恰好够」——chunk size 一调就重新开始截。现在长度上限统一交给 `RAG_CHUNK_SIZE`。这是「文档搜得到、stream 查不到」的常见根因。
 11. **前端 `API_BASE` 必须 import**：`ChatPage` 里拼 `DefaultChatTransport.api` 用到，漏 import 会构建失败 + 运行时 `ReferenceError`。
-12. **LLM 上下文也不能截短**（与第 10 条同源）：`_pack_retrieve_result` 拼 `context` 时曾把每条正文截 800 字符（从 TS 版对齐而来）。实测库里 467 条 chunk 有 **40% 超过 800 字符**；用评测集 112 个 `expect_keywords` 匹配，**4.1% 的答案关键词落在 800 字符之后**（例：`chgrp` 的「所有者」在 826、`crontab` 的「周三」在 830、`Langfuse` 在 890），落在 1000 之后的为 0。现在正文**全文**进 context，长度上限交给 `RAG_CHUNK_SIZE`（512 token ≈ 1024 字符）。同理 `RerankerService._to_document` 删掉了 `_MAX_DOC_CHARS = 2000` 的硬截：实测最长的 rerank 输入只有 1093 字符，该阈值**一次都没触发过**，而模型（`qwen3.7-text-rerank`）单条上限是 3 万 token。**共同教训：长度上限应由分块参数保证，不要在拼接 / 送 API 时做二次静默裁剪——静默裁剪既丢内容，又掩盖配置失控**（该报的错被切成「看起来正常」，API 端则是直接 400 后静默降级成 RRF）。
+12. **LLM 上下文也不能截短**（与第 10 条同源）：`_pack_retrieve_result` 拼 `context` 时曾把每条正文截 800 字符（从 TS 版对齐而来）。实测库里 467 条 chunk 有 **40% 超过 800 字符**；用评测集 112 个 `expect_keywords` 匹配，**4.1% 的答案关键词落在 800 字符之后**（例：`chgrp` 的「所有者」在 826、`crontab` 的「周三」在 830、`Langfuse` 在 890），落在 1000 之后的为 0。现在正文**全文**进 context，长度上限交给 `RAG_CHUNK_SIZE`（512 token ≈ 1024 字符）。同理 `RerankerService._to_document` 删掉了 `_MAX_DOC_CHARS = 2000` 的硬截：实测最长的 rerank 输入只有 1093 字符，该阈值**一次都没触发过**，而模型（`qwen3.7-text-rerank`）单条上限是 3 万 token；`summarize_hits` 的 `_RELEVANCE_SNIPPET_LEN = 1200` 也一并删掉（见第 10 条，同一条链路上的第三处）。**共同教训：长度上限应由分块参数保证，不要在拼接 / 送 API 时做二次静默裁剪——静默裁剪既丢内容，又掩盖配置失控**（该报的错被切成「看起来正常」，API 端则是直接 400 后静默降级成 RRF）。
 
 
 ---

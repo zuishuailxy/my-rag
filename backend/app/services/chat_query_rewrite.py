@@ -100,13 +100,6 @@ __all__ = [
 # 改写温度固定 0：改写要可复现，不要自由发挥
 _REWRITE_TEMPERATURE = 0.0
 
-# 命中资料正文送入评估/改写的截断长度。
-# 中文 chunk 约 700~1000 字，关键句常在中后段
-#（实测「私车公用」在 759 字 chunk 的第 644 字），截 180 会让评估器只看到 chunk 开头的
-# 「差旅管理办法」标题，误判不切题 → 合法命中被丢 → stream 说「知识库无内容」。
-# 放到能覆盖整块，评估/改写才看得到真正相关的内容。
-_RELEVANCE_SNIPPET_LEN = 1200
-
 # 本轮路由意图
 CHAT_INTENTS = ("chitchat", "profile", "kb", "web", "kb_then_web")
 ChatIntent = Literal["chitchat", "profile", "kb", "web", "kb_then_web"]
@@ -370,14 +363,21 @@ def _build_retry_writer():
 
 
 def summarize_hits(hits: Sequence[ChunkHit], limit: int = 5) -> str:
-    """把命中资料拼成摘要
+    """把命中资料拼成摘要（正文全文，只压空白，不截断）
 
-    截断长度用 `_RELEVANCE_SNIPPET_LEN`。
+    这里曾按长度截断：180 → 1200。截 180 时评估器只看得到 chunk 开头的
+    「差旅管理办法」标题，关键句落在中后段的命中（实测「私车公用」在 759 字
+    chunk 的第 644 字）被判「不切题」→ 合法命中被丢 → 回答「知识库无内容」。
+    改成 1200 只是「恰好覆盖当前最长的 chunk」，chunk size 一调就重新开始截。
+
+    现在不截：长度上限由 RAG_CHUNK_SIZE（512 token ≈ 1024 字符）保证，且这里
+    只送 top5 / top3 条，总量可控。压空白是有意为之（`\\s+` → 单空格：省 token、
+    把表格/多行文本压平），不是截断。
     """
     lines = []
     for i, hit in enumerate(hits[:limit], start=1):
         heading = f" / {hit.heading}" if hit.heading else ""
-        snippet = re.sub(r"\s+", " ", hit.content).strip()[:_RELEVANCE_SNIPPET_LEN]
+        snippet = re.sub(r"\s+", " ", hit.content).strip()
         score = f"{hit.score:.2f}" if math.isfinite(hit.score) else "-"
         lines.append(f"{i}. {hit.documentTitle}{heading}（分={score}）\n{snippet}")
     return "\n".join(lines)

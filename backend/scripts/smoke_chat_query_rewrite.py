@@ -534,20 +534,22 @@ async def main() -> None:
 
         # 9f) 评估上下文必须保留 chunk 后段：
         # 回归：关键句（如「私车公用申请表」）常在 chunk 中后段（实测第 644 字），
-        # 截 180 会让评估器只看到开头的「差旅管理办法」标题 → 误判不切题 → 丢合法命中。
+        # 曾截 180 → 评估器只看到开头的「差旅管理办法」标题 → 误判不切题 → 丢合法命中。
+        # 现在不截断：正文全文送评估/改写，长度上限由 RAG_CHUNK_SIZE 保证。
         long_hit = ChunkHit(
             chunkId="cl",
             documentId="dl",
             documentTitle="差旅与费用报销管理办法",
-            content=("出差交通费按职级报销，经济舱或二等座。" * 30)
+            # 约 3600 字，远超任何历史截断阈值
+            content=("出差交通费按职级报销，经济舱或二等座。" * 200)
             + "私车公用需填写《私车公用申请表》并经 Leader 审批。",
             heading="交通费",
             score=0.2,
         )
         assert "私车公用申请表" in summarize_hits([long_hit]), (
-            "评估上下文必须保留 chunk 后段（_RELEVANCE_SNIPPET_LEN 不能太短）"
+            "评估上下文必须保留 chunk 后段（正文不截断）"
         )
-        print(" 9f) 评估上下文保留 chunk 后段 ✓（防 180 截断误判回归）")
+        print(" 9f) 评估上下文保留 chunk 后段 ✓（防截断误判回归）")
 
         # 10) TypeSafe(jev) 切题判定：优先于 LLM，失败才回退
         chat_query_rewrite_service._typesafe_client_cls = _FakeTypeSafeClient
