@@ -54,7 +54,7 @@ from app.pipeline.types import ChunkHit
 from app.schemas.ai import ChatStreamRequest, CreateSessionRequest
 from app.schemas.auth import AuthUser
 from app.services.agentic_retrieve import GradedRetrieve, retrieve_and_grade
-from app.services.chat_long_memory import chat_long_memory_service
+from app.services.chat_long_memory import LongMemoryHits, chat_long_memory_service
 from app.services.chat_memory import db_rows_to_messages
 from app.services.chat_query_rewrite import (
     KH_INTERNAL_TAG,
@@ -774,12 +774,25 @@ class AiStreamService:
         # 用 create_task + 后置 await，而不是 gather：intent 帧必须在 classify
         # 完成时立刻发出 —— gather 会让意图卡一直等到 Mem0 也回来，前端可见地变慢。
         classify_span = timing.span_start()
-        mem_span = timing.span_start()
-        mem_task = asyncio.create_task(
-            chat_long_memory_service.search(
+
+        async def _search_memory() -> LongMemoryHits:
+            """在 task **内部**计时
+
+            ⚠️ `mark_span` 必须在这里收尾，不能拖到 `await mem_task` 之后：
+            那样这个 span 会横跨 classify 的整个墙钟，打出来的 `memory` 值
+            ≈ `classify` 值，指标变成复读机（实测 75 条里两者 p50 只差 157ms、
+            p95 只差 0.1ms）。记忆本身的耗时只有在自己的 task 里收尾才测得准。
+            （变异验证：把收尾挪回外面，`test_memory_span_excludes_classify_wall_clock`
+            实测 memory span 201ms ≈ classify 的 200ms，用例变红。）
+            """
+            started = timing.span_start()
+            hits = await chat_long_memory_service.search(
                 user.user_id, persist_session_id, question
             )
-        )
+            timing.mark_span("memory", started)
+            return hits
+
+        mem_task = asyncio.create_task(_search_memory())
         try:
             plan = await chat_query_rewrite_service.classify(question, persist_history)
             timing.mark("classify")
@@ -804,7 +817,6 @@ class AiStreamService:
             # 而且它还在占着 Mem0 的连接
             if not mem_task.done():
                 mem_task.cancel()
-        timing.mark_span("memory", mem_span)
         timing.mark("memory")
 
         agent = self.create_turn_agent(user, top_k, persist_sources, plan, question)

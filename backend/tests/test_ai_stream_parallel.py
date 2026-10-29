@@ -13,11 +13,13 @@ import pytest
 
 from app.schemas.ai import ChatStreamMessage, ChatStreamMessagePart, ChatStreamRequest
 from app.schemas.auth import AuthUser
+from app.services import ai_stream as ai_stream_module
 from app.services.ai_stream import ai_stream_service
 from app.services.chat_long_memory import chat_long_memory_service
 from app.services.chat_query_rewrite import chat_query_rewrite_service
 from app.services.chat_session import chat_session_service
 from app.services.chat_summary import chat_session_summary_service
+from app.services.turn_timing import TurnTiming
 
 USER = AuthUser(user_id="1", username="tester")
 PLAN: dict[str, Any] = {
@@ -153,3 +155,49 @@ async def test_memory_failure_does_not_break_turn(
     frames = [f async for f in ai_stream_service.stream_chat(_request(), USER)]
     assert any('"data-intent"' in f for f in frames), "意图帧仍要发出"
     assert any('"type": "error"' in f for f in frames), "无 LLM Key 走早退的错误帧"
+
+
+async def test_memory_span_excludes_classify_wall_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`spans.memory` 必须是记忆**自己**的耗时，不能把 classify 的墙钟算进去
+
+    回归锚点：把 `span_start()` 挪回 `create_task` 之前，这个 span 会横跨
+    classify，值涨到 ≈ 200ms（本用例阈值 100ms）→ 必红。
+
+    真实踩过：75 条压测里 `spans.memory` 与 `spans.classify` 的 p50 只差 157ms、
+    p95 只差 0.1ms —— 指标成了 classify 的复读机，还被当成「记忆本身要 1.3 秒」
+    写进了文档。
+    """
+    _patch_db_side(monkeypatch)
+    captured: dict[str, TurnTiming] = {}
+
+    class _RecordingTiming(TurnTiming):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            captured["timing"] = self
+
+    monkeypatch.setattr(ai_stream_module, "TurnTiming", _RecordingTiming)
+
+    async def slow_classify(question: str, history: list[Any]) -> dict[str, Any]:
+        await asyncio.sleep(0.20)
+        return PLAN
+
+    async def quick_search(
+        user_id: str, session_id: str | None, query: str
+    ) -> dict[str, Any]:
+        await asyncio.sleep(0.02)
+        return {"user": [], "session": []}
+
+    monkeypatch.setattr(chat_query_rewrite_service, "classify", slow_classify)
+    monkeypatch.setattr(chat_long_memory_service, "search", quick_search)
+
+    async for _ in ai_stream_service.stream_chat(_request(), USER):
+        pass
+
+    spans = captured["timing"].spans
+    assert spans["classify"] >= 200, f"classify 应测到 200ms 以上，实得 {spans['classify']}"
+    assert spans["memory"] < 100, (
+        f"memory span={spans['memory']}ms ≈ classify 的墙钟，"
+        "说明计时起点放到了 task 外面"
+    )
