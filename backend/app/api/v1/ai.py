@@ -132,17 +132,23 @@ async def ai_chat(dto: ChatRequest, user: _USER, db: _DB) -> ChatResponse:
     dependencies=[Depends(require_permission("search"))],
 )
 async def ai_chat_stream(
-    dto: ChatStreamRequest, user: _USER, db: _DB
+    dto: ChatStreamRequest, user: _USER
 ) -> StreamingResponse:
     """流式对话：agent 流式作答，UI Message Stream（AI SDK v6 SSE 协议）
 
     响应头
     media_type 提供，协议版本头前端 DefaultChatTransport 校验用）。
+
+    ⚠️ **刻意不注入 `db`**：FastAPI 的生成器依赖活到整个流结束，`Depends(get_db_session)`
+    会让一条连接陪着 classify + Mem0 + 整段流式（实测 4.6s）以 `idle in transaction`
+    状态空转，池 30 在并发 40 时直接耗尽 → 排队 30s 被记成「处理耗时 32 秒」。
+    服务内部改用两个短会话块，见 `AiStreamService.stream_chat` 的 docstring 与
+    docs/specs/2026-10-29-流式链路资源与延迟治理.md。
     """
     # 在开始推流前校验配额：超限直接 429（而不是 200 + SSE 错误事件）
     await _enforce_quota(user, dto.sessionId)
     return StreamingResponse(
-        ai_stream_service.stream_chat(db, dto, user),
+        ai_stream_service.stream_chat(dto, user),
         media_type="text/event-stream",
         headers={
             "x-vercel-ai-ui-message-stream": "v1",

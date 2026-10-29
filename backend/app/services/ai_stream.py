@@ -18,18 +18,6 @@ messages；落库尾部 `remember_turn` 异步写回。
 滚动摘要（ChatSessionSummaryService）：把滑出热窗口的旧历史增量折叠；作答时作为
 SystemMessage 前置，落库后后台 fold，不阻塞回答。
 
-🔴 刻意差异：
-- **协议编码器自研**（UiMessageStreamWriter）：
-  toUIMessageStream，Python 无合适替代（候选包或要求高版本 fastapi、或丢 reasoning、
-  或不支持 data-* / 流合并）。
-- **agent 流用 stream_mode=["messages","updates","custom"]**：
-  ["messages","tools"]；Python 的 tools 等价物是 updates 取 ToolMessage，custom 是
-  工具内推 data-* 的通道。
-：改由 ChatSessionSummaryService 做
-  **跨请求持久化**的滚动摘要（中间件只在 agent state 内、每轮重算、不持久）。
-- **mapReasoningStream 不需要**：DeepSeek reasoning_content 直接落在
-  AIMessageChunk.additional_kwargs，这里直接映射 reasoning-* parts。
-
 落库语义：sources 只存回答中实际引用 [n] 的条目，未标注存空列表。
 """
 
@@ -56,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.document_access import access_from_user, empty_scope
 from app.core.config import settings
+from app.db.session import async_session_factory
 from app.services.llm_budget import usage_callbacks
 from app.pipeline.types import ChunkHit
 from app.schemas.ai import ChatStreamRequest, CreateSessionRequest
@@ -115,7 +104,7 @@ def _stream_writer() -> Any:
     """
     try:
         return get_stream_writer()
-    except Exception: # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return _noop_stream_writer
 
 
@@ -158,7 +147,12 @@ class UiMessageStreamWriter:
 
     def source_document(self, source_id: str, media_type: str, title: str) -> str:
         return self.write(
-            {"type": "source-document", "sourceId": source_id, "mediaType": media_type, "title": title}
+            {
+                "type": "source-document",
+                "sourceId": source_id,
+                "mediaType": media_type,
+                "title": title,
+            }
         )
 
     # ---- 自动开合的正文 / 思考 ----
@@ -168,12 +162,16 @@ class UiMessageStreamWriter:
         if self._text_id is None:
             # 正文开始时收口尚未结束的思考 part（保持 part 互不嵌套）
             if self._reasoning_id is not None:
-                events += self.write({"type": "reasoning-end", "id": self._reasoning_id})
+                events += self.write(
+                    {"type": "reasoning-end", "id": self._reasoning_id}
+                )
                 self._reasoning_id = None
             self._text_id = self._next_id("text")
             events += self.write({"type": "text-start", "id": self._text_id})
         self.text_parts.append(delta)
-        return events + self.write({"type": "text-delta", "id": self._text_id, "delta": delta})
+        return events + self.write(
+            {"type": "text-delta", "id": self._text_id, "delta": delta}
+        )
 
     def text_end(self) -> str:
         if self._text_id is None:
@@ -203,10 +201,16 @@ class UiMessageStreamWriter:
     def tool_input_start(self, tool_call_id: str, tool_name: str) -> str:
         self._tool_input_started.add(tool_call_id)
         return self.write(
-            {"type": "tool-input-start", "toolCallId": tool_call_id, "toolName": tool_name}
+            {
+                "type": "tool-input-start",
+                "toolCallId": tool_call_id,
+                "toolName": tool_name,
+            }
         )
 
-    def tool_input_available(self, tool_call_id: str, tool_name: str, tool_input: Any) -> str:
+    def tool_input_available(
+        self, tool_call_id: str, tool_name: str, tool_input: Any
+    ) -> str:
         self._tool_input_sent.add(tool_call_id)
         return self.write(
             {
@@ -218,10 +222,17 @@ class UiMessageStreamWriter:
         )
 
     def tool_output_available(self, tool_call_id: str, output: Any) -> str:
-        return self.write({"type": "tool-output-available", "toolCallId": tool_call_id, "output": output})
+        return self.write(
+            {
+                "type": "tool-output-available",
+                "toolCallId": tool_call_id,
+                "output": output,
+            }
+        )
 
 
 # ---- 工具参数 schema----
+
 
 class _WebSearchInput(BaseModel):
     """web_search 工具参数"""
@@ -234,7 +245,9 @@ class _RetrieveKnowledgeInput(BaseModel):
     """retrieve_knowledge 工具参数"""
 
     query: str = Field(min_length=1, description="适合检索的关键词或短句")
-    top_k: int | None = Field(default=None, ge=1, le=10, description="条数，默认与请求一致")
+    top_k: int | None = Field(
+        default=None, ge=1, le=10, description="条数，默认与请求一致"
+    )
 
 
 class _RewriteQueryInput(BaseModel):
@@ -252,16 +265,25 @@ class _GraphSearchInput(BaseModel):
     )
 
 
-@tool("web_search", description=(
-    "联网搜索（Tavily）。知识库循环结束后仍不足、或本轮只需公开时效信息时再调用。"
-    "不要用网页替代已切题的知识库资料。"
-), args_schema=_WebSearchInput)
+@tool(
+    "web_search",
+    description=(
+        "联网搜索（Tavily）。知识库循环结束后仍不足、或本轮只需公开时效信息时再调用。"
+        "不要用网页替代已切题的知识库资料。"
+    ),
+    args_schema=_WebSearchInput,
+)
 async def _web_search(query: str, count: int = 5) -> dict[str, Any]:
     result = await web_search_service.search(query, count)
     out: dict[str, Any] = {
         "query": result.query,
         "items": [
-            {"title": h.title, "url": h.url, "snippet": h.snippet, "siteName": h.siteName}
+            {
+                "title": h.title,
+                "url": h.url,
+                "snippet": h.snippet,
+                "siteName": h.siteName,
+            }
             for h in result.items
         ],
     }
@@ -272,7 +294,9 @@ async def _web_search(query: str, count: int = 5) -> dict[str, Any]:
 
 def _build_agent_llm() -> ChatDeepSeek | None:
     """构建 agent 用 LLM；未配置 API Key 返回 None"""
-    api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
+    api_key = (
+        settings.OPENAI_API_KEY or settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY
+    )
     if not api_key:
         return None
 
@@ -280,7 +304,7 @@ def _build_agent_llm() -> ChatDeepSeek | None:
     model = settings.MODEL_NAME or settings.LLM_MODEL
     timeout_ms = settings.AI_CHAT_TIMEOUT_MS
     timeout_s = timeout_ms / 1000 if timeout_ms > 0 else 60.0
-# 'false' 时 enable_thinking；DeepSeek 用 thinking.type
+    # 'false' 时 enable_thinking；DeepSeek 用 thinking.type
     thinking_enabled = settings.LLM_ENABLE_THINKING != "false"
 
     # 刻意差异：用 ChatDeepSeek 而非 ChatOpenAI。langchain-openai 1.6.0 明确不抽取
@@ -505,6 +529,7 @@ class AiStreamService:
         turn_state: dict[str, Any] = {"retrieve_count": 0, "last_retrieve": None}
 
         if plan["allow_retrieve"]:
+
             @tool(
                 "retrieve_knowledge",
                 args_schema=_RetrieveKnowledgeInput,
@@ -577,9 +602,15 @@ class AiStreamService:
                 if last is None:
                     return {"error": "请先调用 retrieve_knowledge"}
                 if last.eval.ok:
-                    return {"error": "当前资料已切题，无需改写", "query": last.used_query}
+                    return {
+                        "error": "当前资料已切题，无需改写",
+                        "query": last.used_query,
+                    }
                 _stream_writer()(
-                    {"type": "data-status", "data": {"stage": "rewrite", "text": "正在改写检索词…"}}
+                    {
+                        "type": "data-status",
+                        "data": {"stage": "rewrite", "text": "正在改写检索词…"},
+                    }
                 )
                 retry_query = await rewrite.rewrite_after_retrieve(
                     question, last.used_query, last.grade, last.raw_hits
@@ -667,9 +698,18 @@ class AiStreamService:
         )
 
     async def stream_chat(
-        self, db: AsyncSession, dto: ChatStreamRequest, user: AuthUser
+        self, dto: ChatStreamRequest, user: AuthUser
     ) -> AsyncIterator[str]:
-        """SSE 事件流生成器"""
+        """SSE 事件流生成器
+
+        ⚠️ **刻意不接收 `db`**：这个生成器活到整个流结束，若用
+        `Depends(get_db_session)` 传进来，连接会从第一句 SQL 一直被占到最后一个 delta。
+        实测过后果（2026-10-29）：`session.refresh()` 会重新开启事务且不再提交，
+        连接以 `idle in transaction` 状态陪着 classify(1.6s) + Mem0(1.8s) + 流式，
+        池 30 在并发 40 时耗尽 → `pool_timeout` 30s 被记成「处理耗时 32 秒」。
+        现在 DB 只出现在「前置」与「收尾」两个短会话块里，出块即 close 归还连接。
+        详见 docs/specs/2026-10-29-流式链路资源与延迟治理.md。
+        """
         # 分段耗时：终点是「首个正文/思考 delta」，不是 SSE 首帧
         # （首帧是 start，业务逻辑开始之前就发出去了，测它得不到任何优化信息）
         timing = TurnTiming()
@@ -691,22 +731,30 @@ class AiStreamService:
             return
 
         # 会话：有 id 走 touchTitle（默认标题时用首问覆盖），否则新建
-        if dto.sessionId:
-            sess = await chat_session_service.touch_title(
-                db, user.user_id, dto.sessionId, question
-            )
-        else:
-            sess = await chat_session_service.create(
-                db, user.user_id, CreateSessionRequest(title=title_from_question(question))
-            )
-        persist_session_id = str(sess.id)
+        # 短会话块 ①：出块即归还连接（refresh 之后事务仍开着，见方法 docstring）
+        async with async_session_factory() as db:
+            if dto.sessionId:
+                sess = await chat_session_service.touch_title(
+                    db, user.user_id, dto.sessionId, question
+                )
+            else:
+                sess = await chat_session_service.create(
+                    db,
+                    user.user_id,
+                    CreateSessionRequest(title=title_from_question(question)),
+                )
+            # ⚠️ id 必须在块内取：出块后实体已 detach
+            persist_session_id = str(sess.id)
         timing.mark("session")
         yield writer.data("session", {"sessionId": persist_session_id})
 
         # 历史：先读 Redis 热窗口，miss 才查库回填
-        history = await self.load_working_history(db, user.user_id, persist_session_id)
+        # 短会话块 ②：Redis 命中时根本不碰库
+        async with async_session_factory() as db:
+            persist_history = await self.load_working_history(
+                db, user.user_id, persist_session_id
+            )
         timing.mark("history")
-        persist_history = history
 
         # 滚动摘要：热窗口之外的旧历史（Redis + Postgres 双写，Redis 优先）
         summary_state = await chat_session_summary_service.try_load(
@@ -716,7 +764,7 @@ class AiStreamService:
 
         # 意图路由（TypeSafe）在 agent 之前完成：工具列表按 plan 挂载，前端立刻能画意图卡
         yield writer.data("status", {"stage": "intent", "text": "正在识别意图…"})
-        plan = await chat_query_rewrite_service.classify(question, history)
+        plan = await chat_query_rewrite_service.classify(question, persist_history)
         timing.mark("classify")
         yield writer.data(
             "intent",
@@ -760,7 +808,7 @@ class AiStreamService:
         messages: list[BaseMessage] = [
             *([summary_msg] if summary_msg else []),
             *([memory_msg] if memory_msg else []),
-            *history,
+            *persist_history,
             HumanMessage("\n\n".join(human_parts)),
         ]
         timing.mark("prepare")
@@ -800,7 +848,11 @@ class AiStreamService:
                     for tc in chunk.tool_call_chunks or []:
                         tc_id = tc.get("id")
                         tc_name = tc.get("name")
-                        if tc_id and tc_name and tc_id not in writer._tool_input_started:
+                        if (
+                            tc_id
+                            and tc_name
+                            and tc_id not in writer._tool_input_started
+                        ):
                             yield writer.tool_input_start(str(tc_id), str(tc_name))
                     for call in chunk.tool_calls or []:
                         call_id = call.get("id")
@@ -810,7 +862,7 @@ class AiStreamService:
                                 str(call.get("name") or ""),
                                 call.get("args") or {},
                             )
-                else: # updates：工具结果
+                else:  # updates：工具结果
                     for msg in _iter_tool_messages(payload):
                         if msg.tool_call_id in writer._tool_input_sent:
                             yield writer.tool_output_available(
@@ -820,7 +872,7 @@ class AiStreamService:
             yield writer.reasoning_end()
             yield writer.text_end()
             timing.mark("stream")
-        except Exception as exc: # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning("LangChain 流失败：%s", exc)
         finally:
             end_turn(usage_token)
@@ -843,14 +895,20 @@ class AiStreamService:
             return
         final_answer = answer or "未能生成回答。"
         try:
-            await chat_session_service.append_turn(
-                db, user.user_id, persist_session_id, question, final_answer, cited
-            )
-            # 短期记忆回写：history + 本轮问答（appendTurn 内部再截断到窗口）
+            # 短会话块 ③：落库；出块即归还连接
+            async with async_session_factory() as db:
+                await chat_session_service.append_turn(
+                    db, user.user_id, persist_session_id, question, final_answer, cited
+                )
+            # 短期记忆回写（Redis，不占库连接）：history + 本轮问答
             await chat_short_memory_service.append_turn(
-                user.user_id, persist_session_id, persist_history, question, final_answer
+                user.user_id,
+                persist_session_id,
+                persist_history,
+                question,
+                final_answer,
             )
-        except Exception as exc: # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning("流式对话落库失败：%s", exc)
         timing.mark("persist")
 
@@ -859,7 +917,11 @@ class AiStreamService:
         logger.info(
             "本轮耗时：sessionId=%s, ttft_ms=%s, total_ms=%.1f, stages=%s",
             persist_session_id,
-            f"{timing.first_token_ms:.1f}" if timing.first_token_ms is not None else "-1",
+            (
+                f"{timing.first_token_ms:.1f}"
+                if timing.first_token_ms is not None
+                else "-1"
+            ),
             timing.elapsed_ms,
             timing.stages_text(),
         )
