@@ -1,11 +1,15 @@
 """AI 流式对话服务
 
 Agentic RAG 链路：会话（touchTitle / 新建）→ 取历史（Redis 热窗口，miss 回填库）
-→ 滚动摘要 → 意图识别（TypeSafe classify → data-intent）→ 长期记忆检索
+→ 滚动摘要 → 【意图识别（TypeSafe classify → data-intent） ∥ 长期记忆检索】
 → 按意图现建 agent 并挂工具（retrieve_knowledge / rewrite_query / web_search）
 → agent 循环（模型驱动：检索 → 评估 → 不足则改写再查，最多两次 → 仍不足才联网）
 → UI Message Stream（AI SDK v6 SSE）→ 落库（appendTurn + 短期/长期记忆）
 → 后台滚动摘要折叠。
+
+意图识别与长期记忆检索**并行**（两者输入互不依赖，实测各 1.6~1.8s）：
+用 `create_task` 起 Mem0、先 await classify 发 intent 帧，再收 Mem0 的结果 ——
+`gather` 会让意图卡白等 Mem0，前端可见地变慢。
 
 工具内用 LangGraph `get_stream_writer()` 推 `data-eval` / `data-sources` /
 `source-document` / `data-status`（custom 流）；SSE 生成器把 custom 帧原样转发。
@@ -764,25 +768,43 @@ class AiStreamService:
 
         # 意图路由（TypeSafe）在 agent 之前完成：工具列表按 plan 挂载，前端立刻能画意图卡
         yield writer.data("status", {"stage": "intent", "text": "正在识别意图…"})
-        plan = await chat_query_rewrite_service.classify(question, persist_history)
-        timing.mark("classify")
-        yield writer.data(
-            "intent",
-            {
-                "intent": plan["intent"],
-                "label": plan["label"],
-                "query": plan["query"],
-                "graphQueries": plan["graph_queries"],
-                "allowRetrieve": plan["allow_retrieve"],
-                "allowGraph": plan["allow_graph"],
-                "allowWeb": plan["allow_web"],
-            },
-        )
 
-        # 长期记忆检索
-        mem_hits = await chat_long_memory_service.search(
-            user.user_id, persist_session_id, question
+        # classify 与长期记忆检索**互不依赖**（一个要 question+history，一个要
+        # user_id+session_id+question），实测各 1.6~1.8s，串行就是白等一份。
+        # 用 create_task + 后置 await，而不是 gather：intent 帧必须在 classify
+        # 完成时立刻发出 —— gather 会让意图卡一直等到 Mem0 也回来，前端可见地变慢。
+        classify_span = timing.span_start()
+        mem_span = timing.span_start()
+        mem_task = asyncio.create_task(
+            chat_long_memory_service.search(
+                user.user_id, persist_session_id, question
+            )
         )
+        try:
+            plan = await chat_query_rewrite_service.classify(question, persist_history)
+            timing.mark("classify")
+            timing.mark_span("classify", classify_span)
+            yield writer.data(
+                "intent",
+                {
+                    "intent": plan["intent"],
+                    "label": plan["label"],
+                    "query": plan["query"],
+                    "graphQueries": plan["graph_queries"],
+                    "allowRetrieve": plan["allow_retrieve"],
+                    "allowGraph": plan["allow_graph"],
+                    "allowWeb": plan["allow_web"],
+                },
+            )
+            # search 内部已吞掉所有异常并返回空，这里不会抛
+            mem_hits = await mem_task
+        finally:
+            # classify 抛错 / 生成器被关闭时不能让 task 悬着：
+            # 未回收的 task 会在事件循环关闭时冒「Task was destroyed」告警，
+            # 而且它还在占着 Mem0 的连接
+            if not mem_task.done():
+                mem_task.cancel()
+        timing.mark_span("memory", mem_span)
         timing.mark("memory")
 
         agent = self.create_turn_agent(user, top_k, persist_sources, plan, question)
@@ -791,9 +813,10 @@ class AiStreamService:
             yield writer.finish()
             yield _SSE_DONE
             logger.warning(
-                "本轮耗时（提前结束：未配置 LLM Key）：sessionId=%s, stages=%s",
+                "本轮耗时（提前结束：未配置 LLM Key）：sessionId=%s, stages=%s, spans=%s",
                 persist_session_id,
                 timing.stages_text(),
+                timing.spans_text(),
             )
             return
 
@@ -915,7 +938,7 @@ class AiStreamService:
         # 分段耗时：一行打完，便于 grep 与后续按阶段统计
         # ttft_ms = 请求进来到首个正文/思考 delta；total_ms 含落库
         logger.info(
-            "本轮耗时：sessionId=%s, ttft_ms=%s, total_ms=%.1f, stages=%s",
+            "本轮耗时：sessionId=%s, ttft_ms=%s, total_ms=%.1f, stages=%s, spans=%s",
             persist_session_id,
             (
                 f"{timing.first_token_ms:.1f}"
@@ -924,6 +947,7 @@ class AiStreamService:
             ),
             timing.elapsed_ms,
             timing.stages_text(),
+            timing.spans_text(),
         )
         # 长期记忆写入不 await：分类器是一次额外 LLM 调用，
         # 不能让用户等它；remember_turn 内部已吞异常只 WARN。
