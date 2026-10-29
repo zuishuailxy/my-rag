@@ -5,6 +5,7 @@
 ```
 docs/
 ├── architecture/   设计文档 —— 讲「这个系统为什么这么做」
+├── benchmarks/     压测数据 —— 讲「实测出来是什么样」，含原始样本
 └── interview/      面试材料 —— 讲「我为什么这么做，以及怎么证明」
 ```
 
@@ -20,6 +21,17 @@ docs/
 | [`发布索引链路.md`](architecture/发布索引链路.md) | 发布后异步索引管线：一写三索引、幂等与失败重试 |
 | [`上传解析模块.md`](architecture/上传解析模块.md) | 多格式解析（PDF/Word/PPT/Excel/图片）与资源托管 |
 | [`文档模块CRUD.md`](architecture/文档模块CRUD.md) | 文档模块的数据模型与增删改查设计 |
+
+## benchmarks/ —— 压测数据
+
+面向**「这个数字是怎么来的」**：每次压测留一份原始 JSON（每请求耗时数组 + 环境元信息），
+分位数随时可重算，不必重跑。
+
+| 文件 | 内容 |
+| --- | --- |
+| [`benchmarks/README.md`](benchmarks/README.md) | 结果汇总：流式/非流式两套表格、TTFT 分段拆解、已知问题、与历史数据的关系 |
+| `2026-10-29-stream.json` | 流式端点原始样本（5 档 × 3 轮，含 `ttft` / `first_frame` / `total` 数组） |
+| `2026-10-29-chat.json` | 非流式端点原始样本（同环境对照） |
 
 ## interview/ —— 面试材料
 

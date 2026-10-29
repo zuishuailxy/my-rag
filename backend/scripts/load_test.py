@@ -302,21 +302,42 @@ class PgConnectionSampler:
 
 
 async def _one_stream(client: httpx.AsyncClient, url: str, headers: dict, payload: dict) -> dict:
-    """发一路流式请求，记录总时长与首字节 TTFT"""
+    """发一路流式请求，记首帧 / 首个内容 token / 总时长
+
+    ⚠️ **首帧不是 TTFT**：SSE 的 `start` 帧在业务逻辑开始之前就发出去了，
+    测它只会得到「连接建好要多久」，对优化毫无信息量（旧版就把它叫 TTFT）。
+    真正的首 token 取第一个带 delta 的 `text-delta` / `reasoning-delta` 帧。
+    """
     start = time.perf_counter()
+    first_frame: float | None = None
     ttft: float | None = None
     status = 0
     try:
         async with client.stream("POST", url, headers=headers, json=payload, timeout=180) as resp:
             status = resp.status_code
             async for line in resp.aiter_lines():
-                if line.startswith("data:") and ttft is None:
-                    ttft = time.perf_counter() - start
+                if not line.startswith("data:"):
+                    continue
+                now = time.perf_counter() - start
+                if first_frame is None:
+                    first_frame = now
+                if ttft is not None:
+                    continue
+                body = line[5:].strip()
+                if not body or body == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(body)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") in ("text-delta", "reasoning-delta"):
+                    ttft = now
     except Exception as err:  # noqa: BLE001
         return {"ok": False, "status": status, "error": str(err)[:120], "total": time.perf_counter() - start}
     return {
         "ok": status == 200,
         "status": status,
+        "first_frame": first_frame,
         "ttft": ttft,
         "total": time.perf_counter() - start,
     }
@@ -345,49 +366,80 @@ def _pct(values: list[float], p: float) -> float:
     return ordered[max(0, idx)]
 
 
+def _payload(endpoint: str) -> dict:
+    """两种端点的请求体形状不同：`/chat` 收 content，`/chat/stream` 收 useChat 的 messages
+
+    （旧版无论哪个端点都发 content，stream 分支一直是 422 —— 也就是说
+    历史上的「TTFT」从来没真正测到过，看到的只是非流式端点的总时长。）
+    """
+    if endpoint == "stream":
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": QUESTION_MARKER}],
+                }
+            ],
+            "topK": 5,
+            "sessionId": None,
+        }
+    return {"content": QUESTION_MARKER, "topK": 5, "sessionId": None}
+
+
 async def _run_level(
-    level: int, base_url: str, endpoint: str, token: str, sampler: PgConnectionSampler
+    level: int,
+    base_url: str,
+    endpoint: str,
+    token: str,
+    sampler: PgConnectionSampler,
+    rounds: int = 1,
 ) -> dict:
+    """跑一档并发。`rounds` 轮样本合并统计 —— 样本太少时 p95 会退化成 max
+    （n=20 时 p95 取到排序后第 20 个，就是最大值），多轮才能让高分位数有意义。"""
     url = f"{base_url}/api/v1/ai/chat" + ("/stream" if endpoint == "stream" else "")
     headers = {"Authorization": f"Bearer {token}"}
     runner = _one_stream if endpoint == "stream" else _one_chat
+    payload = _payload(endpoint)
 
-    await _reset_quota()
-
-    async with httpx.AsyncClient() as client:
-        started = time.perf_counter()
-        tasks = [
-            runner(
-                client,
-                url,
-                headers,
-                {
-                    "content": QUESTION_MARKER,
-                    "topK": 5,
-                    "sessionId": None,  # 每次新建会话 → 不撞每会话限额
-                },
-            )
-            for _ in range(level)
-        ]
-        results = await asyncio.gather(*tasks)
-        wall = time.perf_counter() - started
+    results: list[dict] = []
+    wall_total = 0.0
+    for _ in range(max(1, rounds)):
+        # 每轮清配额，保证各轮在同一起跑线（可重复跑）
+        await _reset_quota()
+        async with httpx.AsyncClient() as client:
+            started = time.perf_counter()
+            tasks = [
+                runner(client, url, headers, payload)
+                for _ in range(level)
+            ]
+            results.extend(await asyncio.gather(*tasks))
+            wall_total += time.perf_counter() - started
 
     totals = [r["total"] for r in results]
     ttfts = [r["ttft"] for r in results if r.get("ttft")]
+    frames = [r["first_frame"] for r in results if r.get("first_frame")]
     errors = [r for r in results if not r["ok"]]
     return {
         "level": level,
-        "wall": wall,
+        "rounds": max(1, rounds),
+        "samples": len(results),
+        "wall": wall_total,
         "ok": len(results) - len(errors),
         "errors": len(errors),
-        "error_sample": errors[0]["error"] if errors else "",
+        "error_sample": (
+            (errors[0].get("error") or f"HTTP {errors[0].get('status')}") if errors else ""
+        ),
         "p50": statistics.median(totals) if totals else 0.0,
         "p95": _pct(totals, 95),
         "max": max(totals) if totals else 0.0,
         "ttft_p50": statistics.median(ttfts) if ttfts else None,
         "ttft_p95": _pct(ttfts, 95) if ttfts else None,
-        "rps": len(results) / wall if wall else 0.0,
+        "first_frame_p50": statistics.median(frames) if frames else None,
+        "rps": len(results) / wall_total if wall_total else 0.0,
         "peak_conn": max(sampler.samples) if sampler.samples else 0,
+        # 原始样本：落盘后 p99 / 任意分位都能重算，不必重跑
+        "totals": totals,
+        "ttfts": ttfts,
     }
 
 
@@ -442,12 +494,68 @@ async def _cleanup_sessions() -> int:
     return len(ids)
 
 
+def _git_commit() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return out.stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _write_results(
+    path: str,
+    args: argparse.Namespace,
+    rows: list[dict],
+    pool_capacity: int,
+    worst_peak: int,
+    started_at: str,
+) -> None:
+    """落盘：**per-request 原始耗时数组** + 环境元信息
+
+    只存聚合值（p50/p95/max）等于把分位数写死：事后想补 p99、想换算法、
+    想和另一次结果合并统计，都得整轮重跑。存原始数组则随便重算。
+    """
+    payload = {
+        "meta": {
+            "started_at": started_at,
+            "ended_at": _now_iso(),
+            "commit": _git_commit(),
+            "endpoint": args.endpoint,
+            "levels": args.levels,
+            "rounds": args.rounds,
+            "llm_delay_s": args.llm_delay,
+            "pool_capacity": pool_capacity,
+            "peak_conn_observed": worst_peak,
+            "definitions": {
+                "ttft": "请求发出 → 首个 text-delta / reasoning-delta 帧（不是 SSE 首帧）",
+                "total": "请求发出 → 响应流结束",
+                "p95": "最近秩法；样本数 n 时取 round(0.95*n+0.5) 位，n≤20 会退化到 max",
+            },
+        },
+        "rows": rows,
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
 # ------------------------------------------------------------------------ main
 
 
 async def main(args: argparse.Namespace) -> int:
     from app.db.redis import redis_service
 
+    started_at = _now_iso()
     await redis_service.start()
     mock = _start_mock(args.mock_port, args.llm_delay, await _read_one_embedding())
     log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".load_test_server.log")
@@ -465,20 +573,22 @@ async def main(args: argparse.Namespace) -> int:
     sampler = PgConnectionSampler()
     sampler_task = asyncio.create_task(sampler.run())
 
-    print(f"\n{'并发':>4} {'成功':>4} {'失败':>4} {'p50(s)':>8} {'p95(s)':>8} {'max(s)':>8} "
+    print(f"\n{'并发':>4} {'样本':>4} {'成功':>4} {'失败':>4} {'p50(s)':>8} {'p95(s)':>8} {'max(s)':>8} "
           f"{'RPS':>6} {'峰值连接':>8}")
     rows: list[dict] = []
     try:
         for level in args.levels:
-            row = await _run_level(level, base_url, args.endpoint, token, sampler)
+            row = await _run_level(
+                level, base_url, args.endpoint, token, sampler, args.rounds
+            )
             rows.append(row)
             ttft = (
-                f"  首字节 p50={row['ttft_p50']:.2f}s p95={row['ttft_p95']:.2f}s"
+                f"  首token p50={row['ttft_p50']:.2f}s p95={row['ttft_p95']:.2f}s"
                 if row["ttft_p50"]
                 else ""
             )
             print(
-                f"{row['level']:>4} {row['ok']:>4} {row['errors']:>4} "
+                f"{row['level']:>4} {row['samples']:>4} {row['ok']:>4} {row['errors']:>4} "
                 f"{row['p50']:>8.2f} {row['p95']:>8.2f} {row['max']:>8.2f} "
                 f"{row['rps']:>6.2f} {row['peak_conn']:>8}{ttft}"
             )
@@ -525,6 +635,10 @@ async def main(args: argparse.Namespace) -> int:
     else:
         print("  ✅ 未出现失败请求")
 
+    if args.out:
+        _write_results(args.out, args, rows, capacity, worst, started_at)
+        print(f"  原始样本已落盘：{args.out}")
+
     removed = await _cleanup_sessions()
     print(f"  清理压测会话：{removed} 条")
 
@@ -549,6 +663,17 @@ if __name__ == "__main__":
         type=float,
         default=0.05,
         help="mock LLM 每段延迟（秒）；纯 0 延迟测不出排队",
+    )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=1,
+        help="每档重复轮数；样本数 = 并发 × 轮数，p95 在样本 <40 时没有意义",
+    )
+    parser.add_argument(
+        "--out",
+        default="",
+        help="结果落盘路径（JSON，含 per-request 原始耗时数组）；留空只打印",
     )
     parsed = parser.parse_args()
     parsed.levels = [int(x) for x in parsed.levels.split(",") if x.strip()]

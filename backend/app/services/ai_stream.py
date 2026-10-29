@@ -74,6 +74,7 @@ from app.services.chat_summary import chat_session_summary_service
 from app.services.graph_build import format_graph_context, graph_build_service
 from app.services.llm_budget import end_turn, start_turn
 from app.services.retrieval import hybrid_retrieval_service
+from app.services.turn_timing import TurnTiming
 from app.services.web_search import web_search_service
 
 logger = logging.getLogger("AiStreamService")
@@ -669,6 +670,9 @@ class AiStreamService:
         self, db: AsyncSession, dto: ChatStreamRequest, user: AuthUser
     ) -> AsyncIterator[str]:
         """SSE 事件流生成器"""
+        # 分段耗时：终点是「首个正文/思考 delta」，不是 SSE 首帧
+        # （首帧是 start，业务逻辑开始之前就发出去了，测它得不到任何优化信息）
+        timing = TurnTiming()
         writer = UiMessageStreamWriter()
         question = last_user_text(dto.messages)
         top_k = dto.topK or 5
@@ -696,20 +700,24 @@ class AiStreamService:
                 db, user.user_id, CreateSessionRequest(title=title_from_question(question))
             )
         persist_session_id = str(sess.id)
+        timing.mark("session")
         yield writer.data("session", {"sessionId": persist_session_id})
 
         # 历史：先读 Redis 热窗口，miss 才查库回填
         history = await self.load_working_history(db, user.user_id, persist_session_id)
+        timing.mark("history")
         persist_history = history
 
         # 滚动摘要：热窗口之外的旧历史（Redis + Postgres 双写，Redis 优先）
         summary_state = await chat_session_summary_service.try_load(
             user.user_id, persist_session_id
         )
+        timing.mark("summary")
 
         # 意图路由（TypeSafe）在 agent 之前完成：工具列表按 plan 挂载，前端立刻能画意图卡
         yield writer.data("status", {"stage": "intent", "text": "正在识别意图…"})
         plan = await chat_query_rewrite_service.classify(question, history)
+        timing.mark("classify")
         yield writer.data(
             "intent",
             {
@@ -727,12 +735,18 @@ class AiStreamService:
         mem_hits = await chat_long_memory_service.search(
             user.user_id, persist_session_id, question
         )
+        timing.mark("memory")
 
         agent = self.create_turn_agent(user, top_k, persist_sources, plan, question)
         if agent is None:
             yield writer.error("未配置 LLM Key，无法生成回答")
             yield writer.finish()
             yield _SSE_DONE
+            logger.warning(
+                "本轮耗时（提前结束：未配置 LLM Key）：sessionId=%s, stages=%s",
+                persist_session_id,
+                timing.stages_text(),
+            )
             return
 
         # 会话摘要（早前对话）与长期记忆各拼一条 SystemMessage 前置；
@@ -749,6 +763,7 @@ class AiStreamService:
             *history,
             HumanMessage("\n\n".join(human_parts)),
         ]
+        timing.mark("prepare")
 
         # 用量统计：handler 已挂在各 LLM 的构造器上（见 llm_budget.usage_callbacks），
         # LangChain 会把 callbacks 透传给工具内部的子调用（改写 / 切题判定），
@@ -776,9 +791,11 @@ class AiStreamService:
                         continue
                     reasoning = chunk.additional_kwargs.get("reasoning_content")
                     if isinstance(reasoning, str) and reasoning:
+                        timing.first_token()
                         yield writer.reasoning_delta(reasoning)
                     text = _chunk_text(chunk)
                     if text:
+                        timing.first_token()
                         yield writer.text_delta(text)
                     for tc in chunk.tool_call_chunks or []:
                         tc_id = tc.get("id")
@@ -802,6 +819,7 @@ class AiStreamService:
             # 收口未闭合的 part（流正常结束时 adapter 由 sendFinish 收口，这里显式做）
             yield writer.reasoning_end()
             yield writer.text_end()
+            timing.mark("stream")
         except Exception as exc: # noqa: BLE001
             logger.warning("LangChain 流失败：%s", exc)
         finally:
@@ -834,6 +852,17 @@ class AiStreamService:
             )
         except Exception as exc: # noqa: BLE001
             logger.warning("流式对话落库失败：%s", exc)
+        timing.mark("persist")
+
+        # 分段耗时：一行打完，便于 grep 与后续按阶段统计
+        # ttft_ms = 请求进来到首个正文/思考 delta；total_ms 含落库
+        logger.info(
+            "本轮耗时：sessionId=%s, ttft_ms=%s, total_ms=%.1f, stages=%s",
+            persist_session_id,
+            f"{timing.first_token_ms:.1f}" if timing.first_token_ms is not None else "-1",
+            timing.elapsed_ms,
+            timing.stages_text(),
+        )
         # 长期记忆写入不 await：分类器是一次额外 LLM 调用，
         # 不能让用户等它；remember_turn 内部已吞异常只 WARN。
         _spawn(
