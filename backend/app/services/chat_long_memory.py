@@ -71,11 +71,13 @@
 
 import asyncio
 import logging
+import time
 from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from mem0 import AsyncMemoryClient
+from mem0.exceptions import RateLimitError
 from pydantic import BaseModel, Field, SecretStr
 
 from app.core.config import settings
@@ -92,6 +94,11 @@ __all__ = [
 
 # 分类温度固定 0：分类判定要可复现
 _CLASSIFIER_TEMPERATURE = 0.0
+
+# 撞到 429 后的熔断窗口（秒）。**刻意不对齐响应里的 quota_reset**：
+# 那是「到 2026-11-24 之前永久关闭」，换 key 或提额后也不会恢复，只能重启进程。
+# 固定窗口的代价是配额仍耗尽时每窗口多付一次探测往返，换来的是自愈。
+_QUOTA_COOLDOWN_S = 600.0
 
 
 class MemoryClassifyResult(BaseModel):
@@ -346,8 +353,36 @@ def _search_timeout_s(timeout_ms: int) -> float | None:
     return timeout_ms / 1000 if timeout_ms > 0 else None
 
 
+def _is_quota_error(err: BaseException) -> bool:
+    """是不是「这个 key 没额度了」（HTTP 429）
+
+    实测形态（2026-10-29，真 key）：`mem0.exceptions.RateLimitError`，它**没有**
+    `status_code` / `response` 属性，只有 `message`、`error_code`（= `"HTTP_429"`）。
+
+    所以按**类型**判，兜底看 `error_code`；**不做 message 子串匹配** ——
+    用户的检索词里带个 "429" 就会把普通失败当成配额耗尽，然后静默关掉记忆 10 分钟。
+    """
+    return isinstance(err, RateLimitError) or getattr(err, "error_code", "") == "HTTP_429"
+
+
+def _task_is_quota(task: asyncio.Task[Any]) -> bool:
+    """已完成的任务是不是撞了 429（未完成 / 已取消都不算）"""
+    if task.cancelled():
+        return False
+    err = task.exception()
+    return err is not None and _is_quota_error(err)
+
+
+def _task_outcome(task: asyncio.Task[Any]) -> Any:
+    """把任务归一成「结果或异常」，交给 `_layer_payload` 做单层降级"""
+    if task.cancelled():
+        return asyncio.CancelledError()
+    err = task.exception()
+    return err if err is not None else task.result()
+
+
 def _layer_payload(raw: Any, layer: str) -> dict[str, Any]:
-    """把 `gather(return_exceptions=True)` 的一项归一成 payload
+    """把 `_task_outcome` 归一出的一项变成 payload（结果或异常都走这里）
 
     两层并行之后，「一层挂了」与「两层都挂了」必须能分开 —— 否则日志只剩
     「没有记忆」，定位时连是哪层超时都看不出来。
@@ -377,6 +412,12 @@ class ChatLongMemoryService:
         self._timeout_s: float | None = _search_timeout_s(
             settings.MEM0_SEARCH_TIMEOUT_MS
         )
+        # 配额熔断状态：窗口截止时刻（monotonic），以及窗口内被跳过、尚未上报的次数。
+        # 放实例上而不是模块全局：服务本身是单例，测试里换实例互不影响。
+        self._quota_blocked_until = 0.0
+        self._quota_suppressed = 0
+        # 预算用尽后仍在路上的请求（持强引用，见 `_watch_late_quota`）
+        self._inflight: set[asyncio.Task[Any]] = set()
 
         api_key = settings.MEM0_API_KEY or ""
         host = settings.MEM0_HOST or ""
@@ -418,42 +459,70 @@ class ChatLongMemoryService:
         整体受 `MEM0_SEARCH_TIMEOUT_MS` 约束（两层共用同一 deadline，不是每层一份）。
         单层超时 / 异常只降级该层；整体超时按无记忆处理 —— 记忆不可用不能阻断对话，
         而且它坐在 TTFT 关键路径上，慢就等于用户盯着空白屏幕。
+
+        **配额熔断**：记忆配额耗尽时 Mem0 回 429，而「没额度」不会自己好。撞到一次就
+        关窗 `_QUOTA_COOLDOWN_S`，窗口内直接返回空、不碰网络 —— 否则每一轮对话都要为
+        「确定查不到」白付一次往返（实测单次 300~1500ms），而且它看起来像「记忆很慢」。
         """
         empty: LongMemoryHits = {"user": [], "session": []}
         if self._client is None:
             return empty
+        # 熔断窗口内：0 次网络请求。这里只累加计数不打日志，否则每轮刷一条 WARN。
+        if time.monotonic() < self._quota_blocked_until:
+            self._quota_suppressed += 1
+            return empty
+        # ⚠️ search 是三个方法里**唯一**要求实体 ID 放 filters 的（放顶层会被 SDK 的
+        # ENTITY_PARAMS 白名单校验直接 raise）。add / delete_all 恰恰相反，走顶层。
+        # 详见模块注释「实体 ID 的传法三个方法各不相同」——不要图省事统一。
+        coros = [
+            self._client.search(
+                query,
+                filters={"user_id": str(user_id)},
+                top_k=self._top_k,
+            )
+        ]
+        if session_id:
+            coros.append(
+                self._client.search(
+                    query,
+                    filters={"user_id": str(user_id), "run_id": str(session_id)},
+                    top_k=self._top_k,
+                )
+            )
+        tasks = [asyncio.create_task(c) for c in coros]
         try:
-            # 整体预算（两层共用同一 deadline，不是每层各一份）：记忆是背景信息，
-            # 宁可这轮不注入，也不能让它把 TTFT 拖长。asyncio.timeout(None) = 不限。
-            async with asyncio.timeout(self._timeout_s):
-                # ⚠️ search 是三个方法里**唯一**要求实体 ID 放 filters 的（放顶层会被 SDK 的
-                # ENTITY_PARAMS 白名单校验直接 raise）。add / delete_all 恰恰相反，走顶层。
-                # 详见模块注释「实体 ID 的传法三个方法各不相同」——不要图省事统一。
-                calls = [
-                    self._client.search(
-                        query,
-                        filters={"user_id": str(user_id)},
-                        top_k=self._top_k,
-                    )
-                ]
-                if session_id:
-                    calls.append(
-                        self._client.search(
-                            query,
-                            filters={
-                                "user_id": str(user_id),
-                                "run_id": str(session_id),
-                            },
-                            top_k=self._top_k,
-                        )
-                    )
-                # 结果按**入参顺序**返回，不按完成顺序 —— 这是下面能按下标认层的前提；
-                # 换成 as_completed 就得给每个请求带 tag，属无谓复杂化。
-                # return_exceptions=True：一层失败不取消另一层，各自降级。
-                # ⚠️ 代价：超时轮次没法像串行那样「第一层超了就省掉第二次请求」——
-                # 请求已经发出去了；换来的是每轮正常对话都省一次往返。
-                raw = await asyncio.gather(*calls, return_exceptions=True)
-        except TimeoutError:
+            # 用 wait 而不是 `asyncio.timeout` + `gather`：后者超时时会把请求**取消**，
+            # 而 429 的往返实测 300~1500ms、冷启动握手更久，**经常比预算还慢** ——
+            # 取消了就永远看不见「没额度」这个事实，熔断能否生效会变成
+            # 「429 是否刚好比预算快」的运气问题（实测 4 次只撞上 1 次）。
+            # wait 不取消未完成任务，把它们留给 `_watch_late_quota` 收尾。
+            # timeout=None（未配预算）= 一直等。
+            done, pending = await asyncio.wait(tasks, timeout=self._timeout_s)
+        except BaseException:
+            # 调用方取消（如 ai_stream 里 classify 抛错 → mem_task.cancel()）：
+            # 保持原语义，连在途请求一起取消，不留后台请求。
+            for task in tasks:
+                task.cancel()
+            raise
+
+        # 配额是账号级的：一层 429 另一层必然也 429，没必要拼半份记忆，
+        # 更不能按层打 WARN —— 那会把「没额度」写成「user 层检索失败」，
+        # 运维按检索故障去查，永远查不到真因。
+        # ⚠️ 不能写成 `any(_task_is_quota(t) for t in done)`：生成器在第一个 True 处
+        # 短路，剩下的 task 异常就没人取回，asyncio 会在关闭循环时打
+        # 「Task exception was never retrieved」。逐个走完，顺带把所有异常都取回。
+        quota_hit = False
+        for task in done:
+            if _task_is_quota(task):
+                quota_hit = True
+        if quota_hit:
+            self._trip_quota_breaker(user_id)
+            return empty
+
+        if pending:
+            # 本轮按超时放弃，但请求不取消：跑完若发现是 429，这笔账记给**下一轮**。
+            for task in pending:
+                self._watch_late_quota(task, user_id)
             logger.warning(
                 "Mem0 检索超时（预算 %ss），本轮按无记忆处理：userId=%s, sessionId=%s",
                 self._timeout_s,
@@ -461,16 +530,56 @@ class ChatLongMemoryService:
                 session_id,
             )
             return empty
-        except Exception as err:  # noqa: BLE001
-            logger.warning("Mem0 检索失败：%s", err)
-            return empty
 
+        # 按下标认层：tasks 保持入参顺序，而 done 是 set，不能直接拿来配对
+        raw = [_task_outcome(task) for task in tasks]
         return {
             "user": _pick_memories(_layer_payload(raw[0], "user")),
             "session": (
                 _pick_memories(_layer_payload(raw[1], "session")) if session_id else []
             ),
         }
+
+    def _watch_late_quota(self, task: asyncio.Task[Any], user_id: str) -> None:
+        """等一个「本轮已经不等了」的请求跑完，只为看出它是不是 429
+
+        必须持强引用：没有 await 的 task 只被事件循环弱引用，可能在完成前被回收，
+        报「Task was destroyed but it is pending」。
+        """
+        self._inflight.add(task)
+        task.add_done_callback(lambda done: self._on_late_done(done, user_id))
+
+    def _on_late_done(self, task: asyncio.Task[Any], user_id: str) -> None:
+        self._inflight.discard(task)
+        if task.cancelled():
+            return
+        err = task.exception()
+        if err is not None and _is_quota_error(err):
+            self._trip_quota_breaker(user_id)
+
+    def _trip_quota_breaker(self, user_id: str) -> None:
+        """开窗 + 打**一条** WARN
+
+        窗口内不再打日志，只在下次开窗时把「上一窗口跳过了多少次」一起报出来 ——
+        这个数字是熔断到底省了多少，比每轮刷一行有用。
+        """
+        now = time.monotonic()
+        already_open = now < self._quota_blocked_until
+        self._quota_blocked_until = now + _QUOTA_COOLDOWN_S
+        if already_open:
+            # 窗口本来就开着：同一轮的另一层、或一个迟到的请求刚报过。
+            # 只顺延窗口，不重复打日志 —— 「打一条」是需求，不是口号。
+            return
+        skipped = self._quota_suppressed
+        self._quota_suppressed = 0
+        logger.warning(
+            "Mem0 检索配额耗尽（429）：%d 分钟内不再发起检索，本轮按无记忆处理。"
+            "请更换 MEM0_API_KEY，或在 Mem0 后台接入自有 LLM key 提高额度"
+            "（上一窗口内已跳过 %d 次检索，userId=%s）",
+            int(_QUOTA_COOLDOWN_S // 60),
+            skipped,
+            user_id,
+        )
 
     def build_system_message(self, hits: LongMemoryHits) -> SystemMessage | None:
         """把两层记忆拼成一条 SystemMessage；两层都空返回 None
